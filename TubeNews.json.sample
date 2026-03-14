@@ -1,0 +1,18 @@
+{
+  "gemini_api_key": "ADD-GEMINI-KEY",
+  "ai_model": "gemini-2.5-flash",
+  "supadata_api_key": "ADD_SUPADATA-KEY",
+  "output_dir": "./News",
+  "feeds": [
+    {
+      "channel_id": "CHANNEL-ID",
+      "channel_name": "Name of Feed",
+      "focus": "things you care about for the AI to use to find stories"
+    },
+    {
+      "channel_id": "CHANNEL-ID-2",
+      "channel_name": "Something else",
+      "focus": "things that matter for this feed"
+    }
+  ]
+}
