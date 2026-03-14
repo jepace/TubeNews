@@ -1,186 +1,192 @@
-import os, json, sqlite3, requests, re, time, argparse, logging, socket, sys, hashlib
+import os, json, requests, re, time, argparse, logging, socket, sys, hashlib
+from pathlib import Path
 from supadata import Supadata
 from feedgen.feed import FeedGenerator
 from datetime import datetime, timedelta
 
-# --- CONSTANTS ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "TubeNews.json")
-DB_FILE = os.path.join(BASE_DIR, "TubeNews.db")
-CACHE_DIR = os.path.join(BASE_DIR, "cache")
-TRANSCRIPT_DIR = os.path.join(CACHE_DIR, "transcripts")
-STORY_DIR = os.path.join(CACHE_DIR, "stories")
+# --- ENVIRONMENT & PATHS ---
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = BASE_DIR / "TubeNews.json"
+STORAGE_ROOT = BASE_DIR / "archive"
 
-# FreeBSD SSL Path Fix
 os.environ['SSL_CERT_FILE'] = '/usr/local/share/certs/ca-root-nss.crt'
-socket.setdefaulttimeout(20) 
+socket.setdefaulttimeout(15) 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'}
 
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
 logger = logging.getLogger("TubeNews")
+
+AI_DISABLED = False
 
 def setup_logging(debug_mode):
     level = logging.DEBUG if debug_mode else logging.INFO
-    logging.basicConfig(level=level, format='%(asctime)s %(levelname)s: %(message)s', datefmt='%H:%M:%S')
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
-def load_and_validate_config():
-    """Load config and handle the inevitable syntax errors gracefully."""
-    if not os.path.exists(CONFIG_FILE):
-        print(f"CRITICAL: Config file '{CONFIG_FILE}' is missing.")
-        sys.exit(1)
-    
+def slugify(text): return re.sub(r'[^a-zA-Z0-9]', '_', text).strip('_')
+
+def get_transcript_and_meta(video_id, sd_client):
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    logger.info("--> Step 2: Fetching transcript + metadata from Supadata...")
+    logger.debug(f"Connecting to api.supadata.ai for ID: {video_id}...")
     try:
-        with open(CONFIG_FILE, 'r') as f:
-            cfg = json.load(f)
+        t_obj = sd_client.transcript(url=url, text=False)
+        title = getattr(t_obj, 'metadata', {}).get('title', video_id)
+        raw_date = getattr(t_obj, 'metadata', {}).get('publishDate', '') or getattr(t_obj, 'metadata', {}).get('publishedAt', '')
+        actual_date = raw_date.split('T')[0] if raw_date else datetime.now().strftime('%Y-%m-%d')
         
-        # Audit and Clean: Strip whitespace/newline junk from keys and IDs
-        cfg['gemini_api_key'] = str(cfg.get('gemini_api_key', '')).strip()
-        cfg['supadata_api_key'] = str(cfg.get('supadata_api_key', '')).strip()
-        cfg['ai_model'] = str(cfg.get('ai_model', 'gemini-2.5-flash')).strip()
-        
-        if not cfg['gemini_api_key'] or not cfg['supadata_api_key']:
-            print("CRITICAL: Config is missing API keys.")
-            sys.exit(1)
-            
-        return cfg
-    except json.JSONDecodeError as e:
-        print(f"--- CONFIG ERROR ---")
-        print(f"Your JSON file '{CONFIG_FILE}' has a syntax error at Line {e.lineno}, Col {e.colno}.")
-        print(f"Reason: {e.msg}")
-        print("Tip: Check for missing double-quotes or trailing commas.")
-        sys.exit(1)
-
-def check_environment(output_dir):
-    """Ensure we can actually write our results."""
-    for d in [TRANSCRIPT_DIR, STORY_DIR]:
-        os.makedirs(d, exist_ok=True)
-    
-    if not os.path.exists(output_dir):
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-        except Exception as e:
-            print(f"CRITICAL: Cannot create output directory {output_dir}: {e}")
-            sys.exit(1)
-            
-    if not os.access(output_dir, os.W_OK):
-        print(f"CRITICAL: Output directory {output_dir} is not writable by this user.")
-        sys.exit(1)
-
-def get_transcript(video_id, sd_client):
-    cache_path = os.path.join(TRANSCRIPT_DIR, f"{video_id}.txt")
-    if os.path.exists(cache_path):
-        logger.debug(f"       [Cache] Hit for {video_id}")
-        with open(cache_path, 'r', encoding='utf-8') as f: return f.read()
-
-    logger.info(f"   --> Step 2: Requesting transcript from Supadata...")
-    try:
-        t_obj = sd_client.transcript(url=f"https://www.youtube.com/watch?v={video_id}", text=False)
         if hasattr(t_obj, 'content') and t_obj.content:
-            lines = [f"{int(getattr(s, 'offset', 0)/1000)}s --> {getattr(s, 'text', '')}" for s in t_obj.content]
-            text = "\n".join(lines)
-            with open(cache_path, 'w', encoding='utf-8') as f: f.write(text)
-            return text
+            text = "\n".join([f"{int(getattr(s, 'offset', 0)/1000)}s --> {getattr(s, 'text', '')}" for s in t_obj.content])
+            logger.debug(f"Supadata successfully returned {len(t_obj.content)} segments.")
+            return text, title, actual_date
     except Exception as e:
-        logger.error(f"       [!] Supadata error: {e}")
-    return None
+        logger.error(f"[!] Supadata call failed: {e}")
+    return None, None, None
 
-def generate_news(transcript, slant, video_title, gemini_key, model_name):
-    slant_hash = hashlib.md5((slant + video_title + model_name).encode()).hexdigest()
-    cache_path = os.path.join(STORY_DIR, f"{slant_hash}.json")
-    if os.path.exists(cache_path):
-        logger.debug("       [Cache] Hit for AI analysis.")
-        with open(cache_path, 'r', encoding='utf-8') as f: return json.load(f)
-
-    logger.info(f"   --> Step 3: Running AI Analysis ({model_name})...")
-    url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={gemini_key}"
+def generate_news(transcript, focus, video_title, v_date, meeting_dir, gemini_key, model_name):
+    global AI_DISABLED
+    if AI_DISABLED: return None
     
-    payload = {"contents": [{"parts": [{"text": f"Slant: {slant}\n\nTranscript: {transcript[:100000]}\n\nReturn a JSON list of objects: [{{'title': '...', 'content': '...', 'start_time_seconds': 123}}]"}]}]}
-    
-    try:
-        res = requests.post(url, json=payload, timeout=90)
-        if res.status_code == 429:
-            logger.error("       [!] AI Quota Exceeded. Skipping for this run.")
-            return None
-        if res.status_code != 200:
-            logger.error(f"       [!] AI Error {res.status_code}: {res.text}")
-            return []
-
-        raw_ai_text = res.json()['candidates'][0]['content']['parts'][0]['text']
-        # Extract JSON list from backticks if needed
-        match = re.search(r'\[\s*{.*}\s*\]', raw_ai_text, re.DOTALL)
-        json_str = match.group(0) if match else raw_ai_text
-        stories = json.loads(json_str)
-        
-        with open(cache_path, 'w', encoding='utf-8') as f: json.dump(stories, f)
-        return stories
-    except Exception as e:
-        logger.error(f"       [!] AI Logic failed: {e}")
+    if list(meeting_dir.glob("[0-9]*.md")):
+        logger.debug(f"Analysis already exists. Skipping AI call.")
         return []
 
-def get_video_ids_stealth(channel_id):
-    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    logger.info(f"--> Step 3: AI Analysis for: {video_title[:40]}...")
+    logger.debug(f"Connecting to Google Gemini v1 REST API (timeout 120s)...")
+    
+    url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={gemini_key}"
+    prompt = (f"Analyze transcript of '{video_title}' on {v_date}. Focus: {focus}. "
+              "Return result ONLY as raw JSON list of objects: [{'title': '...', 'dateline': '...', 'content': '...', 'start_time_seconds': 123}]")
+    payload = {"contents": [{"parts": [{"text": f"{prompt}\n\nTRANSCRIPT:\n{transcript[:100000]}"}]}]}
+    
     try:
-        r = requests.get(url, headers=HEADERS, timeout=8)
-        if r.status_code == 200:
-            return list(dict.fromkeys(re.findall(r'"videoId":"([^"]+)"', r.text)))[:5]
+        res = requests.post(url, json=payload, timeout=150)
+        if res.status_code == 200:
+            raw = res.json()['candidates'][0]['content']['parts'][0]['text']
+            match = re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)
+            stories = json.loads(match.group(0) if match else raw)
+            
+            for i, s in enumerate(stories, 1):
+                safe_title = slugify(s['title'])[:40]
+                with open(meeting_dir / f"{i:02d}_{safe_title}.md", 'w', encoding='utf-8') as f:
+                    f.write(f"# {s['title']}\n*{s.get('dateline', 'California')}*\n\n{s['content']}")
+            return stories
+        elif res.status_code == 429:
+            logger.warning("[!] Gemini Rate Limit reached. AI disabled for session.")
+            AI_DISABLED = True
     except: pass
-    return []
+    return None
+
+def discover_video_ids(channel_id):
+    all_ids = []
+    for tab in ["videos", "streams"]:
+        url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
+        logger.debug(f"Connecting to YouTube tab: {tab}")
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            if r.status_code == 200:
+                found = re.findall(r'"videoId":"([^"]{11})"', r.text)
+                all_ids.extend(found)
+        except Exception as e:
+            logger.debug(f"Tab '{tab}' failed: {e}")
+    return list(dict.fromkeys(all_ids))
+
+def rebuild_feed(feed_dir, feed_cfg):
+    safe_name = slugify(feed_cfg['channel_name'])
+    logger.info(f"--> Step 4: Finalizing RSS for {safe_name}")
+    fg = FeedGenerator()
+    fg.id(f"TubeNews_{safe_name}"); fg.title(f"TubeNews: {feed_cfg['channel_name']}")
+    fg.description(f"Focus: {feed_cfg['focus']}")
+    fg.link(href=f"https://www.youtube.com/channel/{feed_cfg['channel_id']}", rel='alternate')
+
+    m_dirs = sorted([d for d in feed_dir.iterdir() if d.is_dir()], reverse=True)
+    count = 0
+    for m_dir in m_dirs:
+        meta_p = m_dir / "metadata.json"
+        if not meta_p.exists(): continue
+        meta = json.loads(meta_p.read_text())
+        if meta.get('status') == 'ignored_too_old': continue
+        
+        for s_file in sorted(list(m_dir.glob("[0-9]*.md"))):
+            raw = s_file.read_text(encoding='utf-8').splitlines()
+            title, date = raw[0].replace('# ', ''), raw[1].replace('*', '')
+            content_body = "\n".join(raw[2:]).replace('\n', '<br>')
+            
+            fe = fg.add_entry()
+            fe.id(hashlib.md5(s_file.read_text(encoding='utf-8').encode()).hexdigest())
+            fe.title(f"{title} | {meta.get('video_title', 'Meeting')}")
+            fe.link(href=f"https://youtu.be/{meta['video_id']}")
+            fe.content(f"<strong>{date}</strong><br><br>{content_body}", type='html')
+            fe.published(datetime.fromtimestamp(meta['processed_at']).astimezone())
+            count += 1
+            if count >= 50: break
+        if count >= 50: break
+    fg.rss_file(feed_dir / "feed.xml", pretty=True)
 
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--debug", action="store_true"); args = parser.parse_args()
     setup_logging(args.debug)
-    
-    config = load_and_validate_config()
-    check_environment(config.get('output_dir'))
-    
-    conn = sqlite3.connect(DB_FILE); cursor = conn.cursor()
-    conn.execute('CREATE TABLE IF NOT EXISTS videos (video_id TEXT PRIMARY KEY, added DATETIME)')
-    
+    with open(CONFIG_FILE, 'r') as f: config = json.load(f)
     sd_client = Supadata(api_key=config['supadata_api_key'])
-    logger.info(f"TubeNews session started. Monitoring {len(config.get('feeds', []))} feeds.")
+    logger.info(f"Session Start | AI Model: {config.get('ai_model')}")
 
     for feed in config['feeds']:
+        chan_slug = slugify(feed['channel_name'])
         logger.info(f"[*] Feed: {feed['channel_name']}")
-        v_ids = get_video_ids_stealth(str(feed['channel_id']).strip())
+        feed_dir = STORAGE_ROOT / chan_slug
         
-        if not v_ids:
-            logger.warning(f"    Discovery blocked for this feed. Moving on...")
-            continue
+        content_changed = not (feed_dir / "feed.xml").exists()
+        is_new_feed = not feed_dir.exists()
+        feed_dir.mkdir(parents=True, exist_ok=True)
 
-        for v_id in v_ids:
-            cursor.execute("SELECT 1 FROM videos WHERE video_id=?", (v_id,))
-            if cursor.fetchone(): continue
-            
-            logger.info(f" [+] Found: {v_id}")
-            
-            # Start actual work
-            transcript = get_transcript(v_id, sd_client)
+        all_ids = discover_video_ids(feed['channel_id'])
+        if not all_ids: continue
+        
+        new_ids = [v for v in all_ids if not any(d.name.endswith(v) for d in feed_dir.iterdir() if d.is_dir())]
+
+        if not new_ids:
+            logger.info("--> Step 1: No new videos discovered.")
+        else:
+            status_msg = f"--> Step 1: Found {len(new_ids)} new videos."
+            if is_new_feed: status_msg += " New feed: processing 1, archiving rest as legacy."
+            logger.info(status_msg)
+
+        for idx, v_id in enumerate(new_ids):
+            if is_new_feed and idx > 0:
+                # FIXED: Consistent with catchup.py (1900-01-01)
+                m_dir = feed_dir / f"1900-01-01_{v_id}"
+                m_dir.mkdir(exist_ok=True)
+                (m_dir / "metadata.json").write_text(json.dumps({"video_id": v_id, "status": "ignored_too_old", "processed_at": time.time()}))
+                content_changed = True
+                continue
+
+            logger.info(f"[+] Processing: {v_id}")
+            transcript, v_title, v_date_str = get_transcript_and_meta(v_id, sd_client)
             if not transcript: continue
 
-            stories = generate_news(transcript, feed['slant'], v_id, config['gemini_api_key'], config['ai_model'])
-            
-            # None means Quota stop, empty list means no stories
-            if stories is None: break 
-            
-            if stories:
-                # Update RSS Logic
-                safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', feed['channel_name'])
-                f_path = os.path.join(config['output_dir'], f"{safe_name}.xml")
-                fg = FeedGenerator()
-                fg.id(v_id); fg.title(f"News: {feed['channel_name']}"); fg.link(href=f"https://youtube.com/watch?v={v_id}")
-                fg.description(f"AI slant: {feed['slant']}")
-                for s in stories:
-                    fe = fg.add_entry()
-                    link = f"https://youtu.be/{v_id}?t={s.get('start_time_seconds',0)}"
-                    fe.title(s['title']); fe.link(href=link); fe.content(s['content'])
-                fg.rss_file(f_path, pretty=True)
-                logger.info(f"       [✓] Published {len(stories)} articles.")
-            else:
-                logger.info("       [-] No stories matched slant.")
+            m_dir = feed_dir / f"{v_date_str}_{v_id}"
+            m_dir.mkdir(exist_ok=True)
+            (m_dir / "transcript.txt").write_text(transcript, encoding='utf-8')
 
-            cursor.execute("INSERT INTO videos VALUES (?, ?)", (v_id, datetime.now()))
-            conn.commit()
+            stories = generate_news(transcript, feed['focus'], v_title, v_date_str, m_dir, config['gemini_api_key'], config['ai_model'])
+            
+            if stories is not None:
+                if not stories: logger.info("    [-] No focus match found.")
+                else: logger.info(f"    [✓] Generated {len(stories)} stories.")
+                
+                meta = {"video_id": v_id, "video_title": v_title, "status": "processed", "processed_at": time.time()}
+                (m_dir / "metadata.json").write_text(json.dumps(meta))
+                content_changed = True
 
-    conn.close()
-    logger.info("Session complete.")
+        if content_changed:
+            rebuild_feed(feed_dir, feed)
+        else:
+            logger.info("--> Step 4: Skipping RSS rebuild (No changes).")
+
+    logger.info("Session End.")
 
 if __name__ == "__main__": main()

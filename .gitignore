@@ -2,3 +2,5 @@ TubeNews.json
 TubeNews.db
 venv/
 cookies.*
+cache/
+meeting_news/

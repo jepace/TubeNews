@@ -1,0 +1,54 @@
+import os, json, requests, re, argparse
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = BASE_DIR / "TubeNews.json"
+STORAGE_ROOT = BASE_DIR / "archive"
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'}
+
+def slugify(text):
+    return re.sub(r'[^a-zA-Z0-9]', '_', text).strip('_')
+
+def catchup():
+    with open(CONFIG_FILE, 'r') as f:
+        config = json.load(f)
+
+    for feed in config['feeds']:
+        chan_slug = slugify(feed['channel_name'])
+        print(f"[*] Catching up: {feed['channel_name']}")
+        feed_dir = STORAGE_ROOT / chan_slug
+        feed_dir.mkdir(parents=True, exist_ok=True)
+
+        found_ids = []
+        for tab in ["videos", "streams"]:
+            url = f"https://www.youtube.com/channel/{feed['channel_id']}/{tab}"
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=15)
+                ids = re.findall(r'"videoId":"([^"]{11})"', r.text)
+                found_ids.extend(ids)
+            except: pass
+
+        found_ids = list(dict.fromkeys(found_ids))
+        print(f"    Found {len(found_ids)} videos. Marking as ignored...")
+
+        for v_id in found_ids:
+            # Check if directory already exists
+            if any(d.name.endswith(v_id) for d in feed_dir.iterdir() if d.is_dir()):
+                continue
+
+            # Create a dummy "OLD" folder so the main script skips it
+            # We use a 1900 date so it stays at the bottom of your filesystem
+            m_dir = feed_dir / f"1900-01-01_{v_id}"
+            m_dir.mkdir(exist_ok=True)
+            meta = {
+                "video_id": v_id,
+                "video_title": "Backlog Catchup",
+                "status": "ignored_too_old",
+                "processed_at": 0
+            }
+            (m_dir / "metadata.json").write_text(json.dumps(meta))
+
+    print("\n[✓] Backlog cleared. Main script will now only see TRULY new videos.")
+
+if __name__ == "__main__":
+    catchup()
