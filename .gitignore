@@ -4,3 +4,5 @@ venv/
 cookies.*
 cache/
 meeting_news/
+archive/
+News
