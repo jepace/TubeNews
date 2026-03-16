@@ -133,7 +133,11 @@ def parse_story_file(story_path: Path) -> dict:
 
     title = lines[0].replace("# ", "")
     dateline = lines[1].replace("*", "")
-    body_html = "<br>".join(lines[2:]).replace("\n", "<br>")
+    body_lines = [
+        l for l in lines[2:]
+        if l.strip() != "---" and not l.startswith("**Segment Start:**")
+    ]
+    body_html = "<br>".join(body_lines).replace("\n", "<br>")
 
     timestamp_match = re.search(r"\*\*Segment Start:\*\* (\d+)s", text)
     start_seconds = int(timestamp_match.group(1)) if timestamp_match else 0
@@ -411,8 +415,11 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
             feed_entry.link(
                 href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
             )
+            yt_url = f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
             feed_entry.content(
-                f"<strong>{story['dateline']}</strong><br><br>{story['body_html']}",
+                f"<strong>{story['dateline']}</strong><br>"
+                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a>"
+                f"<br><br>{story['body_html']}",
                 type="html",
             )
             feed_entry.published(
@@ -474,9 +481,11 @@ def rebuild_meta_feed(base_url: str = "") -> None:
             feed_entry.link(
                 href=f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
             )
+            yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
             feed_entry.content(
                 f"<strong>{story['dateline']}</strong>"
                 f"<br><em>Source: {entry['channel_name']}</em>"
+                f"<br>&#9654; <a href=\"{yt_url}\">{yt_url}</a>"
                 f"<br><br>{story['body_html']}",
                 type="html",
             )
