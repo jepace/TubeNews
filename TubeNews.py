@@ -796,9 +796,10 @@ def main() -> None:
             ai_disabled = True
         if content_changed:
             rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
+            rebuild_meta_feed(base_url=config.get("base_url", ""))
             any_content_changed = True
 
-    if any_content_changed or not (STORAGE_ROOT / "rss.xml").exists():
+    if not any_content_changed and not (STORAGE_ROOT / "rss.xml").exists():
         rebuild_meta_feed(base_url=config.get("base_url", ""))
 
     logger.info("Session End.")
