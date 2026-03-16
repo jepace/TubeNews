@@ -231,8 +231,6 @@ def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
     Returns the formatted transcript string, or None if the API call fails.
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
-    logger.debug(f"Supadata: requesting transcript for {video_id}…")
-
     try:
         transcript_response = supadata_client.transcript(url=url, text=False)
         if hasattr(transcript_response, "content") and transcript_response.content:
@@ -543,9 +541,11 @@ def process_video(
         meeting_dir = existing_dir
     else:
         logger.info(f"[+] Processing new video: {video_id}")
-        logger.info("--> Step 2: Requesting transcript + metadata from Supadata…")
+        logger.info("--> Step 2: Requesting transcript + metadata…")
 
         video_date, video_title = scrape_youtube_metadata(video_id)
+        logger.info(f"    Video: {video_title} ({video_id})")
+        logger.debug(f"Supadata: requesting transcript for {video_title} ({video_id})…")
         transcript_text = fetch_transcript(video_id, supadata_client)
         if not transcript_text:
             return "skipped"
@@ -558,7 +558,7 @@ def process_video(
     if ai_disabled:
         return "skipped"
 
-    logger.info(f"--> Step 3: AI Analysis via {config['gemini_model']}…")
+    logger.info(f"--> Step 3: AI Analysis of {video_title} ({video_id}) via {config['gemini_model']}…")
     stories = call_gemini_api(
         transcript_text=transcript_text,
         focus=feed["focus"],
