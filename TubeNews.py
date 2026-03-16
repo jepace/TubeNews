@@ -185,22 +185,25 @@ def discover_video_ids(channel_id: str) -> list[str]:
     return list(dict.fromkeys(all_ids))
 
 
-def scrape_youtube_metadata(video_id: str) -> tuple[str, str]:
-    """Scrape the YouTube watch page for a video's title and upload date.
+def scrape_youtube_metadata(video_id: str) -> tuple[str, str, bool]:
+    """Scrape the YouTube watch page for a video's title, upload date, and live status.
 
     YouTube embeds structured data (JSON-LD) directly in the page HTML, which
-    contains both ``uploadDate`` and the ``<title>`` tag.  No API key needed.
+    contains ``uploadDate``, the ``<title>`` tag, and ``isLiveBroadcast``.
+    No API key needed.
 
     Returns:
-        A ``(upload_date, video_title)`` tuple.
+        A ``(upload_date, video_title, is_live)`` tuple.
         *upload_date* is ``"YYYY-MM-DD"`` or today's date if scraping fails.
         *video_title* is the human-readable title or *video_id* as a fallback.
+        *is_live* is True if the video is an active or upcoming live broadcast.
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Safe fallbacks used when the page can't be fetched or parsed.
     upload_date = datetime.now().strftime("%Y-%m-%d")
     video_title = video_id
+    is_live = False
 
     try:
         response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
@@ -216,10 +219,16 @@ def scrape_youtube_metadata(video_id: str) -> tuple[str, str]:
             )
             if title_match:
                 video_title = title_match.group(1)
+
+            # YouTube embeds "isLiveBroadcast":true for upcoming and active
+            # streams.  Completed streams have this removed from the page.
+            if '"isLiveBroadcast":true' in response.text:
+                is_live = True
+
     except Exception as exc:
         logger.debug(f"YouTube page scrape failed for {video_id}: {exc}")
 
-    return upload_date, video_title
+    return upload_date, video_title, is_live
 
 
 def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
@@ -549,8 +558,11 @@ def process_video(
         logger.info(f"[+] Processing new video{counter}: {video_id}")
         logger.info("--> Step 2: Scraping metadata from YouTube…")
 
-        video_date, video_title = scrape_youtube_metadata(video_id)
+        video_date, video_title, is_live = scrape_youtube_metadata(video_id)
         logger.info(f"    Video: {video_title} ({video_id})")
+        if is_live:
+            logger.info("    Upcoming/live stream — skipping for now, will retry next run.")
+            return "skipped"
         logger.debug(f"Supadata: requesting transcript for {video_title} ({video_id})…")
         transcript_text = fetch_transcript(video_id, supadata_client)
         if not transcript_text:
