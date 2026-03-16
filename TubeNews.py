@@ -116,6 +116,7 @@ def parse_story_file(story_path: Path) -> dict:
 
         # Story Title
         *AP-style dateline*
+        **Source:** https://youtu.be/video_id?t=120
 
         Body paragraphs …
 
@@ -135,7 +136,7 @@ def parse_story_file(story_path: Path) -> dict:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**")
+        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**")
     ]
     body_html = "<br>".join(body_lines).replace("\n", "<br>")
 
@@ -392,7 +393,7 @@ def call_gemini_api(
     return None
 
 
-def write_story_files(stories: list, meeting_dir: Path) -> None:
+def write_story_files(stories: list, meeting_dir: Path, video_id: str = "") -> None:
     """Write each story dict as a numbered Markdown file inside *meeting_dir*.
 
     File names are ``01_<slug>.md``, ``02_<slug>.md``, …  Any stale story
@@ -403,6 +404,7 @@ def write_story_files(stories: list, meeting_dir: Path) -> None:
 
         # Story Title
         *AP-style dateline*
+        **Source:** https://youtu.be/<video_id>?t=120
 
         Body text …
 
@@ -418,8 +420,11 @@ def write_story_files(stories: list, meeting_dir: Path) -> None:
         file_path = meeting_dir / f"{index:02d}_{safe_title}.md"
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"# {story['title']}\n")
-            fh.write(f"*{story.get('dateline', 'California')}*\n\n")
-            fh.write(f"{story['content']}\n\n")
+            fh.write(f"*{story.get('dateline', 'Local News')}*\n")
+            if video_id:
+                start_seconds = story.get('start_time_seconds', 0)
+                fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
+            fh.write(f"\n{story['content']}\n\n")
             fh.write("---\n")
             fh.write(f"**Segment Start:** {story.get('start_time_seconds', 0)}s\n")
 
@@ -497,12 +502,12 @@ def rebuild_meta_feed(base_url: str = "") -> None:
         base_url: Public URL of this feed (used as the RSS ``<self>`` link).
                   Omit or pass an empty string to leave the self-link out.
     """
-    logger.info("--> Step 5: Rebuilding Regional Meta-Feed (archive/rss.xml)…")
+    logger.info("--> Step 5: Rebuilding Meta-Feed (archive/rss.xml)…")
 
     feed = FeedGenerator()
     feed.id("tubenews_meta_rss")
-    feed.title("TubeNews: Regional Real Estate & Development")
-    feed.description("Aggregated regional reporting.")
+    feed.title("TubeNews: News Feed")
+    feed.description("Aggregated news from monitored channels.")
     # feedgen requires at least one link; fall back to YouTube if no base_url.
     feed.link(href=base_url if base_url else "https://www.youtube.com", rel="alternate")
     if base_url:
@@ -656,7 +661,7 @@ def process_video(
         return "ai_rate_limited"
 
     if stories:
-        write_story_files(stories, meeting_dir)
+        write_story_files(stories, meeting_dir, video_id)
         metadata = {
             "video_id": video_id,
             "video_title": video_title,
@@ -728,6 +733,11 @@ def process_feed(
         logger.info(f"--> Step 1: Found {len(unprocessed)} videos to check.")
     else:
         logger.info("--> Step 1: No new videos discovered.")
+
+    if is_new_feed:
+        backlog_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
+        if backlog_count:
+            logger.info(f"      New feed discovered. Marking {backlog_count} older videos as watched.")
 
     # Videos that will actually be processed (not back-catalogued).
     videos_to_process = [
