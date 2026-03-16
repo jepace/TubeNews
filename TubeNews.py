@@ -185,22 +185,25 @@ def discover_video_ids(channel_id: str) -> list[str]:
     return list(dict.fromkeys(all_ids))
 
 
-def scrape_youtube_metadata(video_id: str) -> tuple[str, str]:
-    """Scrape the YouTube watch page for a video's title and upload date.
+def scrape_youtube_metadata(video_id: str) -> tuple[str, str, bool]:
+    """Scrape the YouTube watch page for a video's title, upload date, and live status.
 
     YouTube embeds structured data (JSON-LD) directly in the page HTML, which
-    contains both ``uploadDate`` and the ``<title>`` tag.  No API key needed.
+    contains ``uploadDate``, the ``<title>`` tag, and ``isLiveBroadcast``.
+    No API key needed.
 
     Returns:
-        A ``(upload_date, video_title)`` tuple.
+        A ``(upload_date, video_title, is_live)`` tuple.
         *upload_date* is ``"YYYY-MM-DD"`` or today's date if scraping fails.
         *video_title* is the human-readable title or *video_id* as a fallback.
+        *is_live* is True if the video is an active or upcoming live broadcast.
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Safe fallbacks used when the page can't be fetched or parsed.
     upload_date = datetime.now().strftime("%Y-%m-%d")
     video_title = video_id
+    is_live = False
 
     try:
         response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
@@ -216,10 +219,16 @@ def scrape_youtube_metadata(video_id: str) -> tuple[str, str]:
             )
             if title_match:
                 video_title = title_match.group(1)
+
+            # YouTube embeds "isLiveBroadcast":true for upcoming and active
+            # streams.  Completed streams have this removed from the page.
+            if '"isLiveBroadcast":true' in response.text:
+                is_live = True
+
     except Exception as exc:
         logger.debug(f"YouTube page scrape failed for {video_id}: {exc}")
 
-    return upload_date, video_title
+    return upload_date, video_title, is_live
 
 
 def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
@@ -231,8 +240,6 @@ def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
     Returns the formatted transcript string, or None if the API call fails.
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
-    logger.debug(f"Supadata: requesting transcript for {video_id}…")
-
     try:
         transcript_response = supadata_client.transcript(url=url, text=False)
         if hasattr(transcript_response, "content") and transcript_response.content:
@@ -244,7 +251,10 @@ def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
             logger.debug(f"Supadata: received {len(segments)} segments.")
             return "\n".join(lines)
     except Exception as exc:
-        logger.error(f"Supadata call failed: {exc}")
+        if "live streaming" in str(exc).lower():
+            logger.warning(f"Video is currently live — transcript unavailable. Will retry next run.")
+        else:
+            logger.error(f"Supadata call failed: {exc}")
 
     return None
 
@@ -514,6 +524,8 @@ def process_video(
     supadata_client: Supadata,
     config: dict,
     ai_disabled: bool,
+    video_num: int = 0,
+    total_videos: int = 0,
 ) -> str:
     """Fetch, analyse, and archive one video.
 
@@ -542,10 +554,16 @@ def process_video(
         video_title = video_id          # title isn't cached; use ID as fallback
         meeting_dir = existing_dir
     else:
-        logger.info(f"[+] Processing new video: {video_id}")
-        logger.info("--> Step 2: Requesting transcript + metadata from Supadata…")
+        counter = f" ({video_num}/{total_videos})" if total_videos else ""
+        logger.info(f"[+] Processing new video{counter}: {video_id}")
+        logger.info("--> Step 2: Scraping metadata from YouTube…")
 
-        video_date, video_title = scrape_youtube_metadata(video_id)
+        video_date, video_title, is_live = scrape_youtube_metadata(video_id)
+        logger.info(f"    Video: {video_title} ({video_id})")
+        if is_live:
+            logger.info("    Upcoming/live stream — skipping for now, will retry next run.")
+            return "skipped"
+        logger.debug(f"Supadata: requesting transcript for {video_title} ({video_id})…")
         transcript_text = fetch_transcript(video_id, supadata_client)
         if not transcript_text:
             return "skipped"
@@ -558,7 +576,7 @@ def process_video(
     if ai_disabled:
         return "skipped"
 
-    logger.info(f"--> Step 3: AI Analysis via {config['gemini_model']}…")
+    logger.info(f"--> Step 3: AI Analysis of {video_title} ({video_id}) via {config['gemini_model']}…")
     stories = call_gemini_api(
         transcript_text=transcript_text,
         focus=feed["focus"],
@@ -642,6 +660,13 @@ def process_feed(
     else:
         logger.info("--> Step 1: No new videos discovered.")
 
+    # Videos that will actually be processed (not back-catalogued).
+    videos_to_process = [
+        vid for vid in unprocessed_video_ids
+        if not (is_new_feed and all_video_ids.index(vid) > 0)
+    ]
+    total = len(videos_to_process)
+
     for video_id in unprocessed_video_ids:
         # On a brand-new feed, skip the entire back-catalogue except the
         # most-recent video (index 0 in all_video_ids).  This prevents the
@@ -651,6 +676,7 @@ def process_feed(
             content_changed = True
             continue
 
+        video_num = videos_to_process.index(video_id) + 1
         result = process_video(
             video_id=video_id,
             feed=feed,
@@ -658,6 +684,8 @@ def process_feed(
             supadata_client=supadata_client,
             config=config,
             ai_disabled=ai_rate_limited,
+            video_num=video_num,
+            total_videos=total,
         )
 
         if result == "content_written":
