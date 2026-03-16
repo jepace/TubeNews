@@ -116,12 +116,12 @@ def parse_story_file(story_path: Path) -> dict:
 
         # Story Title
         *AP-style dateline*
+        **Source:** https://youtu.be/video_id?t=120
 
         Body paragraphs …
 
         ---
         **Segment Start:** 120s
-        **Video:** https://youtu.be/video_id
 
     Returns a dict with keys:
         title        – headline text (string)
@@ -136,7 +136,7 @@ def parse_story_file(story_path: Path) -> dict:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Video:**")
+        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**")
     ]
     body_html = "<br>".join(body_lines).replace("\n", "<br>")
 
@@ -404,12 +404,12 @@ def write_story_files(stories: list, meeting_dir: Path, video_id: str = "") -> N
 
         # Story Title
         *AP-style dateline*
+        **Source:** https://youtu.be/<video_id>?t=120
 
         Body text …
 
         ---
         **Segment Start:** 120s
-        **Video:** https://youtu.be/<video_id>
     """
     # Remove leftovers from any prior run so we start clean.
     for old_file in meeting_dir.glob("[0-9]*.md"):
@@ -420,12 +420,13 @@ def write_story_files(stories: list, meeting_dir: Path, video_id: str = "") -> N
         file_path = meeting_dir / f"{index:02d}_{safe_title}.md"
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"# {story['title']}\n")
-            fh.write(f"*{story.get('dateline', 'Local News')}*\n\n")
-            fh.write(f"{story['content']}\n\n")
+            fh.write(f"*{story.get('dateline', 'Local News')}*\n")
+            if video_id:
+                start_seconds = story.get('start_time_seconds', 0)
+                fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
+            fh.write(f"\n{story['content']}\n\n")
             fh.write("---\n")
             fh.write(f"**Segment Start:** {story.get('start_time_seconds', 0)}s\n")
-            if video_id:
-                fh.write(f"**Video:** https://youtu.be/{video_id}\n")
 
 
 # ---------------------------------------------------------------------------
