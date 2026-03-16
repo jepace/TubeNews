@@ -6,3 +6,4 @@ cache/
 meeting_news/
 archive/
 News
+__pycache__/
