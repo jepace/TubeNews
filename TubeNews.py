@@ -242,7 +242,10 @@ def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
             logger.debug(f"Supadata: received {len(segments)} segments.")
             return "\n".join(lines)
     except Exception as exc:
-        logger.error(f"Supadata call failed: {exc}")
+        if "live streaming" in str(exc).lower():
+            logger.warning(f"Video is currently live — transcript unavailable. Will retry next run.")
+        else:
+            logger.error(f"Supadata call failed: {exc}")
 
     return None
 
@@ -512,6 +515,8 @@ def process_video(
     supadata_client: Supadata,
     config: dict,
     ai_disabled: bool,
+    video_num: int = 0,
+    total_videos: int = 0,
 ) -> str:
     """Fetch, analyse, and archive one video.
 
@@ -540,8 +545,9 @@ def process_video(
         video_title = video_id          # title isn't cached; use ID as fallback
         meeting_dir = existing_dir
     else:
-        logger.info(f"[+] Processing new video: {video_id}")
-        logger.info("--> Step 2: Requesting transcript + metadata…")
+        counter = f" ({video_num}/{total_videos})" if total_videos else ""
+        logger.info(f"[+] Processing new video{counter}: {video_id}")
+        logger.info("--> Step 2: Scraping metadata from YouTube…")
 
         video_date, video_title = scrape_youtube_metadata(video_id)
         logger.info(f"    Video: {video_title} ({video_id})")
@@ -642,6 +648,13 @@ def process_feed(
     else:
         logger.info("--> Step 1: No new videos discovered.")
 
+    # Videos that will actually be processed (not back-catalogued).
+    videos_to_process = [
+        vid for vid in unprocessed_video_ids
+        if not (is_new_feed and all_video_ids.index(vid) > 0)
+    ]
+    total = len(videos_to_process)
+
     for video_id in unprocessed_video_ids:
         # On a brand-new feed, skip the entire back-catalogue except the
         # most-recent video (index 0 in all_video_ids).  This prevents the
@@ -651,6 +664,7 @@ def process_feed(
             content_changed = True
             continue
 
+        video_num = videos_to_process.index(video_id) + 1
         result = process_video(
             video_id=video_id,
             feed=feed,
@@ -658,6 +672,8 @@ def process_feed(
             supadata_client=supadata_client,
             config=config,
             ai_disabled=ai_rate_limited,
+            video_num=video_num,
+            total_videos=total,
         )
 
         if result == "content_written":
