@@ -289,7 +289,7 @@ def call_gemini_api(
         "1. TONE: Professional, objective, and authoritative. Use the Inverted "
         "Pyramid style.\n"
         "2. CONTENT: Focus on the 'Why it Matters'. Skip ceremonial talk. "
-        "Highlight specific project addresses, vote counts, and fiscal impacts.\n"
+        "Highlight specific project addresses, dollar amounts, and fiscal impacts.\n"
         "3. DATELINE: Construct a formal AP-style dateline "
         "(e.g., 'GONZALES, Calif. — March 14, 2026').\n\n"
         "Return result ONLY as raw JSON list of objects with keys: "
@@ -569,14 +569,14 @@ def process_video(
     if ai_disabled:
         return "skipped"
 
-    logger.info(f"--> Step 3: AI Analysis via {config['ai_model']}…")
+    logger.info(f"--> Step 3: AI Analysis via {config['gemini_model']}…")
     stories = call_gemini_api(
         transcript_text=transcript_text,
         focus=feed["focus"],
         video_title=video_title,
         video_date=video_date,
         gemini_api_key=config["gemini_api_key"],
-        model_name=config["ai_model"],
+        model_name=config["gemini_model"],
     )
 
     if stories is False:
@@ -687,7 +687,7 @@ def main() -> None:
         config = json.load(config_file)
 
     supadata_client = Supadata(api_key=config["supadata_api_key"])
-    logger.info(f"Session Start | AI Model: {config.get('ai_model')}")
+    logger.info(f"Session Start | AI Model: {config.get('gemini_model')}")
 
     any_content_changed = False
     ai_disabled = False
