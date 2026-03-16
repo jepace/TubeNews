@@ -48,7 +48,7 @@ See `TubeNews.json.sample` for the full template. Key fields:
   "feeds": [
     {
       "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxxx",
-      "channel_name": "City Council",
+      "channel_name": "My YouTube Channel",
       "focus": "housing, zoning, permits, budget"
     }
   ]
@@ -61,7 +61,7 @@ RSS feeds are written to `archive/`:
 
 ```
 archive/
-├── city_council/
+├── my_youtube_channel/
 │   ├── 2026-03-14_VIDEO-ID/
 │   │   ├── transcript.txt
 │   │   ├── metadata.json

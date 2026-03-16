@@ -20,7 +20,7 @@
 
 ```
 TubeNews/
-├── TubeNews.py              # Main application (single-file, ~280 lines)
+├── TubeNews.py              # Main application (single-file)
 ├── TubeNews.json            # Runtime config (gitignored — copy from .sample)
 ├── TubeNews.json.sample     # Config template
 ├── requirements.txt         # Python dependencies
@@ -29,6 +29,9 @@ TubeNews/
 ├── TODO.md                  # Known issues and maintainability backlog
 ├── LICENSE
 ├── .gitignore
+├── tests/
+│   ├── __init__.py
+│   └── test_tubenews.py     # pytest unit tests
 └── helpers/
     ├── catchup.py           # Mark all existing videos as "too old" (first-run util)
     └── check_quota.py       # Test Gemini API key quota across models
@@ -44,39 +47,87 @@ YouTube Channel Pages (HTML scrape)
          ▼  video IDs
   discover_video_ids()
          │
-         ▼  new video IDs only
-  get_transcript_and_meta()  ──► Supadata API
+         ▼  IDs not yet in archive
+  process_feed() ──► process_video() (one per new video)
          │
-         ▼  transcript text + metadata
-    [save to archive/<council>/<date>_<id>/transcript.txt]
+         ├── scrape_youtube_metadata()  ──► YouTube watch page (HTML scrape)
+         │         returns (upload_date, video_title)
+         │
+         └── fetch_transcript()  ──► Supadata API
+                   returns transcript string
+         │
+         ▼  transcript saved to archive/<channel>/<date>_<id>/transcript.txt
+         │
+  call_gemini_api()  ──► Google Gemini REST API
+         │
+         ▼  list of story dicts
+  write_story_files()  ──► 01_title.md, 02_title.md, ...
+  [saves metadata.json]
          │
          ▼
-   generate_news()  ──► Google Gemini API
-         │
-         ▼  JSON list of stories
-    [save as 01_title.md, 02_title.md, ...]
-    [save metadata.json]
+   rebuild_feed()      ──► archive/<channel>/rss.xml
          │
          ▼
-   rebuild_feed()   ──► archive/<council>/rss.xml
-         │
-         ▼
-   rebuild_meta_feed() ──► archive/rss.xml  (all councils combined)
+   rebuild_meta_feed() ──► archive/rss.xml  (all channels combined)
 ```
 
 ### Key Design Decisions
+
 - **Filesystem as database:** Processed state is stored entirely in `archive/`. No database required.
 - **Incremental processing:** A video with an existing `metadata.json` is always skipped.
 - **Auto-catchup for new feeds:** When a channel is added for the first time, only the most recent video is processed; the rest are marked `ignored_too_old`.
-- **Transcript caching:** If `transcript.txt` already exists in a video directory, Supadata is not called again — the AI runs on the cached transcript instead.
-- **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), `AI_DISABLED` is set and the rest of the run continues without AI calls.
+- **Transcript caching:** If `transcript.txt` already exists in a video directory, Supadata is not called again — AI runs on the cached transcript instead. This allows re-running AI analysis without consuming API quota.
+- **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), the session flag `ai_disabled` is set and all remaining videos skip the AI step.
+- **Shared story parser:** `parse_story_file()` is used by both `rebuild_feed()` and `rebuild_meta_feed()` to read the Markdown story format into a structured dict. Edit this function if the story file format changes.
+
+---
+
+## Function Reference
+
+### Utility
+
+| Function | Description |
+|---|---|
+| `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore) |
+| `parse_story_file(story_path)` | Reads a `.md` story file; returns `{title, dateline, body_html, start_seconds, content_hash}` |
+
+### YouTube data-gathering
+
+| Function | Description |
+|---|---|
+| `discover_video_ids(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns unique video IDs |
+| `scrape_youtube_metadata(video_id)` | Scrapes the watch page; returns `(upload_date, video_title)` |
+| `fetch_transcript(video_id, supadata_client)` | Fetches timed transcript segments from Supadata; returns formatted string or None |
+
+### AI story generation
+
+| Function | Description |
+|---|---|
+| `call_gemini_api(...)` | Posts to Gemini REST API; returns list of story dicts, `False` on rate-limit, `None` on failure |
+| `write_story_files(stories, meeting_dir)` | Writes each story dict as a numbered `.md` file |
+
+### RSS feed builders
+
+| Function | Description |
+|---|---|
+| `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (up to 50 stories) |
+| `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (up to 100 stories) |
+
+### Processing orchestration
+
+| Function | Description |
+|---|---|
+| `mark_video_as_backlog(feed_dir, video_id)` | Writes a `2000-01-01_<id>` stub so the video is skipped on future runs |
+| `process_video(video_id, ...)` | Fetch + analyse one video; returns `"content_written"`, `"ai_rate_limited"`, or `"skipped"` |
+| `process_feed(feed, ...)` | Processes all new videos for one channel; returns `(content_changed, ai_rate_limited)` |
+| `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
 ---
 
 ## Setup
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - A [Supadata](https://supadata.ai) account and API key
 - A [Google AI Studio](https://aistudio.google.com) Gemini API key
 
@@ -101,17 +152,16 @@ Edit `TubeNews.json`:
   "gemini_api_key": "YOUR_GEMINI_KEY",
   "ai_model": "gemini-2.5-flash",
   "supadata_api_key": "YOUR_SUPADATA_KEY",
+  "base_url": "",
   "feeds": [
     {
       "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxxx",
-      "channel_name": "City Council Name",
+      "channel_name": "My YouTube Channel",
       "focus": "housing, zoning, development permits, budget decisions"
     }
   ]
 }
 ```
-
-> **Note:** `output_dir` appears in the sample config but is currently unused — the app always writes to `archive/` in the project root.
 
 ---
 
@@ -121,7 +171,7 @@ Edit `TubeNews.json`:
 # Normal run
 python TubeNews.py
 
-# Debug mode (verbose logging)
+# Debug mode (verbose logging, shows API calls and raw responses)
 python TubeNews.py --debug
 ```
 
@@ -141,15 +191,15 @@ This marks all currently visible videos as `ignored_too_old`. The main script wi
 
 ```
 archive/
-├── city_council_name/          # slugified channel_name
+├── city_channel_name/          # slugified channel_name
 │   ├── 2026-03-14_dQw4w9WgXcQ/
 │   │   ├── transcript.txt      # Raw Supadata output (SECONDS --> TEXT)
 │   │   ├── metadata.json       # {video_id, video_title, status, processed_at}
 │   │   ├── 01_Story_Title.md
 │   │   └── 02_Another_Story.md
-│   ├── 1900-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 1900 date
+│   ├── 2000-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 1900 date
 │   │   └── metadata.json       # {status: "ignored_too_old"}
-│   └── rss.xml                 # Per-council RSS feed (up to 50 stories)
+│   └── rss.xml                 # Per-channel RSS feed (up to 50 stories)
 └── rss.xml                     # Regional meta-feed (up to 100 stories)
 ```
 
@@ -165,14 +215,14 @@ Story body text in AP inverted pyramid style...
 **Segment Start:** 1234s
 ```
 
-The `**Segment Start:**` value links back to the exact timestamp in the source YouTube video.
+The `**Segment Start:**` value links back to the exact timestamp in the source YouTube video. It is parsed by `parse_story_file()` and embedded in RSS entry links as `?t=<seconds>`.
 
 ### metadata.json Schema
 
 ```json
 {
   "video_id": "dQw4w9WgXcQ",
-  "video_title": "Regular Council Meeting March 14 2026",
+  "video_title": "Regular Meeting March 14 2026",
   "status": "processed",
   "processed_at": 1741910400
 }
@@ -193,7 +243,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `feeds[].channel_id` | Yes | YouTube channel ID (starts with `UC`) |
 | `feeds[].channel_name` | Yes | Human-readable name; used to create `archive/` subfolder |
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
-| `output_dir` | No | Unused — present in sample for future use |
+| `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
 
 ---
 
@@ -206,30 +256,43 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 
 ---
 
+## Running Tests
+
+```bash
+pytest tests/ -v
+```
+
+Tests cover: `slugify`, `parse_story_file`, the JSON extraction regex used by `call_gemini_api`, `rebuild_feed`, and `rebuild_meta_feed`. All tests use `tmp_path` fixtures — no network calls and no real archive needed.
+
+To add a test for a new function, follow the patterns in `tests/test_tubenews.py`. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch` to avoid live API calls.
+
+---
+
 ## Development Notes
 
 ### External Dependencies and Fragility
-- **YouTube HTML scraping** (`discover_video_ids`) uses a regex against YouTube's page HTML. YouTube can change this structure at any time, causing silent empty results. Watch for unexpectedly zero new videos.
-- **Supadata API** is a paid proxy service. Check account quota if transcripts stop working.
+
+- **YouTube HTML scraping** (`discover_video_ids`, `scrape_youtube_metadata`) uses regexes against YouTube's page HTML. YouTube can change this structure at any time. If videos stop being discovered or dates start defaulting to today, check whether the `videoId` or `uploadDate` patterns have changed.
+- **Supadata API** is a paid proxy service. Check account quota if transcripts stop working. The `Transcript` object returned by `supadata_client.transcript()` exposes only `content`, `lang`, and `available_langs` — it does **not** contain video title or date, which is why we scrape the YouTube watch page separately.
 - **Gemini API** has rate limits per project. Use `helpers/check_quota.py` to test. If one project is exhausted, create a new Google Cloud project and generate a fresh key.
 
 ### SSL on FreeBSD
-Line 13 of `TubeNews.py` sets a FreeBSD-specific SSL cert path. This is guarded by `os.path.exists` — see TODO.md for the current state of this guard.
+
+`TubeNews.py` sets a FreeBSD-specific SSL cert path near the top. The assignment is guarded by `os.path.exists()` so it is a no-op on Linux and macOS.
 
 ### AI Prompt Engineering
-The Gemini prompt is in `generate_news()` (lines 69–79). It instructs the model to:
+
+The Gemini prompt is in `call_gemini_api()`. It instructs the model to:
 - Identify stories relevant to the configured `focus`
 - Use AP-style inverted pyramid structure
 - Format a dateline (e.g., `CITY, State — Month DD, YYYY`)
 - Return a raw JSON list (no markdown code fences)
 
-The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)` to handle any extra prose the model may prepend.
+The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)` to handle any extra prose the model may prepend. If the model starts returning malformed JSON, add debug logging inside `call_gemini_api()` to inspect `raw_text` before parsing.
 
-### Known Bugs
-See `TODO.md` for a full list. The most impactful bug is in `rebuild_feed()` line 152 — a reference to `html_body` which is never defined (dead code branch that always uses the fallback `body_text`).
+### Transcript Length Limit
 
-### No Formal Test Suite
-Tests are manual integration scripts in `helpers/`. There are no unit tests. See TODO.md for the recommendation to add pytest coverage.
+Gemini has an input token limit. Transcripts longer than 100,000 characters are silently truncated before being sent. A `WARNING` log line is emitted when this happens. Very long meetings may have their later segments cut off.
 
 ---
 
