@@ -44,14 +44,13 @@ TubeNews/
 ```
 YouTube Channel Pages (HTML scrape)
          │
-         ▼  video IDs
-  discover_video_ids()
+         ▼  list of {id, title, date, is_live}
+  discover_videos()
+         │  (parses ytInitialData JSON embedded in channel page;
+         │   title and approximate date extracted here — no per-video watch-page request)
          │
          ▼  IDs not yet in archive
   process_feed() ──► process_video() (one per new video)
-         │
-         ├── scrape_youtube_metadata()  ──► YouTube watch page (HTML scrape)
-         │         returns (upload_date, video_title)
          │
          └── fetch_transcript()  ──► Supadata API
                    returns transcript string
@@ -95,8 +94,9 @@ YouTube Channel Pages (HTML scrape)
 
 | Function | Description |
 |---|---|
-| `discover_video_ids(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns unique video IDs |
-| `scrape_youtube_metadata(video_id)` | Scrapes the watch page; returns `(upload_date, video_title)` |
+| `_relative_date_to_iso(text)` | Converts a YouTube relative-date string (e.g. `"11 days ago"`) to `YYYY-MM-DD`; parses exact dates from completed-stream text |
+| `_parse_channel_page_metadata(html)` | Extracts `{videoId → {title, date, is_live}}` from the `ytInitialData` JSON blob embedded in a channel listing page |
+| `discover_videos(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns `list[{id, title, date, is_live}]` |
 | `fetch_transcript(video_id, supadata_client)` | Fetches timed transcript segments from Supadata; returns formatted string or None |
 
 ### AI story generation
@@ -197,7 +197,7 @@ archive/
 │   │   ├── metadata.json       # {video_id, video_title, status, processed_at}
 │   │   ├── 01_Story_Title.md
 │   │   └── 02_Another_Story.md
-│   ├── 2000-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 1900 date
+│   ├── 2000-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 2000 date
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
 └── rss.xml                     # Regional meta-feed (all channels)
@@ -272,8 +272,9 @@ To add a test for a new function, follow the patterns in `tests/test_tubenews.py
 
 ### External Dependencies and Fragility
 
-- **YouTube HTML scraping** (`discover_video_ids`, `scrape_youtube_metadata`) uses regexes against YouTube's page HTML. YouTube can change this structure at any time. If videos stop being discovered or dates start defaulting to today, check whether the `videoId` or `uploadDate` patterns have changed.
-- **Supadata API** is a paid proxy service. Check account quota if transcripts stop working. The `Transcript` object returned by `supadata_client.transcript()` exposes only `content`, `lang`, and `available_langs` — it does **not** contain video title or date, which is why we scrape the YouTube watch page separately.
+- **YouTube HTML scraping** (`discover_videos`, `_parse_channel_page_metadata`) parses the `ytInitialData` JSON blob embedded in channel listing pages. YouTube can change this structure at any time. If videos stop being discovered or titles/dates stop appearing, check whether the `videoId`, `title.runs`, or `publishedTimeText` JSON paths have changed. The simple `videoId` regex fallback ensures IDs are still found even if the richer metadata parse fails.
+- **Approximate dates:** The channel listing page only provides relative dates ("11 days ago"). `_relative_date_to_iso` converts these to approximate calendar dates by subtracting from today. Completed livestreams often include the exact date in the text ("Streamed live on Mar 14, 2026") and are parsed precisely.
+- **Supadata API** is a paid proxy service. Check account quota if transcripts stop working. The `Transcript` object returned by `supadata_client.transcript()` exposes only `content`, `lang`, and `available_langs`.
 - **Gemini API** has rate limits per project. Use `helpers/check_quota.py` to test. If one project is exhausted, create a new Google Cloud project and generate a fresh key.
 
 ### SSL on FreeBSD
