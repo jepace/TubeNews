@@ -37,9 +37,10 @@ def catchup():
             if any(d.name.endswith(v_id) for d in feed_dir.iterdir() if d.is_dir()):
                 continue
 
-            # Create a dummy "OLD" folder so the main script skips it
-            # We use a 1900 date so it stays at the bottom of your filesystem
-            m_dir = feed_dir / f"1900-01-01_{v_id}"
+            # Create a stub folder so the main script skips it.
+            # Use a 2000-01-01 prefix so stubs sort alongside real meetings
+            # in tab completion (both start with '2').
+            m_dir = feed_dir / f"2000-01-01_{v_id}"
             m_dir.mkdir(exist_ok=True)
             meta = {
                 "video_id": v_id,
