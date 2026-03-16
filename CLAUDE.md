@@ -110,8 +110,8 @@ YouTube Channel Pages (HTML scrape)
 
 | Function | Description |
 |---|---|
-| `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (up to 50 stories) |
-| `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (up to 100 stories) |
+| `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
+| `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
 
 ### Processing orchestration
 
@@ -199,8 +199,8 @@ archive/
 │   │   └── 02_Another_Story.md
 │   ├── 2000-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 1900 date
 │   │   └── metadata.json       # {status: "ignored_too_old"}
-│   └── rss.xml                 # Per-channel RSS feed (up to 50 stories)
-└── rss.xml                     # Regional meta-feed (up to 100 stories)
+│   └── rss.xml                 # Per-channel RSS feed
+└── rss.xml                     # Regional meta-feed (all channels)
 ```
 
 ### Story Markdown Format
@@ -289,10 +289,6 @@ The Gemini prompt is in `call_gemini_api()`. It instructs the model to:
 - Return a raw JSON list (no markdown code fences)
 
 The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)` to handle any extra prose the model may prepend. If the model starts returning malformed JSON, add debug logging inside `call_gemini_api()` to inspect `raw_text` before parsing.
-
-### Transcript Length Limit
-
-Gemini has an input token limit. Transcripts longer than 100,000 characters are silently truncated before being sent. A `WARNING` log line is emitted when this happens. Very long meetings may have their later segments cut off.
 
 ---
 
