@@ -295,15 +295,9 @@ def call_gemini_api(
         "'title', 'dateline', 'content', 'start_time_seconds'."
     )
 
-    if len(transcript_text) > 100_000:
-        logger.warning(
-            f"Transcript for '{video_title[:30]}' is "
-            f"{len(transcript_text):,} chars; truncating to 100,000."
-        )
-
     payload = {
         "contents": [
-            {"parts": [{"text": f"{directive}\n\nTRANSCRIPT:\n{transcript_text[:100_000]}"}]}
+            {"parts": [{"text": f"{directive}\n\nTRANSCRIPT:\n{transcript_text}"}]}
         ]
     }
 
@@ -364,7 +358,7 @@ def write_story_files(stories: list, meeting_dir: Path) -> None:
 def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
     """Regenerate ``<feed_dir>/rss.xml`` from all processed meetings.
 
-    Includes up to 50 most-recent stories, sorted newest-meeting first.
+    Includes all stories, sorted newest-meeting first.
     Meetings with ``status == "ignored_too_old"`` are skipped entirely so
     back-catalogue catch-up stubs don't pollute the feed.
 
@@ -388,11 +382,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
     meeting_dirs = sorted(
         [d for d in feed_dir.iterdir() if d.is_dir()], reverse=True
     )
-    story_count = 0
-
     for meeting_dir in meeting_dirs:
-        if story_count >= 50:
-            break
         metadata_path = meeting_dir / "metadata.json"
         if not metadata_path.exists():
             continue
@@ -401,8 +391,6 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
             continue
 
         for story_file in sorted(meeting_dir.glob("[0-9]*.md")):
-            if story_count >= 50:
-                break
             story = parse_story_file(story_file)
             feed_entry = feed.add_entry()
             feed_entry.id(story["content_hash"])
@@ -417,7 +405,6 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
             feed_entry.published(
                 datetime.fromtimestamp(metadata["processed_at"]).astimezone()
             )
-            story_count += 1
 
     feed.rss_file(feed_dir / "rss.xml", pretty=True)
 
@@ -425,7 +412,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
 def rebuild_meta_feed(base_url: str = "") -> None:
     """Aggregate stories from all channel folders into ``archive/rss.xml``.
 
-    Collects up to 100 most-recent stories across every channel sub-directory,
+    Collects all stories across every channel sub-directory,
     ordered by processing timestamp (newest first).  Each entry is prefixed
     with ``[Channel Name]`` in the title so readers know the source.
 
@@ -465,7 +452,7 @@ def rebuild_meta_feed(base_url: str = "") -> None:
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
 
-    for entry in all_stories[:100]:
+    for entry in all_stories:
         try:
             story = parse_story_file(entry["file"])
             feed_entry = feed.add_entry()
