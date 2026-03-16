@@ -26,7 +26,7 @@ import os
 import re
 import socket
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -157,26 +157,118 @@ def parse_story_file(story_path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def discover_video_ids(channel_id: str) -> list[str]:
-    """Scrape a channel's *videos* and *streams* tabs; return unique video IDs.
+def _relative_date_to_iso(text: str) -> str:
+    """Convert a YouTube relative-date string to ``YYYY-MM-DD``.
 
-    YouTube embeds a JSON blob inside the page HTML that contains ``videoId``
-    fields for every visible video.  We extract those with a regex rather than
-    relying on an API key.
+    YouTube's channel listing page provides publication dates as relative
+    strings (e.g. ``"11 days ago"``, ``"2 weeks ago"``).  We subtract the
+    implied offset from today to get an approximate calendar date.
 
-    Returns an ordered list of IDs (most-recent first, duplicates removed).
+    For completed live-streams YouTube sometimes provides an exact date
+    (e.g. ``"Streamed live on Feb 24, 2026"``); we parse that precisely.
+
+    Falls back to today's date for any unrecognised format.
+    """
+    today = datetime.now()
+    lower = text.lower().strip()
+
+    # "Streamed live on Month DD, YYYY" or just "Month DD, YYYY"
+    exact = re.search(r"([a-z]+ \d{1,2},\s*\d{4})", lower)
+    if exact:
+        try:
+            return datetime.strptime(exact.group(1), "%b %d, %Y").strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # "N seconds/minutes/hours/days/weeks/months/years ago"
+    m = re.match(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        days = {"second": 0, "minute": 0, "hour": 0, "day": n,
+                "week": n * 7, "month": n * 30, "year": n * 365}[unit]
+        return (today - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    return today.strftime("%Y-%m-%d")
+
+
+def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
+    """Extract per-video metadata from the ``ytInitialData`` JSON in a channel page.
+
+    YouTube embeds a large JSON blob (``var ytInitialData = {...};``) that
+    powers the video-card grid.  Each card's ``videoRenderer`` object contains
+    the video ID, title, relative publish date, and live-stream status.
+
+    Returns a ``{videoId: {title, date, is_live}}`` mapping.
+    Falls back to an empty dict if the JSON blob is absent or unparseable.
+    """
+    result: dict[str, dict] = {}
+
+    m = re.search(
+        r"var ytInitialData\s*=\s*(\{.*?\});\s*(?:var |</script>)",
+        html,
+        re.DOTALL,
+    )
+    if not m:
+        return result
+
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return result
+
+    def walk(obj: object) -> None:
+        if isinstance(obj, dict):
+            if "videoId" in obj and "title" in obj:
+                vid = obj["videoId"]
+                runs = obj["title"].get("runs", [])
+                title = runs[0].get("text", "") if runs else ""
+
+                relative = obj.get("publishedTimeText", {}).get("simpleText", "")
+                date = _relative_date_to_iso(relative) if relative else datetime.now().strftime("%Y-%m-%d")
+
+                is_live = any(
+                    ov.get("thumbnailOverlayTimeStatusRenderer", {}).get("style")
+                    in ("LIVE", "UPCOMING")
+                    for ov in obj.get("thumbnailOverlays", [])
+                )
+
+                if vid not in result:
+                    result[vid] = {"title": title, "date": date, "is_live": is_live}
+
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(data)
+    return result
+
+
+def discover_videos(channel_id: str) -> list[dict]:
+    """Scrape a channel's *videos* and *streams* tabs; return video metadata.
+
+    Parses the ``ytInitialData`` JSON blob embedded in each tab's HTML to
+    extract the video ID, title, approximate upload date, and live status for
+    every visible video.  The simple ``videoId`` regex is also run as a
+    fallback to ensure no IDs are missed if the JSON parse fails.
+
+    Returns an ordered list of dicts (most-recent first, duplicates removed)::
+
+        {"id": str, "title": str, "date": "YYYY-MM-DD", "is_live": bool}
     """
     all_ids: list[str] = []
+    meta_lookup: dict[str, dict] = {}
+
     for tab in ["videos", "streams"]:
         url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
         logger.debug(f"Discovery: fetching YouTube tab '{tab}'…")
         try:
             response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
             if response.status_code == 200:
+                meta_lookup.update(_parse_channel_page_metadata(response.text))
                 found = re.findall(r'"videoId":"([^"]{11})"', response.text)
                 if not found:
-                    # YouTube occasionally changes its HTML structure; warn so
-                    # the operator knows the scraping regex may need updating.
                     logger.warning(
                         f"Discovery: got 200 from '{tab}' tab but found 0 "
                         "video IDs — YouTube HTML structure may have changed."
@@ -185,54 +277,19 @@ def discover_video_ids(channel_id: str) -> list[str]:
         except Exception as exc:
             logger.debug(f"Discovery: tab '{tab}' failed: {exc}")
 
-    # dict.fromkeys preserves insertion order while removing duplicates.
-    return list(dict.fromkeys(all_ids))
+    today = datetime.now().strftime("%Y-%m-%d")
+    seen: dict[str, dict] = {}
+    for vid in all_ids:
+        if vid not in seen:
+            m = meta_lookup.get(vid, {})
+            seen[vid] = {
+                "id": vid,
+                "title": m.get("title") or vid,
+                "date": m.get("date") or today,
+                "is_live": m.get("is_live", False),
+            }
+    return list(seen.values())
 
-
-def scrape_youtube_metadata(video_id: str) -> tuple[str, str, bool]:
-    """Scrape the YouTube watch page for a video's title, upload date, and live status.
-
-    YouTube embeds structured data (JSON-LD) directly in the page HTML, which
-    contains ``uploadDate``, the ``<title>`` tag, and ``isLiveBroadcast``.
-    No API key needed.
-
-    Returns:
-        A ``(upload_date, video_title, is_live)`` tuple.
-        *upload_date* is ``"YYYY-MM-DD"`` or today's date if scraping fails.
-        *video_title* is the human-readable title or *video_id* as a fallback.
-        *is_live* is True if the video is an active or upcoming live broadcast.
-    """
-    url = f"https://www.youtube.com/watch?v={video_id}"
-
-    # Safe fallbacks used when the page can't be fetched or parsed.
-    upload_date = datetime.now().strftime("%Y-%m-%d")
-    video_title = video_id
-    is_live = False
-
-    try:
-        response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
-        if response.status_code == 200:
-            date_match = re.search(
-                r'"uploadDate":"(\d{4}-\d{2}-\d{2})"', response.text
-            )
-            if date_match:
-                upload_date = date_match.group(1)
-
-            title_match = re.search(
-                r"<title>(.+?) - YouTube</title>", response.text
-            )
-            if title_match:
-                video_title = title_match.group(1)
-
-            # YouTube embeds "isLiveBroadcast":true for upcoming and active
-            # streams.  Completed streams have this removed from the page.
-            if '"isLiveBroadcast":true' in response.text:
-                is_live = True
-
-    except Exception as exc:
-        logger.debug(f"YouTube page scrape failed for {video_id}: {exc}")
-
-    return upload_date, video_title, is_live
 
 
 def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
@@ -528,6 +585,9 @@ def mark_video_as_backlog(feed_dir: Path, video_id: str) -> None:
 
 def process_video(
     video_id: str,
+    video_title: str,
+    video_date: str,
+    is_live: bool,
     feed: dict,
     feed_dir: Path,
     supadata_client: Supadata,
@@ -560,14 +620,11 @@ def process_video(
         logger.info(f"[✓] Found local transcript for {video_id}. Re-running AI only.")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         video_date = existing_dir.name.split("_")[0]
-        video_title = video_id          # title isn't cached; use ID as fallback
         meeting_dir = existing_dir
     else:
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
         logger.info(f"[+] Processing new video{counter}: {video_id}")
-        logger.info("--> Step 2: Scraping metadata from YouTube…")
 
-        video_date, video_title, is_live = scrape_youtube_metadata(video_id)
         logger.info(f"    Video: {video_title} ({video_id})")
         if is_live:
             logger.info("    Upcoming/live stream — skipping for now, will retry next run.")
@@ -650,44 +707,50 @@ def process_feed(
 
     feed_dir.mkdir(parents=True, exist_ok=True)
 
-    all_video_ids = discover_video_ids(feed["channel_id"])
-    if not all_video_ids:
+    all_videos = discover_videos(feed["channel_id"])
+    if not all_videos:
         return content_changed, ai_rate_limited
 
+    all_ids = [v["id"] for v in all_videos]
+    video_meta = {v["id"]: v for v in all_videos}
+
     # Videos whose archive folder doesn't exist yet.
-    unprocessed_video_ids = [
-        vid for vid in all_video_ids
+    unprocessed = [
+        v for v in all_videos
         if not any(
-            d.name.endswith(vid)
+            d.name.endswith(v["id"])
             for d in feed_dir.iterdir()
             if d.is_dir() and (d / "metadata.json").exists()
         )
     ]
 
-    if unprocessed_video_ids:
-        logger.info(f"--> Step 1: Found {len(unprocessed_video_ids)} videos to check.")
+    if unprocessed:
+        logger.info(f"--> Step 1: Found {len(unprocessed)} videos to check.")
     else:
         logger.info("--> Step 1: No new videos discovered.")
 
     # Videos that will actually be processed (not back-catalogued).
     videos_to_process = [
-        vid for vid in unprocessed_video_ids
-        if not (is_new_feed and all_video_ids.index(vid) > 0)
+        v for v in unprocessed
+        if not (is_new_feed and all_ids.index(v["id"]) > 0)
     ]
     total = len(videos_to_process)
 
-    for video_id in unprocessed_video_ids:
+    for video_info in unprocessed:
         # On a brand-new feed, skip the entire back-catalogue except the
-        # most-recent video (index 0 in all_video_ids).  This prevents the
+        # most-recent video (index 0 in all_ids).  This prevents the
         # first run from processing months of old meetings.
-        if is_new_feed and all_video_ids.index(video_id) > 0:
-            mark_video_as_backlog(feed_dir, video_id)
+        if is_new_feed and all_ids.index(video_info["id"]) > 0:
+            mark_video_as_backlog(feed_dir, video_info["id"])
             content_changed = True
             continue
 
-        video_num = videos_to_process.index(video_id) + 1
+        video_num = videos_to_process.index(video_info) + 1
         result = process_video(
-            video_id=video_id,
+            video_id=video_info["id"],
+            video_title=video_info["title"],
+            video_date=video_info["date"],
+            is_live=video_info["is_live"],
             feed=feed,
             feed_dir=feed_dir,
             supadata_client=supadata_client,
