@@ -1,6 +1,6 @@
 {
   "gemini_api_key": "ADD-GEMINI-KEY",
-  "ai_model": "gemini-2.5-flash",
+  "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "ADD_SUPADATA-KEY",
   "base_url": "",
   "feeds": [

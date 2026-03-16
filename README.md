@@ -43,7 +43,7 @@ See `TubeNews.json.sample` for the full template. Key fields:
 ```json
 {
   "gemini_api_key": "YOUR_KEY",
-  "ai_model": "gemini-2.5-flash",
+  "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "YOUR_KEY",
   "feeds": [
     {

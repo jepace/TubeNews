@@ -150,7 +150,7 @@ Edit `TubeNews.json`:
 ```json
 {
   "gemini_api_key": "YOUR_GEMINI_KEY",
-  "ai_model": "gemini-2.5-flash",
+  "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "YOUR_SUPADATA_KEY",
   "base_url": "",
   "feeds": [
@@ -237,7 +237,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | Key | Required | Description |
 |---|---|---|
 | `gemini_api_key` | Yes | Google Gemini API key from AI Studio |
-| `ai_model` | Yes | Gemini model name (e.g. `gemini-2.5-flash`) |
+| `gemini_model` | Yes | Gemini model name (e.g. `gemini-2.5-flash`) |
 | `supadata_api_key` | Yes | Supadata API key for transcript fetching |
 | `feeds` | Yes | Array of channel configurations (see below) |
 | `feeds[].channel_id` | Yes | YouTube channel ID (starts with `UC`) |
