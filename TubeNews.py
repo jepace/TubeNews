@@ -579,6 +579,15 @@ def process_video(
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
         return "content_written"
 
+    # Gemini returned an empty story list — write metadata so this video is
+    # not re-submitted to the AI on future runs.
+    metadata = {
+        "video_id": video_id,
+        "video_title": video_title,
+        "status": "no_stories",
+        "processed_at": time.time(),
+    }
+    (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
     return "skipped"
 
 
