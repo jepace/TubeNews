@@ -1,7 +1,14 @@
 import requests
 import json
+from pathlib import Path
 
-API_KEY = "AIzaSyC_kjoQ7GQj_PCdjU_X-Nw2Lwhr24jmcbQ"
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "TubeNews.json"
+
+with open(CONFIG_FILE, 'r') as f:
+    _config = json.load(f)
+
+API_KEY = _config['gemini_api_key']
+
 # These are the models from your Harvester dump most likely to have free quota
 models_to_test = [
     "gemini-2.0-flash-lite",

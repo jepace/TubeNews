@@ -9,8 +9,10 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 STORAGE_ROOT = BASE_DIR / "archive"
 
-# FreeBSD specific SSL pathing
-os.environ['SSL_CERT_FILE'] = '/usr/local/share/certs/ca-root-nss.crt'
+# FreeBSD specific SSL pathing (no-op on Linux/macOS where this path doesn't exist)
+_FREEBSD_CERT = '/usr/local/share/certs/ca-root-nss.crt'
+if os.path.exists(_FREEBSD_CERT):
+    os.environ['SSL_CERT_FILE'] = _FREEBSD_CERT
 socket.setdefaulttimeout(15) 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'}
 
@@ -18,8 +20,6 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
 logger = logging.getLogger("TubeNews")
-
-AI_DISABLED = False
 
 def setup_logging(debug_mode):
     level = logging.DEBUG if debug_mode else logging.INFO
@@ -29,20 +29,34 @@ def setup_logging(debug_mode):
         datefmt='%H:%M:%S'
     )
 
-def slugify(text): 
+def slugify(text):
+    """Convert text to a filesystem-safe slug (non-alphanumeric chars → underscores)."""
     return re.sub(r'[^a-zA-Z0-9]', '_', text).strip('_')
 
 def get_transcript_and_meta(video_id, sd_client):
-    """Network call to Supadata. Fetches transcript + metadata in one go."""
+    """Scrapes YouTube page for title and date; fetches transcript from Supadata."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     logger.info("--> Step 2: Requesting transcript + metadata from Supadata...")
     logger.debug(f"Connecting to api.supadata.ai for ID: {video_id} (Token required)")
+
+    # Scrape title and upload date from YouTube page (free, no API token)
+    title = video_id
+    actual_date = datetime.now().strftime('%Y-%m-%d')
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code == 200:
+            date_match = re.search(r'"uploadDate":"(\d{4}-\d{2}-\d{2})"', r.text)
+            if date_match:
+                actual_date = date_match.group(1)
+            title_match = re.search(r'<title>(.+?) - YouTube</title>', r.text)
+            if title_match:
+                title = title_match.group(1)
+    except Exception as e:
+        logger.debug(f"YouTube page scrape failed for {video_id}: {e}")
+
+    # Fetch transcript segments from Supadata
     try:
         t_obj = sd_client.transcript(url=url, text=False)
-        title = getattr(t_obj, 'metadata', {}).get('title', video_id)
-        raw_date = getattr(t_obj, 'metadata', {}).get('publishDate', '') or getattr(t_obj, 'metadata', {}).get('publishedAt', '')
-        actual_date = raw_date.split('T')[0] if raw_date else datetime.now().strftime('%Y-%m-%d')
-        
         if hasattr(t_obj, 'content') and t_obj.content:
             text = "\n".join([f"{int(getattr(s, 'offset', 0)/1000)}s --> {getattr(s, 'text', '')}" for s in t_obj.content])
             logger.debug(f"Supadata successfully returned {len(t_obj.content)} segments.")
@@ -52,10 +66,11 @@ def get_transcript_and_meta(video_id, sd_client):
     return None, None, None
 
 def generate_news(transcript, focus, video_title, v_date, meeting_dir, gemini_key, model_name):
-    """Reporter logic using the high-quality editorial directive."""
-    global AI_DISABLED
-    if AI_DISABLED: return None
-    
+    """Reporter logic using the high-quality editorial directive.
+
+    Returns a list of story dicts on success, False if rate-limited (caller
+    should disable AI for the session), or None on any other failure.
+    """
     # Clean up any existing stories if we are rerunning
     for old_story in meeting_dir.glob("[0-9]*.md"):
         old_story.unlink()
@@ -78,6 +93,8 @@ def generate_news(transcript, focus, video_title, v_date, meeting_dir, gemini_ke
         "Return result ONLY as raw JSON list of objects with keys: 'title', 'dateline', 'content', 'start_time_seconds'."
     )
     
+    if len(transcript) > 100000:
+        logger.warning(f"Transcript for '{video_title[:30]}' is {len(transcript):,} chars; truncating to 100,000.")
     payload = {"contents": [{"parts": [{"text": f"{directive}\n\nTRANSCRIPT:\n{transcript[:100000]}"}]}]}
     
     try:
@@ -99,13 +116,13 @@ def generate_news(transcript, focus, video_title, v_date, meeting_dir, gemini_ke
             return stories
         elif res.status_code == 429:
             logger.warning("[!] Gemini Rate Limit. AI disabled for this run.")
-            AI_DISABLED = True
+            return False
     except Exception as e:
         logger.error(f"[!] AI logic failure: {e}")
     return None
 
 def discover_video_ids(channel_id):
-    """Scrapes both videos and streams tabs."""
+    """Scrape the channel's videos and streams tabs; return deduplicated list of video IDs."""
     all_ids = []
     for tab in ["videos", "streams"]:
         url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
@@ -114,53 +131,64 @@ def discover_video_ids(channel_id):
             r = requests.get(url, headers=HEADERS, timeout=10)
             if r.status_code == 200:
                 found = re.findall(r'"videoId":"([^"]{11})"', r.text)
+                if not found:
+                    logger.warning(f"Discovery: Got 200 from '{tab}' tab but found 0 video IDs. YouTube HTML structure may have changed.")
                 all_ids.extend(found)
         except Exception as e:
             logger.debug(f"Discovery: Tab {tab} failed: {e}")
     return list(dict.fromkeys(all_ids))
 
 def rebuild_feed(feed_dir, feed_cfg):
-    """Generates the rss.xml for a specific council."""
+    """Generate archive/<council>/rss.xml with up to 50 most recent stories."""
     safe_name = slugify(feed_cfg['channel_name'])
     logger.info(f"--> Step 4: Rebuilding RSS for {safe_name}")
     fg = FeedGenerator()
-    fg.id(f"tubenews_{safe_name}"); fg.title(f"TubeNews: {feed_cfg['channel_name']}")
+    fg.id(f"tubenews_{safe_name}")
+    fg.title(f"TubeNews: {feed_cfg['channel_name']}")
     fg.description(f"Expert focus: {feed_cfg['focus']}")
     fg.link(href=f"https://www.youtube.com/channel/{feed_cfg['channel_id']}", rel='alternate')
 
     m_dirs = sorted([d for d in feed_dir.iterdir() if d.is_dir()], reverse=True)
     count = 0
     for m_dir in m_dirs:
+        if count >= 50: break
         meta_p = m_dir / "metadata.json"
         if not meta_p.exists(): continue
         meta = json.loads(meta_p.read_text())
         if meta.get('status') == 'ignored_too_old': continue
-        
+
         for s_file in sorted(list(m_dir.glob("[0-9]*.md"))):
+            if count >= 50: break
             text = s_file.read_text(encoding='utf-8')
             lines = text.splitlines()
             title, dateline = lines[0].replace('# ', ''), lines[1].replace('*', '')
-            
             body_text = "<br>".join(lines[2:]).replace('\n', '<br>')
             ts_match = re.search(r'\*\*Segment Start:\*\* (\d+)s', text)
             ts = ts_match.group(1) if ts_match else "0"
-            
             fe = fg.add_entry()
             fe.id(hashlib.md5(text.encode()).hexdigest())
             fe.title(f"{title} | {meta.get('video_title', 'Meeting')}")
             fe.link(href=f"https://youtu.be/{meta['video_id']}?t={ts}")
-            fe.content(f"<strong>{dateline}</strong><br><br>{html_body}", type='html') if 'html_body' in locals() else fe.content(f"<strong>{dateline}</strong><br><br>{body_text}", type='html')
+            fe.content(f"<strong>{dateline}</strong><br><br>{body_text}", type='html')
             fe.published(datetime.fromtimestamp(meta['processed_at']).astimezone())
             count += 1
-            if count >= 50: break
-        if count >= 50: break
     fg.rss_file(feed_dir / "rss.xml", pretty=True)
 
-def rebuild_meta_feed():
-    """Step 5: Aggregates stories from ALL council folders into archive/rss.xml"""
+def rebuild_meta_feed(base_url=""):
+    """Aggregate stories from all council folders into archive/rss.xml.
+
+    Args:
+        base_url: Public URL of the meta-feed (used as the RSS self-link).
+                  If empty, the self-link is omitted.
+    """
     logger.info("--> Step 5: Rebuilding Regional Meta-Feed (archive/rss.xml)...")
     fg = FeedGenerator()
-    fg.id("tubenews_meta_rss"); fg.title("TubeNews: Regional Real Estate & Development"); fg.description("Aggregated regional reporting."); fg.link(href="http://localhost/rss.xml", rel='self')
+    fg.id("tubenews_meta_rss")
+    fg.title("TubeNews: Regional Real Estate & Development")
+    fg.description("Aggregated regional reporting.")
+    fg.link(href=base_url if base_url else "https://www.youtube.com", rel='alternate')
+    if base_url:
+        fg.link(href=base_url, rel='self')
 
     all_stories = []
     for council_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir()]:
@@ -172,37 +200,43 @@ def rebuild_meta_feed():
                 if meta.get('status') == 'ignored_too_old': continue
                 for s_file in m_dir.glob("[0-9]*.md"):
                     all_stories.append({'file': s_file, 'meta': meta, 'council': council_dir.name.replace('_', ' ')})
-            except: continue
+            except Exception:
+                continue
 
     all_stories.sort(key=lambda x: x['meta'].get('processed_at', 0), reverse=True)
 
     for entry in all_stories[:100]:
         try:
-            raw = entry['file'].read_text(encoding='utf-8').splitlines()
+            raw_text = entry['file'].read_text(encoding='utf-8')
+            raw = raw_text.splitlines()
             title, date = raw[0].replace('# ', ''), raw[1].replace('*', '')
             body_text = "<br>".join(raw[2:]).replace('\n', '<br>')
-            fe = fg.add_entry()
-            fe.id(hashlib.md5(entry['file'].read_text(encoding='utf-8').encode()).hexdigest())
-            fe.title(f"[{entry['council']}] {title}")
-            
-            ts_match = re.search(r'\*\*Segment Start:\*\* (\d+)s', entry['file'].read_text(encoding='utf-8'))
+            ts_match = re.search(r'\*\*Segment Start:\*\* (\d+)s', raw_text)
             ts = ts_match.group(1) if ts_match else "0"
-            
+            fe = fg.add_entry()
+            fe.id(hashlib.md5(raw_text.encode()).hexdigest())
+            fe.title(f"[{entry['council']}] {title}")
             fe.link(href=f"https://youtu.be/{entry['meta']['video_id']}?t={ts}")
             fe.content(f"<strong>{date}</strong><br><em>Source: {entry['council']}</em><br><br>{body_text}", type='html')
             fe.published(datetime.fromtimestamp(entry['meta'].get('processed_at', time.time())).astimezone())
-        except: continue
+        except Exception:
+            continue
 
     fg.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument("--debug", action="store_true"); args = parser.parse_args()
+    """Entry point: load config, process each feed, and rebuild RSS outputs."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
     setup_logging(args.debug)
-    with open(CONFIG_FILE, 'r') as f: config = json.load(f)
+    with open(CONFIG_FILE, 'r') as f:
+        config = json.load(f)
     sd_client = Supadata(api_key=config['supadata_api_key'])
     logger.info(f"Session Start | AI Model: {config.get('ai_model')}")
     
     any_content_changed = False
+    ai_disabled = False
 
     for feed in config['feeds']:
         chan_slug = slugify(feed['channel_name'])
@@ -260,18 +294,21 @@ def main():
                 (m_dir / "transcript.txt").write_text(transcript, encoding='utf-8')
 
             # RUN AI
-            stories = generate_news(transcript, feed['focus'], v_title, v_date_str, m_dir, config['gemini_api_key'], config['ai_model'])
-            if stories is not None:
-                meta = {"video_id": v_id, "video_title": v_title, "status": "processed", "processed_at": time.time()}
-                (m_dir / "metadata.json").write_text(json.dumps(meta))
-                feed_content_changed = True
+            if not ai_disabled:
+                stories = generate_news(transcript, feed['focus'], v_title, v_date_str, m_dir, config['gemini_api_key'], config['ai_model'])
+                if stories is False:
+                    ai_disabled = True
+                elif stories is not None:
+                    meta = {"video_id": v_id, "video_title": v_title, "status": "processed", "processed_at": time.time()}
+                    (m_dir / "metadata.json").write_text(json.dumps(meta))
+                    feed_content_changed = True
 
         if feed_content_changed:
             rebuild_feed(feed_dir, feed)
             any_content_changed = True
 
     if any_content_changed or not (STORAGE_ROOT / "rss.xml").exists():
-        rebuild_meta_feed()
+        rebuild_meta_feed(base_url=config.get('base_url', ''))
 
     logger.info("Session End.")
 

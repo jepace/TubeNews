@@ -1,7 +1,7 @@
 import os, json, requests, re, argparse
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 STORAGE_ROOT = BASE_DIR / "archive"
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'}
@@ -26,7 +26,8 @@ def catchup():
                 r = requests.get(url, headers=HEADERS, timeout=15)
                 ids = re.findall(r'"videoId":"([^"]{11})"', r.text)
                 found_ids.extend(ids)
-            except: pass
+            except Exception as e:
+                print(f"    [!] Warning: could not fetch tab '{tab}': {e}")
 
         found_ids = list(dict.fromkeys(found_ids))
         print(f"    Found {len(found_ids)} videos. Marking as ignored...")
