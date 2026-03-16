@@ -306,7 +306,10 @@ def call_gemini_api(
         if response.status_code == 200:
             raw_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
-            stories = json.loads(json_match.group(0) if json_match else raw_text)
+            if not json_match:
+                logger.debug("Gemini: no JSON list found in response — 0 stories.")
+                return []
+            stories = json.loads(json_match.group(0))
             logger.debug(f"Gemini: generated {len(stories)} stories.")
             return stories
         elif response.status_code == 429:
