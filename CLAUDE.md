@@ -246,6 +246,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `feeds[].channel_name` | Yes | Human-readable name; used to create `archive/` subfolder |
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
+| `blog_days` | No | Days of stories to include in per-user blog pages (default: `90`) |
 
 ---
 
