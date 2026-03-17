@@ -3,3 +3,9 @@ feedgen
 supadata
 google-generativeai
 pytest
+flask
+flask-login
+flask-wtf
+flask-limiter
+email-validator
+gunicorn

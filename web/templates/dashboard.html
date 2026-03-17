@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}My Feed — TubeNews{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+  <h1>My Feed</h1>
+
+  <section class="feed-url-section">
+    <h2>Your RSS feed URL</h2>
+    {% if current_user.channel_ids %}
+      <p>Add this URL to your RSS reader:</p>
+      <div class="feed-url-row">
+        <input type="text" id="feed-url" class="feed-url-input" value="{{ feed_url }}" readonly>
+        <button type="button" onclick="copyFeedUrl()" class="btn-copy">Copy</button>
+      </div>
+    {% else %}
+      <p class="muted">Subscribe to at least one channel below to generate your feed URL.</p>
+    {% endif %}
+  </section>
+
+  <section class="channels-section">
+    <h2>Channels</h2>
+    {% if channels %}
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <div class="select-all-row">
+          <label class="checkbox-label">
+            <input type="checkbox" id="select-all"
+                   {% if channels|length == subscribed|length and channels %}checked{% endif %}>
+            <strong>All Channels (Meta Feed)</strong>
+            <span class="hint"> — receive everything</span>
+          </label>
+        </div>
+
+        <div class="channel-list" id="channel-list">
+          {% for ch in channels %}
+            <label class="checkbox-label channel-row">
+              <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
+                     {% if ch.channel_id in subscribed %}checked{% endif %}
+                     class="channel-checkbox">
+              {{ ch.channel_name }}
+            </label>
+          {% endfor %}
+        </div>
+
+        <button type="submit" class="btn-save">Save subscriptions</button>
+      </form>
+    {% else %}
+      <p class="muted">No channels are configured in TubeNews.json yet.</p>
+    {% endif %}
+  </section>
+</div>
+
+<script>
+  // "All Channels" toggle
+  const selectAll = document.getElementById('select-all');
+  const checkboxes = document.querySelectorAll('.channel-checkbox');
+
+  selectAll.addEventListener('change', () => {
+    checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+  });
+
+  checkboxes.forEach(cb => {
+    cb.addEventListener('change', () => {
+      selectAll.checked = [...checkboxes].every(c => c.checked);
+      if (!selectAll.checked && [...checkboxes].some(c => c.checked)) {
+        selectAll.indeterminate = true;
+      } else {
+        selectAll.indeterminate = false;
+      }
+    });
+  });
+
+  // Set indeterminate state on load if partially selected
+  (function () {
+    const total = checkboxes.length;
+    const checked = [...checkboxes].filter(c => c.checked).length;
+    if (checked > 0 && checked < total) {
+      selectAll.indeterminate = true;
+    }
+  })();
+
+  // Copy feed URL
+  function copyFeedUrl() {
+    const input = document.getElementById('feed-url');
+    navigator.clipboard.writeText(input.value).then(() => {
+      const btn = document.querySelector('.btn-copy');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    });
+  }
+</script>
+{% endblock %}
