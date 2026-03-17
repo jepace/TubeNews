@@ -19,6 +19,7 @@ Configuration lives in TubeNews.json (see TubeNews.json.sample).
 # Standard-library imports
 # ---------------------------------------------------------------------------
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import logging
@@ -249,6 +250,9 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
 def discover_videos(channel_id: str) -> list[dict]:
     """Scrape a channel's *videos* and *streams* tabs; return video metadata.
 
+    Both tabs are fetched concurrently.  Results are merged in a fixed order
+    (videos tab first, then streams) so the returned list is stable.
+
     Parses the ``ytInitialData`` JSON blob embedded in each tab's HTML to
     extract the video ID, title, approximate upload date, and live status for
     every visible video.  The simple ``videoId`` regex is also run as a
@@ -258,25 +262,37 @@ def discover_videos(channel_id: str) -> list[dict]:
 
         {"id": str, "title": str, "date": "YYYY-MM-DD", "is_live": bool}
     """
-    all_ids: list[str] = []
-    meta_lookup: dict[str, dict] = {}
+    tabs = ["videos", "streams"]
 
-    for tab in ["videos", "streams"]:
+    def _fetch_tab(tab: str) -> tuple[str, str | None]:
         url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
         logger.debug(f"Discovery: fetching YouTube tab '{tab}'…")
         try:
             response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
             if response.status_code == 200:
-                meta_lookup.update(_parse_channel_page_metadata(response.text))
-                found = re.findall(r'"videoId":"([^"]{11})"', response.text)
-                if not found:
-                    logger.warning(
-                        f"Discovery: got 200 from '{tab}' tab but found 0 "
-                        "video IDs — YouTube HTML structure may have changed."
-                    )
-                all_ids.extend(found)
+                return tab, response.text
         except Exception as exc:
             logger.debug(f"Discovery: tab '{tab}' failed: {exc}")
+        return tab, None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tab_results = dict(executor.map(lambda t: _fetch_tab(t), tabs, timeout=20))
+
+    all_ids: list[str] = []
+    meta_lookup: dict[str, dict] = {}
+
+    for tab in tabs:
+        html = tab_results.get(tab)
+        if html is None:
+            continue
+        meta_lookup.update(_parse_channel_page_metadata(html))
+        found = re.findall(r'"videoId":"([^"]{11})"', html)
+        if not found:
+            logger.warning(
+                f"Discovery: got 200 from '{tab}' tab but found 0 "
+                "video IDs — YouTube HTML structure may have changed."
+            )
+        all_ids.extend(found)
 
     today = datetime.now().strftime("%Y-%m-%d")
     seen: dict[str, dict] = {}
