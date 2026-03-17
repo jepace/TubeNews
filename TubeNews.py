@@ -276,7 +276,7 @@ def discover_videos(channel_id: str) -> list[dict]:
         return tab, None
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        tab_results = dict(executor.map(lambda t: _fetch_tab(t), tabs, timeout=20))
+        tab_results = dict(executor.map(lambda t: _fetch_tab(t), tabs))
 
     all_ids: list[str] = []
     meta_lookup: dict[str, dict] = {}
