@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Admin — Users{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <h1>Users <span class="badge">{{ users|length }}</span></h1>
+
+  {% if users %}
+  <table class="user-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Subscriptions</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr class="{{ 'row-locked' if u.is_locked }}">
+        <td>{{ u.name }}</td>
+        <td class="mono">{{ u.email }}</td>
+        <td>
+          {% set subs = u.channel_ids %}
+          {% if subs %}
+            {% set names = [] %}
+            {% for cid in subs %}{% if names.append(channel_names.get(cid, cid)) %}{% endif %}{% endfor %}
+            <span title="{{ names | join(', ') }}">
+              {{ subs|length }} channel{{ 's' if subs|length != 1 }}
+            </span>
+          {% else %}
+            <span class="muted">none</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if u.is_locked %}
+            <span class="pill pill-locked">Locked</span>
+          {% elif u.is_admin %}
+            <span class="pill pill-admin">Admin</span>
+          {% else %}
+            <span class="pill pill-active">Active</span>
+          {% endif %}
+        </td>
+        <td class="muted">
+          {{ u._data.get('created_at', 0) | format_ts }}
+        </td>
+        <td>
+          <a href="{{ url_for('admin_user', uid=u.get_id()) }}" class="btn-sm">Edit</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No user accounts yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

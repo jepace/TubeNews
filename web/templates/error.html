@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} — TubeNews{% endblock %}
+{% block content %}
+<div class="card" style="text-align:center; padding: 3rem 2rem;">
+  <h1 style="font-size:3rem; color:var(--muted);">{{ code }}</h1>
+  <p>{{ message }}</p>
+  <p style="margin-top:1rem;"><a href="{{ url_for('index') }}">Go home</a></p>
+</div>
+{% endblock %}

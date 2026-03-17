@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Admin — {{ u.name }}{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <div class="admin-header">
+    <a href="{{ url_for('admin_users') }}" class="back-link">← All users</a>
+    <h1>
+      {{ u.name }}
+      {% if u.is_locked %}<span class="pill pill-locked">Locked</span>{% endif %}
+      {% if u.is_admin %}<span class="pill pill-admin">Admin</span>{% endif %}
+    </h1>
+    <p class="muted mono">{{ u.email }} · Created {{ u._data.get('created_at', 0) | format_ts }}</p>
+  </div>
+
+  <!-- ── Info ─────────────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Account info</h2>
+    <form method="post" action="{{ url_for('admin_user_info', uid=u.get_id()) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="name">Display name</label>
+        <input type="text" id="name" name="name" value="{{ u.name }}" required>
+      </div>
+      <div class="form-row">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ u.email }}" required>
+      </div>
+      <button type="submit">Save info</button>
+    </form>
+  </section>
+
+  <!-- ── Subscriptions ─────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Subscriptions</h2>
+    {% if channels %}
+    <form method="post" action="{{ url_for('admin_user_subscriptions', uid=u.get_id()) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="select-all-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="select-all"
+                 {% if channels|length == subscribed|length and channels %}checked{% endif %}>
+          <strong>All Channels</strong>
+        </label>
+      </div>
+      <div class="channel-list" id="channel-list">
+        {% for ch in channels %}
+          <label class="checkbox-label">
+            <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
+                   {% if ch.channel_id in subscribed %}checked{% endif %}
+                   class="channel-checkbox">
+            {{ ch.channel_name }}
+          </label>
+        {% endfor %}
+      </div>
+      <button type="submit">Save subscriptions</button>
+    </form>
+    {% else %}
+      <p class="muted">No channels configured.</p>
+    {% endif %}
+  </section>
+
+  <!-- ── RSS feed ──────────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>RSS feed URL</h2>
+    <div class="feed-url-row">
+      <input type="text" class="feed-url-input" id="feed-url" value="{{ feed_url }}" readonly>
+      <button type="button" onclick="copyFeedUrl()" class="btn-copy">Copy</button>
+    </div>
+    <form method="post" action="{{ url_for('admin_rotate_token', uid=u.get_id()) }}"
+          class="inline-form" onsubmit="return confirm('Rotate the feed token? The current RSS URL will stop working.')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-danger-sm">Rotate token</button>
+    </form>
+  </section>
+
+  <!-- ── Password ──────────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Set password</h2>
+    <form method="post" action="{{ url_for('admin_user_password', uid=u.get_id()) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="new_password">New password <span class="hint">(min 10 chars)</span></label>
+        <input type="password" id="new_password" name="new_password" minlength="10" required autocomplete="new-password">
+      </div>
+      <button type="submit">Set password</button>
+    </form>
+  </section>
+
+  <!-- ── Lock / Unlock ─────────────────────────────────────────── -->
+  {% set is_self = u.email == current_user.email %}
+  <section class="admin-section">
+    <h2>Lock account</h2>
+    <p class="muted">Locked accounts cannot log in.</p>
+    <form method="post" action="{{ url_for('admin_user_lock', uid=u.get_id()) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if u.is_locked %}
+        <button type="submit">Unlock account</button>
+      {% else %}
+        <button type="submit" class="btn-danger" {% if is_self %}disabled title="You cannot lock your own account"{% endif %}>
+          Lock account
+        </button>
+      {% endif %}
+    </form>
+  </section>
+
+  <!-- ── Delete ────────────────────────────────────────────────── -->
+  <section class="admin-section danger-zone">
+    <h2>Delete account</h2>
+    <p class="muted">Permanently removes the account and all generated feed files.
+      Type the user's email to confirm.</p>
+    <form method="post" action="{{ url_for('admin_user_delete', uid=u.get_id()) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="confirm_email">Type <strong>{{ u.email }}</strong> to confirm</label>
+        <input type="email" id="confirm_email" name="confirm_email" placeholder="{{ u.email }}"
+               {% if is_self %}disabled{% endif %}>
+      </div>
+      <button type="submit" class="btn-danger"
+              {% if is_self %}disabled title="You cannot delete your own account"{% endif %}>
+        Delete account
+      </button>
+    </form>
+  </section>
+</div>
+
+<script>
+  // Select-all toggle
+  const selectAll = document.getElementById('select-all');
+  const checkboxes = document.querySelectorAll('.channel-checkbox');
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+    });
+    checkboxes.forEach(cb => {
+      cb.addEventListener('change', () => {
+        const total = checkboxes.length, checked = [...checkboxes].filter(c => c.checked).length;
+        selectAll.checked = checked === total;
+        selectAll.indeterminate = checked > 0 && checked < total;
+      });
+    });
+    const total = checkboxes.length, checked = [...checkboxes].filter(c => c.checked).length;
+    if (checked > 0 && checked < total) selectAll.indeterminate = true;
+  }
+
+  function copyFeedUrl() {
+    const input = document.getElementById('feed-url');
+    navigator.clipboard.writeText(input.value).then(() => {
+      const btn = document.querySelector('.btn-copy');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    });
+  }
+</script>
+{% endblock %}
