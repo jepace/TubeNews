@@ -13,6 +13,7 @@ import os
 import sys
 import uuid
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 
 from flask import (
@@ -23,7 +24,6 @@ from flask import (
     render_template,
     request,
     send_file,
-    session,
     url_for,
 )
 from flask_limiter import Limiter
@@ -46,7 +46,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, rebuild_user_feed, slugify  # noqa: E402
+from TubeNews import STORAGE_ROOT, rebuild_user_feed  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -66,7 +66,6 @@ if not secret_key:
 app.config["SECRET_KEY"] = secret_key
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-# Set SECURE=True when running behind HTTPS in production.
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("TUBENEWS_HTTPS", "").lower() in ("1", "true", "yes")
 app.config["REMEMBER_COOKIE_DURATION"] = 60 * 60 * 24 * 30  # 30 days
 
@@ -94,9 +93,8 @@ class User(UserMixin):
         self._dir = user_dir
         self._data = data
 
-    # flask-login requires get_id() to return a string
     def get_id(self) -> str:
-        return self._dir.name  # the UUID directory name
+        return self._dir.name  # UUID directory name
 
     @property
     def email(self) -> str:
@@ -114,6 +112,23 @@ class User(UserMixin):
     def feed_token(self) -> str:
         return self._data["feed_token"]
 
+    @property
+    def is_locked(self) -> bool:
+        return bool(self._data.get("locked", False))
+
+    @property
+    def is_admin(self) -> bool:
+        try:
+            cfg = json.loads(CONFIG_FILE.read_text())
+            return self.email in [e.strip().lower() for e in cfg.get("admin_emails", [])]
+        except Exception:
+            return False
+
+    # flask-login: locked accounts are treated as inactive
+    @property
+    def is_active(self) -> bool:
+        return not self.is_locked
+
     def set_channel_ids(self, ids: list[str]) -> None:
         self._data["channel_ids"] = ids
         self._save()
@@ -123,7 +138,6 @@ class User(UserMixin):
 
 
 def _find_user_by_email(email: str) -> User | None:
-    """Scan archive/users/*/user.json for a matching email (case-insensitive)."""
     if not USERS_ROOT.is_dir():
         return None
     needle = email.strip().lower()
@@ -138,7 +152,6 @@ def _find_user_by_email(email: str) -> User | None:
 
 
 def _find_user_by_id(user_id: str) -> User | None:
-    """Load a user by their UUID directory name (used by flask-login)."""
     user_json = USERS_ROOT / user_id / "user.json"
     if not user_json.exists():
         return None
@@ -146,6 +159,18 @@ def _find_user_by_id(user_id: str) -> User | None:
         return User(user_json.parent, json.loads(user_json.read_text()))
     except Exception:
         return None
+
+
+def _all_users() -> list[User]:
+    if not USERS_ROOT.is_dir():
+        return []
+    users = []
+    for user_json in sorted(USERS_ROOT.glob("*/user.json")):
+        try:
+            users.append(User(user_json.parent, json.loads(user_json.read_text())))
+        except Exception:
+            continue
+    return sorted(users, key=lambda u: u._data.get("created_at", 0))
 
 
 @login_manager.user_loader
@@ -159,7 +184,6 @@ def load_user(user_id: str) -> User | None:
 
 
 def _load_channels() -> list[dict]:
-    """Return the list of feed configs from TubeNews.json."""
     try:
         return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
     except Exception:
@@ -180,8 +204,25 @@ def _feed_url(token: str) -> str:
     return url_for("serve_feed", token=token, _external=True)
 
 
+@app.template_filter("format_ts")
+def format_ts(ts: int) -> str:
+    if not ts:
+        return "—"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def admin_required(f):
+    """Decorator: 403 unless the logged-in user is an admin."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
 # ---------------------------------------------------------------------------
-# Routes
+# Public routes
 # ---------------------------------------------------------------------------
 
 
@@ -205,11 +246,13 @@ def login():
 
         user = _find_user_by_email(email)
         if user and check_password_hash(user._data["password_hash"], password):
-            login_user(user, remember=remember)
-            next_page = request.args.get("next")
-            return redirect(next_page or url_for("dashboard"))
-
-        flash("Invalid email or password.", "error")
+            if user.is_locked:
+                flash("This account has been locked. Contact an administrator.", "error")
+            else:
+                login_user(user, remember=remember)
+                return redirect(request.args.get("next") or url_for("dashboard"))
+        else:
+            flash("Invalid email or password.", "error")
 
     return render_template("login.html")
 
@@ -226,7 +269,6 @@ def register():
         confirm = request.form.get("confirm_password", "")
         name = request.form.get("name", "").strip() or email.split("@")[0]
 
-        # Basic validation
         if not email or "@" not in email or "." not in email.split("@")[-1]:
             flash("Please enter a valid email address.", "error")
         elif len(password) < 10:
@@ -248,8 +290,7 @@ def register():
                 "created_at": int(datetime.now(timezone.utc).timestamp()),
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
-            user = User(user_dir, data)
-            login_user(user)
+            login_user(User(user_dir, data))
             flash("Account created. Choose your channels below.", "success")
             return redirect(url_for("dashboard"))
 
@@ -263,10 +304,8 @@ def dashboard():
 
     if request.method == "POST":
         selected = set(request.form.getlist("channel_ids"))
-        # Only allow valid channel IDs from the config
         valid_ids = {ch["channel_id"] for ch in channels}
         current_user.set_channel_ids(sorted(selected & valid_ids))
-        # Rebuild the RSS feed immediately
         try:
             rebuild_user_feed(current_user._data, base_url=_base_url())
         except Exception as exc:
@@ -293,7 +332,7 @@ def logout():
 
 @app.route("/feed/<token>")
 def serve_feed(token: str):
-    """Serve a user's RSS feed by their secret feed token (no login required)."""
+    """Serve a user's RSS feed by secret token — no login required."""
     if not USERS_ROOT.is_dir():
         abort(404)
     for user_json in USERS_ROOT.glob("*/user.json"):
@@ -307,6 +346,164 @@ def serve_feed(token: str):
         except Exception:
             continue
     abort(404)
+
+
+# ---------------------------------------------------------------------------
+# Admin routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/admin")
+@login_required
+@admin_required
+def admin_users():
+    channels = _load_channels()
+    channel_names = {ch["channel_id"]: ch["channel_name"] for ch in channels}
+    return render_template("admin_users.html", users=_all_users(), channel_names=channel_names)
+
+
+@app.route("/admin/user/<uid>")
+@login_required
+@admin_required
+def admin_user(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    channels = _load_channels()
+    return render_template(
+        "admin_user.html",
+        u=user,
+        channels=channels,
+        subscribed=set(user.channel_ids),
+        feed_url=_feed_url(user.feed_token),
+    )
+
+
+@app.route("/admin/user/<uid>/info", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_info(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    new_name = request.form.get("name", "").strip()
+    new_email = request.form.get("email", "").strip().lower()
+    if not new_name or not new_email or "@" not in new_email:
+        flash("Name and a valid email are required.", "error")
+        return redirect(url_for("admin_user", uid=uid))
+    # Check email uniqueness (ignore if unchanged)
+    if new_email != user.email:
+        existing = _find_user_by_email(new_email)
+        if existing:
+            flash("That email is already in use by another account.", "error")
+            return redirect(url_for("admin_user", uid=uid))
+    user._data["name"] = new_name
+    user._data["email"] = new_email
+    user._save()
+    flash("User info updated.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/subscriptions", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_subscriptions(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    channels = _load_channels()
+    valid_ids = {ch["channel_id"] for ch in channels}
+    selected = set(request.form.getlist("channel_ids")) & valid_ids
+    user.set_channel_ids(sorted(selected))
+    try:
+        rebuild_user_feed(user._data, base_url=_base_url())
+    except Exception as exc:
+        flash(f"Saved, but feed rebuild failed: {exc}", "error")
+    else:
+        flash("Subscriptions updated.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/password", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_password(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    new_pw = request.form.get("new_password", "")
+    if len(new_pw) < 10:
+        flash("Password must be at least 10 characters.", "error")
+        return redirect(url_for("admin_user", uid=uid))
+    user._data["password_hash"] = generate_password_hash(new_pw)
+    user._save()
+    flash("Password updated.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/lock", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_lock(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    if user.email == current_user.email:
+        flash("You cannot lock your own account.", "error")
+        return redirect(url_for("admin_user", uid=uid))
+    user._data["locked"] = not user.is_locked
+    user._save()
+    flash(f"Account {'locked' if user._data['locked'] else 'unlocked'}.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/rotate-token", methods=["POST"])
+@login_required
+@admin_required
+def admin_rotate_token(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    user._data["feed_token"] = str(uuid.uuid4())
+    user._save()
+    flash("Feed token rotated. The old RSS URL is now invalid.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_delete(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    if user.email == current_user.email:
+        flash("You cannot delete your own account.", "error")
+        return redirect(url_for("admin_user", uid=uid))
+    confirm = request.form.get("confirm_email", "").strip().lower()
+    if confirm != user.email:
+        flash("Email confirmation did not match — account not deleted.", "error")
+        return redirect(url_for("admin_user", uid=uid))
+    for f in user._dir.iterdir():
+        f.unlink()
+    user._dir.rmdir()
+    flash(f"Account for {user.email} deleted.", "success")
+    return redirect(url_for("admin_users"))
+
+
+# ---------------------------------------------------------------------------
+# Error handlers
+# ---------------------------------------------------------------------------
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    return render_template("error.html", code=403, message="You don't have permission to access this page."), 403
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return render_template("error.html", code=404, message="Page not found."), 404
 
 
 # ---------------------------------------------------------------------------

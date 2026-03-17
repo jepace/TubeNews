@@ -244,3 +244,128 @@ button[type="submit"]:hover,
 .channel-row { padding: 0.1rem 0; }
 
 .muted { color: var(--muted); font-size: 0.9rem; }
+.mono  { font-family: monospace; font-size: 0.875rem; }
+
+/* ── Admin ───────────────────────────────────────────────────── */
+
+.admin h1 { font-size: 1.4rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem; }
+
+.admin-header { margin-bottom: 1.5rem; }
+.admin-header h1 { margin-bottom: 0.25rem; }
+.back-link { font-size: 0.875rem; color: var(--accent); text-decoration: none; display: inline-block; margin-bottom: 0.5rem; }
+.back-link:hover { text-decoration: underline; }
+
+.admin-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.admin-section h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.admin-section form { gap: 0.75rem; }
+
+.form-row { display: flex; flex-direction: column; gap: 0.3rem; }
+
+.inline-form { display: inline; }
+
+.danger-zone { border-color: #fca5a5; background: #fff8f8; }
+
+/* Badges / pills */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  min-width: 1.5rem;
+  height: 1.5rem;
+}
+
+.pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  text-transform: uppercase;
+}
+.pill-active { background: #d1fae5; color: #065f46; }
+.pill-locked { background: #fee2e2; color: #991b1b; }
+.pill-admin  { background: #dbeafe; color: #1e40af; }
+
+/* User table */
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.user-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.user-table td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.user-table tbody tr:hover { background: #f9fafb; }
+.row-locked td { opacity: 0.6; }
+
+/* Small buttons */
+.btn-sm {
+  display: inline-block;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-sm:hover { background: var(--accent-hover); }
+
+.btn-danger {
+  padding: 0.6rem 1.25rem;
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-danger:hover { background: #b91c1c; }
+.btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-danger-sm {
+  padding: 0.35rem 0.75rem;
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+.btn-danger-sm:hover { background: #fee2e2; }

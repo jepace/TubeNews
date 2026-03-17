@@ -11,6 +11,9 @@
     <a class="site-title" href="{{ url_for('index') }}">TubeNews</a>
     <nav>
       {% if current_user.is_authenticated %}
+        {% if current_user.is_admin %}
+          <a href="{{ url_for('admin_users') }}">Admin</a>
+        {% endif %}
         <span class="nav-user">{{ current_user.name }}</span>
         <a href="{{ url_for('logout') }}">Log out</a>
       {% else %}
