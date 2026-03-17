@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import socket
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -703,18 +704,22 @@ def process_feed(
     feed: dict,
     supadata_client: Supadata,
     config: dict,
+    ai_rate_limit_event: threading.Event | None = None,
 ) -> tuple[bool, bool]:
     """Process all new videos for one configured channel.
 
     Discovers videos from YouTube, skips ones already archived, and calls
     :func:`process_video` for each new one.
 
+    *ai_rate_limit_event* is an optional shared :class:`threading.Event`.
+    When set (by any channel hitting a 429), all channels skip further AI
+    calls for the remainder of the run.  Pass ``None`` for single-channel use.
+
     Returns:
         A ``(content_changed, ai_rate_limited)`` tuple.
         *content_changed* is True if any new stories were written (i.e., the
         RSS feed needs to be rebuilt).
-        *ai_rate_limited* is True if Gemini hit its quota so the caller can
-        disable AI for subsequent feeds in the same run.
+        *ai_rate_limited* is True if Gemini hit its quota during this feed.
     """
     channel_slug = slugify(feed["channel_name"])
     logger.info(f"[*] Feed: {feed['channel_name']}")
@@ -772,6 +777,9 @@ def process_feed(
             continue
 
         video_num = videos_to_process.index(video_info) + 1
+        ai_disabled = ai_rate_limited or (
+            ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
+        )
         result = process_video(
             video_id=video_info["id"],
             video_title=video_info["title"],
@@ -781,7 +789,7 @@ def process_feed(
             feed_dir=feed_dir,
             supadata_client=supadata_client,
             config=config,
-            ai_disabled=ai_rate_limited,
+            ai_disabled=ai_disabled,
             video_num=video_num,
             total_videos=total,
         )
@@ -790,6 +798,8 @@ def process_feed(
             content_changed = True
         elif result == "ai_rate_limited":
             ai_rate_limited = True
+            if ai_rate_limit_event is not None:
+                ai_rate_limit_event.set()
 
     return content_changed, ai_rate_limited
 
@@ -813,19 +823,21 @@ def main() -> None:
     supadata_client = Supadata(api_key=config["supadata_api_key"])
     logger.info(f"Session Start | AI Model: {config.get('gemini_model')}")
 
-    any_content_changed = False
-    ai_disabled = False
+    ai_rate_limit_event = threading.Event()
+    any_content_changed = threading.Event()
 
-    for feed in config["feeds"]:
-        content_changed, rate_limited = process_feed(feed, supadata_client, config)
-        if rate_limited:
-            ai_disabled = True
+    def _run_feed(feed: dict) -> None:
+        content_changed, _ = process_feed(
+            feed, supadata_client, config, ai_rate_limit_event
+        )
         if content_changed:
             rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
-            rebuild_meta_feed(base_url=config.get("base_url", ""))
-            any_content_changed = True
+            any_content_changed.set()
 
-    if not any_content_changed and not (STORAGE_ROOT / "rss.xml").exists():
+    with ThreadPoolExecutor(max_workers=len(config["feeds"])) as executor:
+        list(executor.map(_run_feed, config["feeds"]))
+
+    if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
         rebuild_meta_feed(base_url=config.get("base_url", ""))
 
     logger.info("Session End.")
