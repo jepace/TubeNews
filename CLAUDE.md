@@ -112,6 +112,8 @@ YouTube Channel Pages (HTML scrape)
 |---|---|
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
 | `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
+| `rebuild_user_feed(user, base_url)` | Generates `archive/users/<slug>/rss.xml` filtered to a user's subscribed channels |
+| `rebuild_user_blog(user, base_url)` | Generates `archive/users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
 
 ### Processing orchestration
 

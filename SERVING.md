@@ -96,14 +96,19 @@ already has videos, or TubeNews will process the entire backlog on the first run
 
 ---
 
-## User Feeds
+## User Pages
 
-Personal per-user feeds are generated automatically when TubeNews runs, provided users
-have been created with `helpers/manage_users.py`.
+Personal per-user blog pages and RSS feeds are generated automatically when TubeNews
+runs, provided users have been created with `helpers/manage_users.py`.
 
 ```
-archive/users/<user_slug>/rss.xml
+archive/users/<user_slug>/index.html   ← shareable blog page
+archive/users/<user_slug>/rss.xml      ← RSS feed (for feed readers)
 ```
 
-Share the URL `https://feeds.example.com/users/<user_slug>/rss.xml` with each user so
-they can subscribe to only the channels they care about.
+Share `https://feeds.example.com/users/<user_slug>/` with each user — they get a
+readable blog page showing stories from only the channels they care about. The page
+links back to the exact YouTube timestamp for each story.
+
+If `base_url` is set in `TubeNews.json`, the blog page includes a `<link>` tag so
+browsers and feed readers can auto-discover the RSS feed from the page URL.

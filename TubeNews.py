@@ -691,6 +691,122 @@ def rebuild_user_feed(user: dict, base_url: str = "") -> None:
     feed.rss_file(user_dir / "rss.xml", pretty=True)
 
 
+def rebuild_user_blog(user: dict, base_url: str = "") -> None:
+    """Generate ``archive/users/<slug>/index.html`` — a static blog page for a user.
+
+    Pulls stories from the user's subscribed channels (same logic as
+    :func:`rebuild_user_feed`) and renders them as a self-contained HTML page
+    sorted newest-first.
+
+    Args:
+        user:     User config dict from ``archive/users/<slug>/user.json``.
+        base_url: Public URL root; used to build a self-link in the page header.
+    """
+    name = user["name"]
+    subscribed = set(user.get("channel_ids", []))
+    user_dir = STORAGE_ROOT / "users" / slugify(name)
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"TubeNews: Rebuilding blog for {name}")
+
+    all_stories: list[dict] = []
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            channel_info = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        if channel_info.get("channel_id") not in subscribed:
+            continue
+        channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+        for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            metadata_path = meeting_dir / "metadata.json"
+            if not metadata_path.exists():
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                if metadata.get("status") == "ignored_too_old":
+                    continue
+                for story_file in meeting_dir.glob("[0-9]*.md"):
+                    all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name})
+            except Exception:
+                continue
+
+    all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
+
+    CSS = """
+        body { font-family: Georgia, serif; max-width: 740px; margin: 40px auto;
+               padding: 0 20px; color: #222; background: #fafaf8; }
+        h1 { font-size: 1.6em; border-bottom: 2px solid #333; padding-bottom: 8px; }
+        .meta { font-size: 0.85em; color: #666; margin-bottom: 28px; }
+        article { border-bottom: 1px solid #ddd; padding: 24px 0; }
+        article:last-child { border-bottom: none; }
+        h2 { font-size: 1.25em; margin: 0 0 4px 0; }
+        .dateline { font-style: italic; color: #555; font-size: 0.9em; margin: 0 0 8px 0; }
+        .source { font-size: 0.82em; color: #777; margin-bottom: 10px; }
+        .source a { color: #555; }
+        .body p { margin: 6px 0; line-height: 1.65; }
+        .watch { display: inline-block; margin-top: 10px; font-size: 0.85em;
+                 color: #c00; text-decoration: none; }
+        .watch:hover { text-decoration: underline; }
+    """
+
+    story_blocks = []
+    for entry in all_stories:
+        try:
+            story = parse_story_file(entry["file"])
+        except Exception:
+            continue
+        yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
+        video_title = entry["meta"].get("video_title", "")
+        # Convert body_html (br-separated) to proper paragraphs
+        paras = "".join(
+            f"<p>{p.strip()}</p>"
+            for p in story["body_html"].split("<br>")
+            if p.strip()
+        )
+        story_blocks.append(
+            f"<article>\n"
+            f"  <h2>{story['title']}</h2>\n"
+            f"  <p class='dateline'>{story['dateline']}</p>\n"
+            f"  <p class='source'>{entry['channel_name']}"
+            + (f" &mdash; <em>{video_title}</em>" if video_title else "")
+            + f"</p>\n"
+            f"  <div class='body'>{paras}</div>\n"
+            f"  <a class='watch' href='{yt_url}'>&#9654; Watch source video</a>\n"
+            f"</article>"
+        )
+
+    page_title = f"TubeNews — {name}"
+    meta_line = f"{len(all_stories)} stories from {len(subscribed)} channel{'s' if len(subscribed) != 1 else ''}"
+    if base_url:
+        rss_href = f"{base_url}/users/{slugify(name)}/rss.xml"
+        rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_href}">'
+    else:
+        rss_link = ""
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{page_title}</title>
+{rss_link}
+<style>{CSS}</style>
+</head>
+<body>
+<h1>{page_title}</h1>
+<p class="meta">{meta_line}</p>
+{"".join(story_blocks) if story_blocks else "<p>No stories yet.</p>"}
+</body>
+</html>
+"""
+
+    (user_dir / "index.html").write_text(html, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Per-video / per-feed processing
 # ---------------------------------------------------------------------------
@@ -981,6 +1097,7 @@ def main() -> None:
         for user_json in sorted(users_dir.glob("*/user.json")):
             user = json.loads(user_json.read_text())
             rebuild_user_feed(user, base_url=config.get("base_url", ""))
+            rebuild_user_blog(user, base_url=config.get("base_url", ""))
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
