@@ -268,13 +268,17 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
 
     def _fetch_tab(tab: str) -> tuple[str, str | None]:
         url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
-        logger.debug(f"{prefix}YouTube: Fetching {tab} tab")
-        try:
-            response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
-            if response.status_code == 200:
-                return tab, response.text
-        except Exception as exc:
-            logger.debug(f"{prefix}YouTube: {tab} tab fetch failed: {exc}")
+        for attempt in range(3):
+            logger.debug(f"{prefix}YouTube: Fetching {tab} tab" + (f" (retry {attempt})" if attempt else ""))
+            try:
+                response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=15)
+                if response.status_code == 200:
+                    return tab, response.text
+            except Exception as exc:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                else:
+                    logger.warning(f"{prefix}YouTube: {tab} tab failed after 3 attempts: {exc}")
         return tab, None
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -851,7 +855,8 @@ def main() -> None:
             rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
             any_content_changed.set()
 
-    with ThreadPoolExecutor(max_workers=len(config["feeds"])) as executor:
+    max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(_run_feed, config["feeds"]))
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
