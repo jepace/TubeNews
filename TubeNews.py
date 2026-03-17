@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """TubeNews — monitor YouTube channels for new videos and generate news feeds.
 
 Workflow for each configured channel (feed):
