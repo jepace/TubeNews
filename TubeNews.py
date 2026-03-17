@@ -511,10 +511,13 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
                 href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
             )
             yt_url = f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
+            video_title = metadata.get("video_title", "")
             feed_entry.content(
-                f"<strong>{story['dateline']}</strong><br>"
-                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a>"
-                f"<br><br>{story['body_html']}",
+                f"<h2>{story['title']}</h2>"
+                f"<p><strong>{story['dateline']}</strong></p>"
+                f"<p><em>{video_title}</em> &mdash; "
+                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
+                f"<br>{story['body_html']}",
                 type="html",
             )
             feed_entry.published(
@@ -580,11 +583,13 @@ def rebuild_meta_feed(base_url: str = "") -> None:
                 href=f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
             )
             yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
+            video_title = entry["meta"].get("video_title", "")
             feed_entry.content(
-                f"<strong>{story['dateline']}</strong>"
-                f"<br><em>Source: {entry['channel_name']}</em>"
-                f"<br>&#9654; <a href=\"{yt_url}\">{yt_url}</a>"
-                f"<br><br>{story['body_html']}",
+                f"<h2>{story['title']}</h2>"
+                f"<p><strong>{story['dateline']}</strong></p>"
+                f"<p><em>{entry['channel_name']}: {video_title}</em> &mdash; "
+                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
+                f"<br>{story['body_html']}",
                 type="html",
             )
             feed_entry.published(
@@ -660,11 +665,13 @@ def rebuild_user_feed(user: dict, base_url: str = "") -> None:
                 href=f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
             )
             yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
+            video_title = entry["meta"].get("video_title", "")
             feed_entry.content(
-                f"<strong>{story['dateline']}</strong>"
-                f"<br><em>Source: {entry['channel_name']}</em>"
-                f"<br>&#9654; <a href=\"{yt_url}\">{yt_url}</a>"
-                f"<br><br>{story['body_html']}",
+                f"<h2>{story['title']}</h2>"
+                f"<p><strong>{story['dateline']}</strong></p>"
+                f"<p><em>{entry['channel_name']}: {video_title}</em> &mdash; "
+                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
+                f"<br>{story['body_html']}",
                 type="html",
             )
             feed_entry.published(
@@ -766,7 +773,7 @@ def process_video(
     if ai_disabled:
         return "skipped"
 
-    logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories via {config['gemini_model']}")
+    logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories")
     stories = call_gemini_api(
         transcript_text=transcript_text,
         focus=feed["focus"],
@@ -778,7 +785,7 @@ def process_video(
     )
 
     if stories is False:
-        return "ai_rate_limited"
+        return "ai_rate_limited", 0
 
     if stories:
         write_story_files(stories, meeting_dir, video_id)
@@ -789,7 +796,7 @@ def process_video(
             "processed_at": time.time(),
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-        return "content_written"
+        return "content_written", len(stories)
 
     # Gemini returned an empty story list — write metadata so this video is
     # not re-submitted to the AI on future runs.
@@ -800,7 +807,7 @@ def process_video(
         "processed_at": time.time(),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-    return "skipped"
+    return "skipped", 0
 
 
 def process_feed(
@@ -834,6 +841,7 @@ def process_feed(
     content_changed = not (feed_dir / "rss.xml").exists()
     is_new_feed = not feed_dir.exists()
     ai_rate_limited = False
+    stories_written = 0
 
     feed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -884,7 +892,7 @@ def process_feed(
         ai_disabled = ai_rate_limited or (
             ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
         )
-        result = process_video(
+        result, n = process_video(
             video_id=video_info["id"],
             video_title=video_info["title"],
             video_date=video_info["date"],
@@ -900,12 +908,13 @@ def process_feed(
 
         if result == "content_written":
             content_changed = True
+            stories_written += n
         elif result == "ai_rate_limited":
             ai_rate_limited = True
             if ai_rate_limit_event is not None:
                 ai_rate_limit_event.set()
 
-    return content_changed, ai_rate_limited
+    return content_changed, ai_rate_limited, stories_written
 
 
 # ---------------------------------------------------------------------------
@@ -930,17 +939,18 @@ def main() -> None:
     ai_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()
 
-    def _run_feed(feed: dict) -> None:
-        content_changed, _ = process_feed(
+    def _run_feed(feed: dict) -> int:
+        content_changed, _, stories_written = process_feed(
             feed, supadata_client, config, ai_rate_limit_event
         )
         if content_changed:
             rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
             any_content_changed.set()
+        return stories_written
 
     max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(executor.map(_run_feed, config["feeds"]))
+        total_stories = sum(executor.map(_run_feed, config["feeds"]))
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
         rebuild_meta_feed(base_url=config.get("base_url", ""))
@@ -951,7 +961,8 @@ def main() -> None:
             user = json.loads(user_json.read_text())
             rebuild_user_feed(user, base_url=config.get("base_url", ""))
 
-    logger.info("Session End.")
+    story_word = "story" if total_stories == 1 else "stories"
+    logger.info(f"Session End. {total_stories} new {story_word} published.")
 
 
 if __name__ == "__main__":
