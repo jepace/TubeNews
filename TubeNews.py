@@ -522,6 +522,9 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
             )
 
     feed.rss_file(feed_dir / "rss.xml", pretty=True)
+    (feed_dir / "channel.json").write_text(
+        json.dumps({"channel_id": feed_cfg["channel_id"], "channel_name": feed_cfg["channel_name"]})
+    )
 
 
 def rebuild_meta_feed(base_url: str = "") -> None:
@@ -593,6 +596,86 @@ def rebuild_meta_feed(base_url: str = "") -> None:
             continue
 
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
+
+
+def rebuild_user_feed(user: dict, base_url: str = "") -> None:
+    """Generate ``archive/users/<slug>/rss.xml`` filtered to a user's subscribed channels.
+
+    Reads ``channel.json`` from each channel directory (written by :func:`rebuild_feed`)
+    to determine which archive folders correspond to the user's ``channel_ids``.  Stories
+    are sorted newest-first, matching :func:`rebuild_meta_feed` behaviour.
+
+    Args:
+        user:     User config dict from ``archive/users/<slug>/user.json``.
+                  Must contain ``name`` (str) and ``channel_ids`` (list[str]).
+        base_url: Public URL root; currently unused but reserved for future self-links.
+    """
+    name = user["name"]
+    subscribed = set(user.get("channel_ids", []))
+    user_dir = STORAGE_ROOT / "users" / slugify(name)
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"TubeNews: Rebuilding user feed for {name}")
+
+    feed = FeedGenerator()
+    feed.id(f"tubenews_user_{slugify(name)}")
+    feed.title(f"TubeNews: {name}")
+    feed.description("Personalized TubeNews feed.")
+    feed.link(href=base_url if base_url else "https://www.youtube.com", rel="alternate")
+
+    all_stories: list[dict] = []
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            channel_info = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        if channel_info.get("channel_id") not in subscribed:
+            continue
+        channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+        for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            metadata_path = meeting_dir / "metadata.json"
+            if not metadata_path.exists():
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                if metadata.get("status") == "ignored_too_old":
+                    continue
+                for story_file in meeting_dir.glob("[0-9]*.md"):
+                    all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name})
+            except Exception:
+                continue
+
+    all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
+
+    for entry in all_stories:
+        try:
+            story = parse_story_file(entry["file"])
+            feed_entry = feed.add_entry()
+            feed_entry.id(story["content_hash"])
+            feed_entry.title(f"[{entry['channel_name']}] {story['title']}")
+            feed_entry.link(
+                href=f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
+            )
+            yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
+            feed_entry.content(
+                f"<strong>{story['dateline']}</strong>"
+                f"<br><em>Source: {entry['channel_name']}</em>"
+                f"<br>&#9654; <a href=\"{yt_url}\">{yt_url}</a>"
+                f"<br><br>{story['body_html']}",
+                type="html",
+            )
+            feed_entry.published(
+                datetime.fromtimestamp(
+                    entry["meta"].get("processed_at", time.time())
+                ).astimezone()
+            )
+        except Exception:
+            continue
+
+    feed.rss_file(user_dir / "rss.xml", pretty=True)
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +944,12 @@ def main() -> None:
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
         rebuild_meta_feed(base_url=config.get("base_url", ""))
+
+    users_dir = STORAGE_ROOT / "users"
+    if users_dir.is_dir():
+        for user_json in sorted(users_dir.glob("*/user.json")):
+            user = json.loads(user_json.read_text())
+            rebuild_user_feed(user, base_url=config.get("base_url", ""))
 
     logger.info("Session End.")
 
