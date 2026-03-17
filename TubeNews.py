@@ -1,4 +1,4 @@
-"""TubeNews — monitor YouTube channels for government meeting videos.
+"""TubeNews — monitor YouTube channels for new videos and generate news feeds.
 
 Workflow for each configured channel (feed):
   1. Discover recent video IDs by scraping YouTube channel pages.
@@ -248,7 +248,7 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
     return result
 
 
-def discover_videos(channel_id: str) -> list[dict]:
+def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
     """Scrape a channel's *videos* and *streams* tabs; return video metadata.
 
     Both tabs are fetched concurrently.  Results are merged in a fixed order
@@ -264,16 +264,17 @@ def discover_videos(channel_id: str) -> list[dict]:
         {"id": str, "title": str, "date": "YYYY-MM-DD", "is_live": bool}
     """
     tabs = ["videos", "streams"]
+    prefix = f"{feed_name}: " if feed_name else ""
 
     def _fetch_tab(tab: str) -> tuple[str, str | None]:
         url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
-        logger.debug(f"Discovery: fetching YouTube tab '{tab}'…")
+        logger.debug(f"{prefix}YouTube: Fetching {tab} tab")
         try:
             response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=10)
             if response.status_code == 200:
                 return tab, response.text
         except Exception as exc:
-            logger.debug(f"Discovery: tab '{tab}' failed: {exc}")
+            logger.debug(f"{prefix}YouTube: {tab} tab fetch failed: {exc}")
         return tab, None
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -290,7 +291,7 @@ def discover_videos(channel_id: str) -> list[dict]:
         found = re.findall(r'"videoId":"([^"]{11})"', html)
         if not found:
             logger.warning(
-                f"Discovery: got 200 from '{tab}' tab but found 0 "
+                f"{prefix}YouTube: Got 200 from {tab} tab but found 0 "
                 "video IDs — YouTube HTML structure may have changed."
             )
         all_ids.extend(found)
@@ -310,7 +311,12 @@ def discover_videos(channel_id: str) -> list[dict]:
 
 
 
-def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
+def fetch_transcript(
+    video_id: str,
+    supadata_client: Supadata,
+    feed_name: str = "",
+    video_title: str = "",
+) -> str | None:
     """Fetch timed transcript segments from the Supadata API.
 
     Each segment is formatted as ``"<offset_seconds>s --> <text>"`` so Gemini
@@ -318,6 +324,9 @@ def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
 
     Returns the formatted transcript string, or None if the API call fails.
     """
+    prefix = ": ".join(p for p in [feed_name, video_title] if p)
+    prefix = f"{prefix}: " if prefix else ""
+
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
         transcript_response = supadata_client.transcript(url=url, text=False)
@@ -327,13 +336,13 @@ def fetch_transcript(video_id: str, supadata_client: Supadata) -> str | None:
                 f"{int(getattr(seg, 'offset', 0) / 1000)}s --> {getattr(seg, 'text', '')}"
                 for seg in segments
             ]
-            logger.debug(f"Supadata: received {len(segments)} segments.")
+            logger.debug(f"{prefix}Supadata: Received {len(segments)} segments")
             return "\n".join(lines)
     except Exception as exc:
         if "live streaming" in str(exc).lower():
-            logger.warning(f"Video is currently live — transcript unavailable. Will retry next run.")
+            logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry next run")
         else:
-            logger.error(f"Supadata call failed: {exc}")
+            logger.error(f"{prefix}Supadata: Call failed: {exc}")
 
     return None
 
@@ -350,6 +359,7 @@ def call_gemini_api(
     video_date: str,
     gemini_api_key: str,
     model_name: str,
+    feed_name: str = "",
 ) -> list | bool | None:
     """Send a transcript to Google Gemini and parse the returned news stories.
 
@@ -369,9 +379,8 @@ def call_gemini_api(
     )
 
     directive = (
-        f"You are a highly experienced investigative reporter specializing in "
-        f"local government. Analyze this transcript of '{video_title}' held on "
-        f"{video_date}.\n\n"
+        f"You are a highly experienced investigative reporter. "
+        f"Analyze this transcript of '{video_title}' recorded on {video_date}.\n\n"
         f"OBJECTIVE: Identify and extract distinct news stories strictly "
         f"relevant to this FOCUS: '{focus}'.\n\n"
         "WRITING GUIDELINES:\n"
@@ -390,22 +399,25 @@ def call_gemini_api(
         ]
     }
 
+    prefix = ": ".join(p for p in [feed_name, video_title] if p)
+    prefix = f"{prefix}: " if prefix else ""
+
     try:
         response = requests.post(api_url, json=payload, timeout=150)
         if response.status_code == 200:
             raw_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
             if not json_match:
-                logger.debug("Gemini: no JSON list found in response — 0 stories.")
+                logger.debug(f"{prefix}Gemini: No JSON in response — 0 stories")
                 return []
             stories = json.loads(json_match.group(0))
-            logger.debug(f"Gemini: generated {len(stories)} stories.")
+            logger.debug(f"{prefix}Gemini: Generated {len(stories)} stories")
             return stories
         elif response.status_code == 429:
-            logger.warning("Gemini rate limit hit — AI disabled for this run.")
+            logger.warning(f"{prefix}Gemini: Rate limit hit — AI disabled for this run")
             return False
     except Exception as exc:
-        logger.error(f"AI call failed: {exc}")
+        logger.error(f"{prefix}Gemini: API call failed: {exc}")
 
     return None
 
@@ -464,7 +476,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
                    ``channel_name``, ``channel_id``, and ``focus``).
     """
     safe_name = slugify(feed_cfg["channel_name"])
-    logger.info(f"--> Step 4: Rebuilding RSS for {safe_name}")
+    logger.info(f"{feed_cfg['channel_name']}: TubeNews: Rebuilding RSS feed")
 
     feed = FeedGenerator()
     feed.id(f"tubenews_{safe_name}")
@@ -490,7 +502,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
             story = parse_story_file(story_file)
             feed_entry = feed.add_entry()
             feed_entry.id(story["content_hash"])
-            feed_entry.title(f"{story['title']} | {metadata.get('video_title', 'Meeting')}")
+            feed_entry.title(f"{story['title']} | {metadata.get('video_title', 'Video')}")
             feed_entry.link(
                 href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
             )
@@ -519,7 +531,7 @@ def rebuild_meta_feed(base_url: str = "") -> None:
         base_url: Public URL of this feed (used as the RSS ``<self>`` link).
                   Omit or pass an empty string to leave the self-link out.
     """
-    logger.info("--> Step 5: Rebuilding Meta-Feed (archive/rss.xml)…")
+    logger.info("TubeNews: Rebuilding meta-feed (archive/rss.xml)")
 
     feed = FeedGenerator()
     feed.id("tubenews_meta_rss")
@@ -636,23 +648,26 @@ def process_video(
         None,
     )
 
+    channel_name = feed["channel_name"]
+
     # --- Load or fetch transcript ---
     if existing_dir and (existing_dir / "transcript.txt").exists():
         # Re-use cached transcript; only the AI step needs to re-run.
-        logger.info(f"[✓] Found local transcript for {video_id}. Re-running AI only.")
+        logger.info(f"{channel_name}: {video_title}: TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
     else:
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
-        logger.info(f"[+] Processing new video{counter}: {video_id}")
-
-        logger.info(f"    Video: {video_title} ({video_id})")
+        logger.info(f"{channel_name}: {video_title}: TubeNews: Processing new video{counter}")
         if is_live:
-            logger.info("    Upcoming/live stream — skipping for now, will retry next run.")
+            logger.info(f"{channel_name}: {video_title}: TubeNews: Live stream — skipping, will retry next run")
             return "skipped"
-        logger.debug(f"Supadata: requesting transcript for {video_title} ({video_id})…")
-        transcript_text = fetch_transcript(video_id, supadata_client)
+        logger.debug(f"{channel_name}: {video_title}: Supadata: Requesting transcript")
+        transcript_text = fetch_transcript(
+            video_id, supadata_client,
+            feed_name=channel_name, video_title=video_title,
+        )
         if not transcript_text:
             return "skipped"
 
@@ -664,7 +679,7 @@ def process_video(
     if ai_disabled:
         return "skipped"
 
-    logger.info(f"--> Step 3: AI Analysis of {video_title} ({video_id}) via {config['gemini_model']}…")
+    logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories via {config['gemini_model']}")
     stories = call_gemini_api(
         transcript_text=transcript_text,
         focus=feed["focus"],
@@ -672,6 +687,7 @@ def process_video(
         video_date=video_date,
         gemini_api_key=config["gemini_api_key"],
         model_name=config["gemini_model"],
+        feed_name=channel_name,
     )
 
     if stories is False:
@@ -722,7 +738,8 @@ def process_feed(
         *ai_rate_limited* is True if Gemini hit its quota during this feed.
     """
     channel_slug = slugify(feed["channel_name"])
-    logger.info(f"[*] Feed: {feed['channel_name']}")
+    channel_name = feed["channel_name"]
+    logger.info(f"{channel_name}: TubeNews: Starting feed check")
     feed_dir = STORAGE_ROOT / channel_slug
 
     # If the RSS file doesn't exist yet, treat content as changed so we always
@@ -733,7 +750,7 @@ def process_feed(
 
     feed_dir.mkdir(parents=True, exist_ok=True)
 
-    all_videos = discover_videos(feed["channel_id"])
+    all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
     if not all_videos:
         return content_changed, ai_rate_limited
 
@@ -751,14 +768,14 @@ def process_feed(
     ]
 
     if unprocessed:
-        logger.info(f"--> Step 1: Found {len(unprocessed)} videos to check.")
+        logger.info(f"{channel_name}: TubeNews: Found {len(unprocessed)} new video(s)")
     else:
-        logger.info("--> Step 1: No new videos discovered.")
+        logger.info(f"{channel_name}: TubeNews: No new videos")
 
     if is_new_feed:
         backlog_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
         if backlog_count:
-            logger.info(f"      New feed discovered. Marking {backlog_count} older videos as watched.")
+            logger.info(f"{channel_name}: TubeNews: New feed — marking {backlog_count} backlog video(s) as watched")
 
     # Videos that will actually be processed (not back-catalogued).
     videos_to_process = [
@@ -811,7 +828,7 @@ def process_feed(
 
 def main() -> None:
     """Load config, process each feed, and rebuild RSS outputs."""
-    parser = argparse.ArgumentParser(description="TubeNews — YouTube meeting monitor")
+    parser = argparse.ArgumentParser(description="TubeNews — YouTube channel monitor")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug output")
     args = parser.parse_args()
 
