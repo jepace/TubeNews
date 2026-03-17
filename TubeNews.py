@@ -28,7 +28,7 @@ import re
 import socket
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -754,8 +754,6 @@ def process_video(
         # Re-use cached transcript; only the AI step needs to re-run.
         logger.info(f"{channel_name}: {video_title}: TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
-        first_line = transcript_text.splitlines()[0] if transcript_text else ""
-        logger.debug(f"{channel_name}: {video_title}: TubeNews: Cached transcript ({len(transcript_text)} chars) — first line: {first_line[:120]}")
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
     else:
@@ -771,9 +769,6 @@ def process_video(
         )
         if not transcript_text:
             return "skipped", 0
-
-        first_line = transcript_text.splitlines()[0] if transcript_text else ""
-        logger.debug(f"{channel_name}: {video_title}: Supadata: Transcript received ({len(transcript_text)} chars) — first line: {first_line[:120]}")
 
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
         meeting_dir.mkdir(exist_ok=True)
@@ -877,15 +872,27 @@ def process_feed(
     else:
         logger.info(f"{channel_name}: TubeNews: No new videos")
 
+    # Hold same-day videos — YouTube's auto-caption pipeline needs time to
+    # finish, and transcript proxies can return garbage for very fresh videos.
+    today_str = date.today().isoformat()
+    fresh = [
+        v for v in unprocessed
+        if v["date"] == today_str and not (is_new_feed and all_ids.index(v["id"]) > 0)
+    ]
+    if fresh:
+        noun = "video" if len(fresh) == 1 else "videos"
+        logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
+
     if is_new_feed:
         backlog_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
         if backlog_count:
             logger.info(f"{channel_name}: TubeNews: New feed — marking {backlog_count} backlog video(s) as watched")
 
-    # Videos that will actually be processed (not back-catalogued).
+    # Videos that will actually be processed (not back-catalogued, not too fresh).
     videos_to_process = [
         v for v in unprocessed
         if not (is_new_feed and all_ids.index(v["id"]) > 0)
+        and v["date"] != today_str
     ]
     total = len(videos_to_process)
 
@@ -897,6 +904,9 @@ def process_feed(
             mark_video_as_backlog(feed_dir, video_info["id"])
             content_changed = True
             continue
+
+        if video_info["date"] == today_str:
+            continue  # held until tomorrow's run
 
         video_num = videos_to_process.index(video_info) + 1
         ai_disabled = ai_rate_limited or (
