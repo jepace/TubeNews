@@ -749,6 +749,8 @@ def process_video(
         # Re-use cached transcript; only the AI step needs to re-run.
         logger.info(f"{channel_name}: {video_title}: TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
+        first_line = transcript_text.splitlines()[0] if transcript_text else ""
+        logger.debug(f"{channel_name}: {video_title}: TubeNews: Cached transcript ({len(transcript_text)} chars) — first line: {first_line[:120]}")
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
     else:
@@ -763,7 +765,10 @@ def process_video(
             feed_name=channel_name, video_title=video_title,
         )
         if not transcript_text:
-            return "skipped"
+            return "skipped", 0
+
+        first_line = transcript_text.splitlines()[0] if transcript_text else ""
+        logger.debug(f"{channel_name}: {video_title}: Supadata: Transcript received ({len(transcript_text)} chars) — first line: {first_line[:120]}")
 
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
         meeting_dir.mkdir(exist_ok=True)
