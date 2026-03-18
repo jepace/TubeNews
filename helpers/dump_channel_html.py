@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Dump the raw ytInitialData JSON from a channel's /videos page.
 
 Run this on a machine that can reach YouTube:

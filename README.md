@@ -73,6 +73,7 @@ archive/
 
 ## Documentation
 
+- `SERVING.md` — how to serve feeds over HTTP, configure nginx/Apache, and set up cron
 - `CLAUDE.md` — full architecture guide for developers and AI assistants
 - `TODO.md` — known issues and maintainability backlog
 - `helpers/` — utility scripts for setup, debugging, and migration

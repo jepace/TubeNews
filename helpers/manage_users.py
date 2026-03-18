@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """manage_users.py — Interactively create and edit TubeNews user feeds.
 
 Each user's config is stored in archive/users/<slug>/user.json.

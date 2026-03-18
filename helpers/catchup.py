@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, json, requests, re, argparse
 from pathlib import Path
 

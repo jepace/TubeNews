@@ -10,11 +10,19 @@ import pytest
 # Make the project root importable when running pytest from any directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from datetime import datetime, timedelta
+
 from TubeNews import (
     slugify,
     parse_story_file,
     rebuild_feed,
     rebuild_meta_feed,
+    rebuild_user_feed,
+    rebuild_user_blog,
+    write_story_files,
+    mark_video_as_backlog,
+    _relative_date_to_iso,
+    _parse_channel_page_metadata,
 )
 
 
@@ -247,3 +255,302 @@ def test_rebuild_meta_feed_no_base_url_omits_self_link(multi_channel_archive):
     rebuild_meta_feed(base_url="")
     content = (multi_channel_archive / "rss.xml").read_text()
     assert "localhost" not in content
+
+
+# ---------------------------------------------------------------------------
+# _relative_date_to_iso
+# ---------------------------------------------------------------------------
+
+def test_relative_date_days_ago():
+    expected = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("5 days ago") == expected
+
+def test_relative_date_singular_day():
+    expected = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("1 day ago") == expected
+
+def test_relative_date_weeks_ago():
+    expected = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("2 weeks ago") == expected
+
+def test_relative_date_months_ago():
+    expected = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("2 months ago") == expected
+
+def test_relative_date_hours_ago_returns_today():
+    # Hours map to 0 days, so result should be today.
+    expected = datetime.now().strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("3 hours ago") == expected
+
+def test_relative_date_streamed_live_exact():
+    assert _relative_date_to_iso("Streamed live on Feb 24, 2026") == "2026-02-24"
+
+def test_relative_date_exact_month_day_year():
+    assert _relative_date_to_iso("Mar 14, 2026") == "2026-03-14"
+
+def test_relative_date_unknown_returns_today():
+    expected = datetime.now().strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("some unrecognised format xyz") == expected
+
+def test_relative_date_empty_string_returns_today():
+    expected = datetime.now().strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("") == expected
+
+
+# ---------------------------------------------------------------------------
+# _parse_channel_page_metadata
+# ---------------------------------------------------------------------------
+
+def _make_yt_html(video_obj: dict) -> str:
+    """Wrap a video renderer dict in minimal ytInitialData HTML."""
+    data = {"tabs": [video_obj]}
+    blob = json.dumps(data)
+    return f"var ytInitialData = {blob};</script>"
+
+
+def test_parse_channel_page_metadata_extracts_video():
+    video = {
+        "videoId": "abc123xyz",
+        "title": {"runs": [{"text": "Test Council Meeting"}]},
+        "publishedTimeText": {"simpleText": "5 days ago"},
+        "thumbnailOverlays": [],
+    }
+    result = _parse_channel_page_metadata(_make_yt_html(video))
+    assert "abc123xyz" in result
+    assert result["abc123xyz"]["title"] == "Test Council Meeting"
+    assert result["abc123xyz"]["is_live"] is False
+
+def test_parse_channel_page_metadata_no_yt_initial_data():
+    result = _parse_channel_page_metadata("<html><body>No data here</body></html>")
+    assert result == {}
+
+def test_parse_channel_page_metadata_invalid_json():
+    result = _parse_channel_page_metadata("var ytInitialData = {NOT VALID JSON};</script>")
+    assert result == {}
+
+def test_parse_channel_page_metadata_detects_live():
+    video = {
+        "videoId": "live123xyz",
+        "title": {"runs": [{"text": "Live Meeting"}]},
+        "publishedTimeText": {"simpleText": "1 minute ago"},
+        "thumbnailOverlays": [
+            {"thumbnailOverlayTimeStatusRenderer": {"style": "LIVE"}}
+        ],
+    }
+    result = _parse_channel_page_metadata(_make_yt_html(video))
+    assert result["live123xyz"]["is_live"] is True
+
+def test_parse_channel_page_metadata_detects_upcoming():
+    video = {
+        "videoId": "soon123xyz",
+        "title": {"runs": [{"text": "Upcoming Meeting"}]},
+        "publishedTimeText": {"simpleText": "1 hour ago"},
+        "thumbnailOverlays": [
+            {"thumbnailOverlayTimeStatusRenderer": {"style": "UPCOMING"}}
+        ],
+    }
+    result = _parse_channel_page_metadata(_make_yt_html(video))
+    assert result["soon123xyz"]["is_live"] is True
+
+def test_parse_channel_page_metadata_no_duplicate_ids():
+    # Same videoId appearing twice in the walk should only be recorded once.
+    video = {
+        "videoId": "dup123xyzz",
+        "title": {"runs": [{"text": "Dupe"}]},
+        "publishedTimeText": {"simpleText": "1 day ago"},
+        "thumbnailOverlays": [],
+        "nested": {
+            "videoId": "dup123xyzz",
+            "title": {"runs": [{"text": "Dupe Again"}]},
+            "thumbnailOverlays": [],
+        },
+    }
+    result = _parse_channel_page_metadata(_make_yt_html(video))
+    assert len([k for k in result if k == "dup123xyzz"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# write_story_files
+# ---------------------------------------------------------------------------
+
+def _story(title="Story Title", dateline="CITY, CA — Jan 1, 2026",
+           content="Body text.", start=60):
+    return {"title": title, "dateline": dateline, "content": content,
+            "start_time_seconds": start}
+
+
+def test_write_story_files_creates_file(tmp_path):
+    write_story_files([_story()], tmp_path)
+    files = list(tmp_path.glob("[0-9]*.md"))
+    assert len(files) == 1
+
+def test_write_story_files_numbered_prefix(tmp_path):
+    write_story_files([_story("First"), _story("Second")], tmp_path)
+    names = sorted(f.name for f in tmp_path.glob("[0-9]*.md"))
+    assert names[0].startswith("01_")
+    assert names[1].startswith("02_")
+
+def test_write_story_files_content(tmp_path):
+    write_story_files([_story(title="Council Approves Budget", content="The city approved.")], tmp_path)
+    text = next(tmp_path.glob("[0-9]*.md")).read_text()
+    assert "# Council Approves Budget" in text
+    assert "The city approved." in text
+
+def test_write_story_files_segment_start(tmp_path):
+    write_story_files([_story(start=300)], tmp_path)
+    text = next(tmp_path.glob("[0-9]*.md")).read_text()
+    assert "**Segment Start:** 300s" in text
+
+def test_write_story_files_source_link_with_video_id(tmp_path):
+    write_story_files([_story(start=90)], tmp_path, video_id="TestVid1234")
+    text = next(tmp_path.glob("[0-9]*.md")).read_text()
+    assert "youtu.be/TestVid1234?t=90" in text
+
+def test_write_story_files_no_source_link_without_video_id(tmp_path):
+    write_story_files([_story()], tmp_path)
+    text = next(tmp_path.glob("[0-9]*.md")).read_text()
+    assert "youtu.be" not in text
+
+def test_write_story_files_fallback_dateline(tmp_path):
+    story = {"title": "No Dateline", "content": "Body.", "start_time_seconds": 0}
+    write_story_files([story], tmp_path)
+    text = next(tmp_path.glob("[0-9]*.md")).read_text()
+    assert "Local News" in text
+
+def test_write_story_files_clears_stale_files(tmp_path):
+    stale = tmp_path / "01_Old_Story.md"
+    stale.write_text("stale content")
+    write_story_files([_story("New Story")], tmp_path)
+    assert not stale.exists()
+    assert len(list(tmp_path.glob("[0-9]*.md"))) == 1
+
+
+# ---------------------------------------------------------------------------
+# mark_video_as_backlog
+# ---------------------------------------------------------------------------
+
+def test_mark_video_as_backlog_creates_stub_dir(tmp_path):
+    mark_video_as_backlog(tmp_path, "Abc123VidXX")
+    assert (tmp_path / "2000-01-01_Abc123VidXX").is_dir()
+
+def test_mark_video_as_backlog_metadata_content(tmp_path):
+    mark_video_as_backlog(tmp_path, "Abc123VidXX")
+    meta = json.loads((tmp_path / "2000-01-01_Abc123VidXX" / "metadata.json").read_text())
+    assert meta["video_id"] == "Abc123VidXX"
+    assert meta["status"] == "ignored_too_old"
+
+def test_mark_video_as_backlog_idempotent(tmp_path):
+    mark_video_as_backlog(tmp_path, "Abc123VidXX")
+    mark_video_as_backlog(tmp_path, "Abc123VidXX")  # should not raise
+    assert (tmp_path / "2000-01-01_Abc123VidXX").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# rebuild_user_feed
+# ---------------------------------------------------------------------------
+
+def _setup_channel(archive_root: Path, channel_slug: str, channel_id: str,
+                   channel_name: str, story_count: int = 1) -> Path:
+    """Create a channel directory with channel.json, a meeting, and stories."""
+    channel_dir = archive_root / channel_slug
+    meeting_dir = _make_meeting(channel_dir, "2026-02-01", f"VID{channel_slug[:8].upper()}", f"{channel_name} Meeting")
+    for i in range(story_count):
+        _write_story(
+            meeting_dir, f"0{i+1}_Story.md",
+            f"Story {i+1} from {channel_name}",
+            f"CITY — Feb 1, 2026", f"Content {i+1}.", 60 * (i + 1),
+        )
+    (channel_dir / "channel.json").write_text(
+        json.dumps({"channel_id": channel_id, "channel_name": channel_name})
+    )
+    return channel_dir
+
+
+@pytest.fixture
+def user_archive(tmp_path, monkeypatch):
+    """Archive with two channels; monkeypatches STORAGE_ROOT."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    _setup_channel(tmp_path, "alpha_city", "UC_ALPHA_ID", "Alpha City Council")
+    _setup_channel(tmp_path, "beta_city",  "UC_BETA__ID", "Beta City Council")
+    return tmp_path
+
+
+def test_rebuild_user_feed_creates_rss(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    rebuild_user_feed(user)
+    assert (user_archive / "users" / "Jane_Doe" / "rss.xml").exists()
+
+def test_rebuild_user_feed_includes_subscribed_channel(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    rebuild_user_feed(user)
+    content = (user_archive / "users" / "Jane_Doe" / "rss.xml").read_text()
+    assert "Alpha City Council" in content
+
+def test_rebuild_user_feed_excludes_unsubscribed_channel(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    rebuild_user_feed(user)
+    content = (user_archive / "users" / "Jane_Doe" / "rss.xml").read_text()
+    assert "Beta City Council" not in content
+
+def test_rebuild_user_feed_no_subscriptions_empty_feed(user_archive):
+    user = {"name": "No Subs", "channel_ids": []}
+    rebuild_user_feed(user)
+    content = (user_archive / "users" / "No_Subs" / "rss.xml").read_text()
+    assert "Alpha City Council" not in content
+    assert "Beta City Council" not in content
+
+def test_rebuild_user_feed_multiple_channels(user_archive):
+    user = {"name": "Both", "channel_ids": ["UC_ALPHA_ID", "UC_BETA__ID"]}
+    rebuild_user_feed(user)
+    content = (user_archive / "users" / "Both" / "rss.xml").read_text()
+    assert "Alpha City Council" in content
+    assert "Beta City Council" in content
+
+
+# ---------------------------------------------------------------------------
+# rebuild_user_blog
+# ---------------------------------------------------------------------------
+
+def test_rebuild_user_blog_creates_html(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    rebuild_user_blog(user)
+    assert (user_archive / "users" / "Jane_Doe" / "index.html").exists()
+
+def test_rebuild_user_blog_includes_subscribed_stories(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    rebuild_user_blog(user)
+    content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
+    assert "Alpha City Council" in content
+
+def test_rebuild_user_blog_excludes_unsubscribed_stories(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    rebuild_user_blog(user)
+    content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
+    assert "Beta City Council" not in content
+
+def test_rebuild_user_blog_date_filter(tmp_path, monkeypatch):
+    """Stories older than blog_days should be omitted."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    channel_dir = tmp_path / "old_channel"
+    meeting_dir = _make_meeting(channel_dir, "2020-01-01", "VIDold12345", "Old Meeting")
+    # Override processed_at to a timestamp well in the past.
+    old_meta = {
+        "video_id": "VIDold12345",
+        "video_title": "Old Meeting",
+        "status": "processed",
+        "processed_at": int(time.time()) - (200 * 86400),  # 200 days ago
+    }
+    (meeting_dir / "metadata.json").write_text(json.dumps(old_meta))
+    _write_story(meeting_dir, "01_Old.md", "Very Old Story",
+                 "CITY — Jan 1, 2020", "Old content.", 0)
+    (channel_dir / "channel.json").write_text(
+        json.dumps({"channel_id": "UC_OLD_ID", "channel_name": "Old Channel"})
+    )
+
+    user = {"name": "Test User", "channel_ids": ["UC_OLD_ID"]}
+    rebuild_user_blog(user, blog_days=90)  # only 90 days; story is 200 days old
+    content = (tmp_path / "users" / "Test_User" / "index.html").read_text()
+    assert "Very Old Story" not in content

@@ -3,6 +3,7 @@
   "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "ADD_SUPADATA-KEY",
   "base_url": "",
+  "blog_days": 90,
   "admin_emails": ["you@example.com"],
   "feeds": [
     {

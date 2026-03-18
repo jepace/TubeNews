@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Admin — Feeds{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <div class="admin-header">
+    <h1>Feeds <span class="badge">{{ channels|length }}</span></h1>
+  </div>
+
+  <div style="margin-bottom: 1.25rem;">
+    <a href="{{ url_for('admin_feed_add') }}" class="btn-sm">+ Add feed</a>
+  </div>
+
+  {% if channels %}
+  <table class="user-table">
+    <thead>
+      <tr>
+        <th>Channel name</th>
+        <th>Channel ID</th>
+        <th>Focus</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ch in channels %}
+      <tr>
+        <td>{{ ch.channel_name }}</td>
+        <td class="mono">{{ ch.channel_id }}</td>
+        <td class="muted">{{ ch.focus | truncate(60) }}</td>
+        <td style="white-space: nowrap;">
+          <a href="{{ url_for('admin_feed_edit', idx=loop.index0) }}" class="btn-sm">Edit</a>
+          <form method="post" action="{{ url_for('admin_feed_delete', idx=loop.index0) }}"
+                class="inline-form"
+                onsubmit="return confirm('Remove \'{{ ch.channel_name }}\'? Archive data is not deleted.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-danger-sm">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No feeds configured. <a href="{{ url_for('admin_feed_add') }}">Add one.</a></p>
+  {% endif %}
+</div>
+{% endblock %}

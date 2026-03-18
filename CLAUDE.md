@@ -112,6 +112,8 @@ YouTube Channel Pages (HTML scrape)
 |---|---|
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
 | `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
+| `rebuild_user_feed(user, base_url)` | Generates `archive/users/<slug>/rss.xml` filtered to a user's subscribed channels |
+| `rebuild_user_blog(user, base_url)` | Generates `archive/users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
 
 ### Processing orchestration
 
@@ -244,6 +246,8 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `feeds[].channel_name` | Yes | Human-readable name; used to create `archive/` subfolder |
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
+| `blog_days` | No | Days of stories to include in per-user blog pages (default: `90`) |
+| `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 
 ---
 

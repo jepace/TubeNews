@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Admin — {% if feed %}Edit Feed{% else %}Add Feed{% endif %}{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <div class="admin-header">
+    <a href="{{ url_for('admin_feeds') }}" class="back-link">← All feeds</a>
+    <h1>{% if feed and idx is not none %}Edit feed{% else %}Add feed{% endif %}</h1>
+  </div>
+
+  <section class="admin-section">
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="channel_name">Channel name</label>
+        <input type="text" id="channel_name" name="channel_name"
+               value="{{ feed.channel_name if feed else '' }}" required
+               placeholder="City Council Meetings">
+      </div>
+      <div class="form-row">
+        <label for="channel_id">YouTube channel ID <span class="hint">(starts with UC)</span></label>
+        <input type="text" id="channel_id" name="channel_id"
+               value="{{ feed.channel_id if feed else '' }}" required
+               placeholder="UCxxxxxxxxxxxxxxxxxxxxxxx"
+               pattern="UC.+" title="Must start with UC">
+      </div>
+      <div class="form-row">
+        <label for="focus">Focus topics <span class="hint">(AI guidance for story selection)</span></label>
+        <textarea id="focus" name="focus" rows="3" required
+                  placeholder="housing, zoning, development permits, budget decisions">{{ feed.focus if feed else '' }}</textarea>
+      </div>
+      <button type="submit">{% if feed and idx is not none %}Save changes{% else %}Add feed{% endif %}</button>
+    </form>
+  </section>
+
+  {% if feed and idx is not none %}
+  <section class="admin-section danger-zone">
+    <h2>Remove feed</h2>
+    <p class="muted">Removes this channel from TubeNews.json. Archive data is not deleted.</p>
+    <form method="post" action="{{ url_for('admin_feed_delete', idx=idx) }}"
+          onsubmit="return confirm('Remove this feed? Archive data is not deleted.')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-danger">Remove feed</button>
+    </form>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
