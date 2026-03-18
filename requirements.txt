@@ -1,7 +1,6 @@
 requests
 feedgen
 supadata
-google-generativeai
 pytest
 flask
 flask-login
