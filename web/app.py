@@ -222,8 +222,8 @@ def _base_url() -> str:
 def _feed_url(token: str) -> str:
     base = _base_url()
     if base:
-        return f"{base}/feed/{token}"
-    return url_for("serve_feed", token=token, _external=True)
+        return f"{base}/feed/{token}.xml"
+    return url_for("serve_feed", token=token, _external=True).replace(f"/feed/{token}", f"/feed/{token}.xml")
 
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
@@ -352,7 +352,7 @@ def dashboard():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
-        blog_url=url_for("serve_blog") if current_user.channel_ids else None,
+        blog_url=url_for("serve_blog") + ".html" if current_user.channel_ids else None,
     )
 
 
@@ -364,6 +364,7 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/feed/<token>.xml")
 @app.route("/feed/<token>")
 def serve_feed(token: str):
     """Serve a user's RSS feed by secret token — no login required."""
@@ -382,6 +383,7 @@ def serve_feed(token: str):
     abort(404)
 
 
+@app.route("/blog.html")
 @app.route("/blog")
 @login_required
 def serve_blog():

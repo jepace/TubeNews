@@ -377,7 +377,7 @@ button[type="submit"]:hover,
 .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-danger-sm {
-  padding: 0.35rem 0.75rem;
+  padding: 0.25rem 0.625rem;
   background: transparent;
   color: var(--danger);
   border: 1px solid var(--danger);
@@ -385,6 +385,5 @@ button[type="submit"]:hover,
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
-  margin-top: 0.5rem;
 }
 .btn-danger-sm:hover { background: #fee2e2; }
