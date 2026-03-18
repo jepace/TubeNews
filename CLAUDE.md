@@ -247,6 +247,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
 | `blog_days` | No | Days of stories to include in per-user blog pages (default: `90`) |
+| `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 
 ---
 

@@ -861,11 +861,16 @@ def process_video(
     completed the fetch but failed during AI analysis) before hitting the
     Supadata API again.
 
-    Returns one of:
-        ``"content_written"``  – stories were generated and written to disk.
+    Returns a ``(status, n_stories)`` tuple where *status* is one of:
+
+        ``"content_written"``  – stories were generated and written to disk;
+                                 *n_stories* is the count written.
         ``"ai_rate_limited"``  – Gemini returned 429; caller should set
-                                 ``ai_disabled = True`` for the session.
-        ``"skipped"``          – transcript unavailable or AI returned nothing.
+                                 ``ai_disabled = True`` for the session;
+                                 *n_stories* is 0.
+        ``"skipped"``          – transcript unavailable, live stream, AI
+                                 disabled, or AI returned nothing; *n_stories*
+                                 is 0.
     """
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
@@ -887,7 +892,7 @@ def process_video(
         logger.info(f"{channel_name}: {video_title}: TubeNews: Processing new video{counter}")
         if is_live:
             logger.info(f"{channel_name}: {video_title}: TubeNews: Live stream — skipping, will retry next run")
-            return "skipped"
+            return "skipped", 0
         logger.debug(f"{channel_name}: {video_title}: Supadata: Requesting transcript")
         transcript_text = fetch_transcript(
             video_id, supadata_client,
@@ -902,7 +907,7 @@ def process_video(
 
     # --- Generate news stories via Gemini ---
     if ai_disabled:
-        return "skipped"
+        return "skipped", 0
 
     logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories")
     stories = call_gemini_api(
@@ -957,10 +962,11 @@ def process_feed(
     calls for the remainder of the run.  Pass ``None`` for single-channel use.
 
     Returns:
-        A ``(content_changed, ai_rate_limited)`` tuple.
+        A ``(content_changed, ai_rate_limited, stories_written)`` tuple.
         *content_changed* is True if any new stories were written (i.e., the
         RSS feed needs to be rebuilt).
         *ai_rate_limited* is True if Gemini hit its quota during this feed.
+        *stories_written* is the total count of story files created.
     """
     channel_slug = slugify(feed["channel_name"])
     channel_name = feed["channel_name"]
