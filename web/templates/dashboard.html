@@ -13,6 +13,9 @@
         <input type="text" id="feed-url" class="feed-url-input" value="{{ feed_url }}" readonly>
         <button type="button" onclick="copyFeedUrl()" class="btn-copy">Copy</button>
       </div>
+      {% if blog_url %}
+        <p style="margin-top:0.75rem">Or <a href="{{ blog_url }}">read your blog</a> in the browser.</p>
+      {% endif %}
     {% else %}
       <p class="muted">Subscribe to at least one channel below to generate your feed URL.</p>
     {% endif %}

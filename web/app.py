@@ -49,7 +49,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, rebuild_user_feed  # noqa: E402
+from TubeNews import STORAGE_ROOT, rebuild_user_blog, rebuild_user_feed  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -226,6 +226,13 @@ def _feed_url(token: str) -> str:
     return url_for("serve_feed", token=token, _external=True)
 
 
+def _blog_url() -> str:
+    base = _base_url()
+    if base:
+        return f"{base}/blog"
+    return url_for("serve_blog", _external=True)
+
+
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
     if not ts:
@@ -338,8 +345,10 @@ def dashboard():
         selected = set(request.form.getlist("channel_ids"))
         valid_ids = {ch["channel_id"] for ch in channels}
         current_user.set_channel_ids(sorted(selected & valid_ids))
+        cfg = _load_config()
         try:
             rebuild_user_feed(current_user._data, base_url=_base_url())
+            rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90))
         except Exception as exc:
             flash(f"Subscriptions saved, but feed rebuild failed: {exc}", "error")
         else:
@@ -351,6 +360,7 @@ def dashboard():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
+        blog_url=_blog_url() if current_user.channel_ids else None,
     )
 
 
@@ -378,6 +388,24 @@ def serve_feed(token: str):
         except Exception:
             continue
     abort(404)
+
+
+@app.route("/blog")
+@login_required
+def serve_blog():
+    """Regenerate and serve the current user's blog page."""
+    cfg = _load_config()
+    try:
+        rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90))
+    except Exception as exc:
+        flash(f"Blog generation failed: {exc}", "error")
+        return redirect(url_for("dashboard"))
+    from TubeNews import slugify
+    blog_path = USERS_ROOT / slugify(current_user._data["name"]) / "index.html"
+    if not blog_path.exists():
+        flash("No blog content yet — run TubeNews.py to fetch stories first.", "error")
+        return redirect(url_for("dashboard"))
+    return send_file(blog_path, mimetype="text/html")
 
 
 # ---------------------------------------------------------------------------
