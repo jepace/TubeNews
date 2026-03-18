@@ -1,11 +1,13 @@
 """TubeNews web UI — account management and feed subscription.
 
 Run in development:
-    export TUBENEWS_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
     python web/app.py
 
 Run in production (behind nginx/Caddy with TLS):
     gunicorn -w 2 'web.app:app'
+
+The secret key is read from the "tubenews_key" field in TubeNews.json.
+Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
 import json
@@ -24,6 +26,7 @@ from flask import (
     render_template,
     request,
     send_file,
+    send_from_directory,
     url_for,
 )
 from flask_limiter import Limiter
@@ -57,10 +60,14 @@ USERS_ROOT = STORAGE_ROOT / "users"
 
 app = Flask(__name__)
 
-secret_key = os.environ.get("TUBENEWS_SECRET_KEY")
+try:
+    _cfg = json.loads(CONFIG_FILE.read_text())
+    secret_key = _cfg.get("tubenews_key") or os.environ.get("TUBENEWS_SECRET_KEY")
+except Exception:
+    secret_key = os.environ.get("TUBENEWS_SECRET_KEY")
 if not secret_key:
     raise RuntimeError(
-        "TUBENEWS_SECRET_KEY environment variable is not set. "
+        "'tubenews_key' is not set in TubeNews.json. "
         "Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'"
     )
 app.config["SECRET_KEY"] = secret_key
@@ -244,6 +251,16 @@ def index():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
+
+
+@app.route("/archive/")
+@app.route("/archive/<path:filename>")
+def serve_archive(filename=""):
+    """Serve static files from the archive directory (feeds, stories, etc.)."""
+    if not filename:
+        abort(404)
+    mimetype = "application/rss+xml" if filename.endswith(".xml") else None
+    return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
 
 
 @app.route("/login", methods=["GET", "POST"])
