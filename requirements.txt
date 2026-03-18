@@ -6,5 +6,4 @@ flask
 flask-login
 flask-wtf
 flask-limiter
-email-validator
 gunicorn
