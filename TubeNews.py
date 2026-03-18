@@ -1086,7 +1086,7 @@ def main() -> None:
         config = json.load(config_file)
 
     supadata_client = Supadata(api_key=config["supadata_api_key"])
-    logger.info(f"Session Start | AI Model: {config.get('gemini_model')}")
+    logger.info(f"Session Start | {datetime.now().strftime('%A, %B %-d, %Y')} | AI Model: {config.get('gemini_model')}")
 
     ai_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()
