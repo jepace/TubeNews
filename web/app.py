@@ -170,7 +170,7 @@ def _all_users() -> list[User]:
             users.append(User(user_json.parent, json.loads(user_json.read_text())))
         except Exception:
             continue
-    return sorted(users, key=lambda u: u._data.get("created_at", 0))
+    return sorted(users, key=lambda u: u.name.lower())
 
 
 @login_manager.user_loader
@@ -513,7 +513,7 @@ def admin_user_delete(uid: str):
 @login_required
 @admin_required
 def admin_feeds():
-    channels = _load_channels()
+    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
     return render_template("admin_feeds.html", channels=channels)
 
 
