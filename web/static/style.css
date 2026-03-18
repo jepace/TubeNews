@@ -122,6 +122,25 @@ label {
   font-size: 0.8rem;
 }
 
+textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--surface);
+  font-family: inherit;
+  resize: vertical;
+  transition: border-color 0.15s;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.15);
+}
+
 input[type="email"],
 input[type="password"],
 input[type="text"] {

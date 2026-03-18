@@ -183,6 +183,19 @@ def load_user(user_id: str) -> User | None:
 # ---------------------------------------------------------------------------
 
 
+def _load_config() -> dict:
+    try:
+        return json.loads(CONFIG_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_feeds(feeds: list[dict]) -> None:
+    cfg = _load_config()
+    cfg["feeds"] = feeds
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+
+
 def _load_channels() -> list[dict]:
     try:
         return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
@@ -489,6 +502,84 @@ def admin_user_delete(uid: str):
     user._dir.rmdir()
     flash(f"Account for {user.email} deleted.", "success")
     return redirect(url_for("admin_users"))
+
+
+# ---------------------------------------------------------------------------
+# Admin feed routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/admin/feeds")
+@login_required
+@admin_required
+def admin_feeds():
+    channels = _load_channels()
+    return render_template("admin_feeds.html", channels=channels)
+
+
+@app.route("/admin/feeds/add", methods=["GET", "POST"])
+@login_required
+@admin_required
+def admin_feed_add():
+    if request.method == "POST":
+        channel_id = request.form.get("channel_id", "").strip()
+        channel_name = request.form.get("channel_name", "").strip()
+        focus = request.form.get("focus", "").strip()
+        if not channel_id or not channel_name or not focus:
+            flash("All fields are required.", "error")
+        elif not channel_id.startswith("UC"):
+            flash("Channel ID must start with 'UC'.", "error")
+        else:
+            channels = _load_channels()
+            if any(ch["channel_id"] == channel_id for ch in channels):
+                flash("A feed with that channel ID already exists.", "error")
+            else:
+                channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus})
+                _save_feeds(channels)
+                flash(f"Feed '{channel_name}' added.", "success")
+                return redirect(url_for("admin_feeds"))
+    return render_template("admin_feed.html", feed=None, idx=None)
+
+
+@app.route("/admin/feeds/<int:idx>/edit", methods=["GET", "POST"])
+@login_required
+@admin_required
+def admin_feed_edit(idx: int):
+    channels = _load_channels()
+    if idx < 0 or idx >= len(channels):
+        abort(404)
+    feed = channels[idx]
+    if request.method == "POST":
+        channel_id = request.form.get("channel_id", "").strip()
+        channel_name = request.form.get("channel_name", "").strip()
+        focus = request.form.get("focus", "").strip()
+        if not channel_id or not channel_name or not focus:
+            flash("All fields are required.", "error")
+        elif not channel_id.startswith("UC"):
+            flash("Channel ID must start with 'UC'.", "error")
+        else:
+            if any(ch["channel_id"] == channel_id and i != idx for i, ch in enumerate(channels)):
+                flash("Another feed already uses that channel ID.", "error")
+            else:
+                channels[idx] = {"channel_id": channel_id, "channel_name": channel_name, "focus": focus}
+                _save_feeds(channels)
+                flash(f"Feed '{channel_name}' updated.", "success")
+                return redirect(url_for("admin_feeds"))
+        feed = {"channel_id": channel_id, "channel_name": channel_name, "focus": focus}
+    return render_template("admin_feed.html", feed=feed, idx=idx)
+
+
+@app.route("/admin/feeds/<int:idx>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_feed_delete(idx: int):
+    channels = _load_channels()
+    if idx < 0 or idx >= len(channels):
+        abort(404)
+    removed = channels.pop(idx)
+    _save_feeds(channels)
+    flash(f"Feed '{removed['channel_name']}' removed.", "success")
+    return redirect(url_for("admin_feeds"))
 
 
 # ---------------------------------------------------------------------------
