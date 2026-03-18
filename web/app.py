@@ -225,14 +225,6 @@ def _feed_url(token: str) -> str:
         return f"{base}/feed/{token}"
     return url_for("serve_feed", token=token, _external=True)
 
-
-def _blog_url() -> str:
-    base = _base_url()
-    if base:
-        return f"{base}/blog"
-    return url_for("serve_blog", _external=True)
-
-
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
     if not ts:
@@ -360,7 +352,7 @@ def dashboard():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
-        blog_url=_blog_url() if current_user.channel_ids else None,
+        blog_url=url_for("serve_blog") if current_user.channel_ids else None,
     )
 
 
