@@ -59,7 +59,7 @@ Add your email to `TubeNews.json`:
 python web/app.py
 ```
 
-Open `http://your-server:5000` in a browser. Register an account — your email
+Open `http://your-server:8000` in a browser (default port; change with `"port"` in `TubeNews.json`). Register an account — your email
 matches `admin_emails` so you will have admin access automatically.
 
 ### 5. Set base_url
@@ -69,7 +69,7 @@ Set `base_url` in `TubeNews.json` to the public root of your Flask app
 
 ```json
 {
-  "base_url": "http://your-server:5000",
+  "base_url": "http://your-server:8000",
   ...
 }
 ```

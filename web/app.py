@@ -63,8 +63,10 @@ app = Flask(__name__)
 try:
     _cfg = json.loads(CONFIG_FILE.read_text())
     secret_key = _cfg.get("tubenews_key") or os.environ.get("TUBENEWS_SECRET_KEY")
+    _port = int(_cfg.get("port", 8000))
 except Exception:
     secret_key = os.environ.get("TUBENEWS_SECRET_KEY")
+    _port = 8000
 if not secret_key:
     raise RuntimeError(
         "'tubenews_key' is not set in TubeNews.json. "
@@ -619,4 +621,4 @@ def not_found(e):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=_port)
