@@ -104,3 +104,58 @@ Both files would live in the project root. `TubeNews.py` and `web/app.py` would
 need small updates to load from two files. This separation makes it easier to
 check `feeds.json` into version control (no secrets) while keeping
 `TubeNews.json` gitignored.
+
+---
+
+## Known Issues / Future Hardening
+
+The following issues were identified in a QA sweep and deferred because they
+are low-risk in current usage or require larger refactoring to address cleanly.
+
+### Bare `except Exception:` blocks hide errors
+
+Several inner loops in `rebuild_meta_feed`, `rebuild_user_feed`, and
+`rebuild_user_blog` use `except Exception: continue` to skip corrupt story or
+metadata files.  The skip behaviour is correct, but the absence of logging
+makes it impossible to know which files were skipped or why.
+
+**Future fix:** Add `logger.debug(f"Skipping {path}: {exc}")` in each of these
+handlers so silent skips are at least visible in debug mode.
+
+### Type hints use generic `dict` throughout
+
+Functions like `discover_videos()` return `list[dict]` but the actual structure
+is `list[{id, title, date, is_live}]`.  Similarly, `process_feed()`,
+`process_video()`, and the feed-config dicts are all typed as bare `dict`.
+
+**Future fix:** Define `TypedDict` classes (`VideoInfo`, `FeedConfig`,
+`StoryDict`, etc.) and use them in all annotations.  This makes the data
+contracts explicit and enables static type checking with mypy/pyright.
+
+### `helpers/catchup.py` duplicates `slugify()`
+
+The helper defines its own `slugify()` to avoid importing TubeNews (which
+drags in feedgen, supadata, etc.).  If the slugify implementation ever changes
+in `TubeNews.py`, the helper must be updated manually.
+
+**Future fix:** Extract `slugify()` into a tiny `tubenews_utils.py` with no
+heavy dependencies, importable by both.
+
+### Windows datetime portability
+
+`%-d` and `%-I` strftime format codes (used in `_send_ntfy()` and `main()`)
+are POSIX-only and crash on Windows with a stray `%` error.
+
+**Future fix:** Replace `%-d`/`%-I` with a portable helper that strips leading
+zeros after formatting (e.g. `dt.strftime("%B %d, %Y").replace(" 0", " ")`).
+
+### Web UI has no automated tests
+
+All Flask routes, the `User` model, and helper functions in `web/app.py` are
+currently untested.  The core pipeline in `TubeNews.py` has good unit-test
+coverage; the web UI relies entirely on manual verification.
+
+**Future fix:** Add a `tests/test_web.py` using Flask's test client
+(`app.test_client()`) with a monkeypatched `STORAGE_ROOT`.  Priority targets:
+login/register rate limiting, subscription save + feed rebuild, admin
+guard decorator, and the public feed/blog token routes.

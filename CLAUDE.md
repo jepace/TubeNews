@@ -233,7 +233,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 }
 ```
 
-`status` values: `"processed"` | `"ignored_too_old"`
+`status` values: `"processed"` | `"ignored_too_old"` | `"no_stories"` (AI ran but returned no relevant stories)
 
 ---
 
@@ -253,6 +253,8 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
+| `tubenews_key` | Web UI only | Flask session secret key — generate with `python -c 'import secrets; print(secrets.token_hex(32))'`; also readable from `TUBENEWS_SECRET_KEY` env var |
+| `admin_users` | No | List of email addresses granted admin access to the web UI (e.g. `["alice@example.com"]`) |
 
 ---
 
@@ -348,21 +350,26 @@ One `feed_token` per user covers two public URLs:
 | `/feed/<token>.xml` | Personal RSS feed |
 | `/blog/<token>.html` | Personal blog page |
 
-Both serve pre-built files from the user's directory — no login required.
+The `/feed/<token>.xml` route serves a pre-built static file from the user's
+directory. The `/blog/<token>.html` route renders the blog **dynamically** on
+each request by calling `_get_user_stories()` and passing the result to the
+`blog.html` Jinja2 template — no static file is read or written.
 The extension-less variants (`/feed/<token>`, `/blog/<token>`) also work for
 backwards compatibility.
 
-### Blog Regeneration Flow
+### Blog Rendering Flow
 
-The blog is a static HTML file built on demand, not on every request:
+The blog is rendered dynamically on every request — no static file is cached:
 
-1. **Trigger:** User saves subscriptions (dashboard POST) or visits `/blog`
-2. **Build:** `rebuild_user_blog()` writes `archive/users/<uuid>/index.html`
-3. **Serve:** `/blog/<token>.html` reads and serves the cached file
+1. **Request:** Any visitor hits `/blog/<token>.html` or the logged-in `/blog`
+2. **Stories:** `_get_user_stories()` scans `archive/` and returns stories from
+   the user's subscribed channels processed within the last `blog_days` days
+3. **Render:** Flask renders `blog.html` with the story list and returns HTML
 
-If the file does not exist yet (e.g. no stories have been generated),
-`/blog/<token>.html` returns 404. The logged-in `/blog` route flashes an
-error and redirects to the dashboard instead.
+Because it reads the archive on every request, the blog always reflects the
+latest stories without any explicit rebuild step.  `rebuild_user_blog()` exists
+in `TubeNews.py` as a standalone utility (e.g. for generating a static snapshot)
+but the web app does **not** call it — the web UI uses dynamic rendering only.
 
 ### Key Helpers
 

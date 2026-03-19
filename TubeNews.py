@@ -899,7 +899,10 @@ def process_video(
                                  *n_stories* is 0.
         ``"skipped"``          – transcript unavailable, live stream, AI
                                  disabled, or AI returned nothing; *n_stories*
-                                 is 0.
+                                 is 0.  When Gemini returns an empty story list,
+                                 a ``metadata.json`` with ``status: "no_stories"``
+                                 is written so the video is not resubmitted to
+                                 the AI on future runs.
     """
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
@@ -980,7 +983,7 @@ def process_feed(
     supadata_client: Supadata,
     config: dict,
     ai_rate_limit_event: threading.Event | None = None,
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, int]:
     """Process all new videos for one configured channel.
 
     Discovers videos from YouTube, skips ones already archived, and calls
@@ -1184,9 +1187,12 @@ def main() -> None:
     users_dir = STORAGE_ROOT / "users"
     if users_dir.is_dir():
         for user_json in sorted(users_dir.glob("*/user.json")):
-            user = json.loads(user_json.read_text())
-            uid = user_json.parent.name
-            rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
+            try:
+                user = json.loads(user_json.read_text())
+                uid = user_json.parent.name
+                rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
+            except Exception:
+                logger.warning(f"TubeNews: Failed to rebuild feed for user {user_json.parent.name} — skipping")
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
@@ -1205,8 +1211,8 @@ def main() -> None:
     })
     try:
         run_log_path.write_text(json.dumps(runs[-30:], indent=2))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"TubeNews: Failed to write run log: {exc}")
 
     ntfy_topic = config.get("ntfy_topic")
     if ntfy_topic and total_stories > 0:
