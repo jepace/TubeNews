@@ -66,6 +66,9 @@ nav a:hover { text-decoration: underline; }
 }
 .nav-user:hover { color: var(--text); text-decoration: underline; }
 
+.nav-rss { display: flex; align-items: center; line-height: 0; }
+.nav-rss:hover { opacity: 0.75; }
+
 /* Main */
 main {
   max-width: var(--max-w);
