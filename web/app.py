@@ -646,8 +646,9 @@ def admin_runs():
 @login_required
 @admin_required
 def admin_feeds():
-    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
-    return render_template("admin_feeds.html", channels=channels)
+    channels = _load_channels()
+    indexed = sorted(enumerate(channels), key=lambda x: x[1].get("channel_name", "").lower())
+    return render_template("admin_feeds.html", channels=indexed)
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])

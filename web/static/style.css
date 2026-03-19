@@ -248,16 +248,35 @@ button[type="submit"]:hover,
 .btn-copy:hover { background: var(--accent-hover); }
 
 .select-all-row {
+  display: flex;
+  gap: 0.5rem;
   padding-bottom: 0.75rem;
   margin-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
 }
 
+.btn-select-all {
+  padding: 0.25rem 0.75rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 0;
+}
+.btn-select-all:hover { background: var(--info-bg); }
+
 .channel-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.6rem;
   margin-bottom: 1.25rem;
+}
+
+@media (max-width: 480px) {
+  .channel-list { grid-template-columns: 1fr; }
 }
 
 .channel-row { padding: 0.1rem 0; }
@@ -376,7 +395,7 @@ button[type="submit"]:hover,
 .btn-danger:hover { background: #b91c1c; }
 .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.btn-danger-sm {
+button.btn-danger-sm {
   padding: 0.25rem 0.625rem;
   background: transparent;
   color: var(--danger);
@@ -385,5 +404,6 @@ button[type="submit"]:hover,
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
+  margin-top: 0;
 }
-.btn-danger-sm:hover { background: #fee2e2; }
+button.btn-danger-sm:hover { background: #fee2e2; }

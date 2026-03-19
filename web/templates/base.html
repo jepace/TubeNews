@@ -16,6 +16,7 @@
           <a href="{{ url_for('admin_feeds') }}">Feeds</a>
           <a href="{{ url_for('admin_runs') }}">Runs</a>
         {% endif %}
+        <a href="{{ url_for('serve_blog') }}">Blog</a>
         <span class="nav-user">{{ current_user.name }}</span>
         <a href="{{ url_for('logout') }}">Log out</a>
       {% else %}
