@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Transcript — {{ meeting_label }}{% endblock %}
+
+{% block content %}
+<style>
+  .transcript-page { max-width: 780px; margin: 0 auto; padding: 24px 16px 48px; }
+  .transcript-page h1 { font-size: 1.3em; margin-bottom: 4px; }
+  .transcript-page .back { font-size: 0.85em; margin-bottom: 20px; display: block; }
+  table.transcript { border-collapse: collapse; width: 100%; font-size: 0.93em; }
+  table.transcript td { padding: 5px 8px; vertical-align: top; line-height: 1.55; }
+  table.transcript td.ts { white-space: nowrap; color: #888; width: 5em; }
+  table.transcript td.ts a { color: #888; text-decoration: none; }
+  table.transcript td.ts a:hover { text-decoration: underline; }
+  table.transcript tr:target td { background: #fffbe6; }
+  table.transcript tr:nth-child(even) td { background: #f7f7f5; }
+  table.transcript tr:nth-child(even):target td { background: #fffbe6; }
+</style>
+
+<div class="transcript-page">
+  <h1>Transcript</h1>
+  <em>{{ meeting_label }}</em>
+  <br><br>
+  {% if segments %}
+  <table class="transcript">
+    {% for seg in segments %}
+    <tr id="t{{ seg.seconds }}">
+      <td class="ts">
+        <a href="#t{{ seg.seconds }}">{{ "%d:%02d"|format(seg.seconds // 60, seg.seconds % 60) }}</a>
+      </td>
+      <td>{{ seg.text }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No transcript segments found.</p>
+  {% endif %}
+</div>
+{% endblock %}
