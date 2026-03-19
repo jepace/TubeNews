@@ -1138,7 +1138,6 @@ def main() -> None:
             user = json.loads(user_json.read_text())
             uid = user_json.parent.name
             rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
-            rebuild_user_blog(user, base_url=config.get("base_url", ""), blog_days=config.get("blog_days", 90), user_id=uid)
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")

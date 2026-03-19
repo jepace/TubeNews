@@ -49,7 +49,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, rebuild_user_blog, rebuild_user_feed, parse_story_file  # noqa: E402
+from TubeNews import STORAGE_ROOT, rebuild_user_feed, parse_story_file  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -451,7 +451,6 @@ def dashboard():
         cfg = _load_config()
         try:
             rebuild_user_feed(current_user._data, base_url=_base_url(), user_id=current_user.get_id())
-            rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90), user_id=current_user.get_id())
         except Exception as exc:
             flash(f"Subscriptions saved, but feed rebuild failed: {exc}", "error")
         else:
@@ -497,17 +496,18 @@ def serve_feed(token: str):
 @app.route("/blog/<token>.html")
 @app.route("/blog/<token>")
 def serve_blog_public(token: str):
-    """Serve a user's blog page by secret token — no login required."""
+    """Render a user's blog by secret token — no login required."""
     if not USERS_ROOT.is_dir():
         abort(404)
     for user_json in USERS_ROOT.glob("*/user.json"):
         try:
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
-                blog_path = user_json.parent / "index.html"
-                if blog_path.exists():
-                    return send_file(blog_path, mimetype="text/html")
-                abort(404)
+                cfg = _load_config()
+                stories = _get_user_stories(data, cfg.get("blog_days", 90))
+                blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
+                return render_template("blog.html", stories=stories, blog_name=blog_name,
+                                       feed_url=_feed_url(token))
         except Exception:
             continue
     abort(404)
