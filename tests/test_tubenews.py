@@ -22,7 +22,6 @@ from TubeNews import (
     rebuild_user_blog,
     build_user_feed_xml,
     write_story_files,
-    mark_video_as_backlog,
     _relative_date_to_iso,
     _parse_channel_page_metadata,
 )
@@ -428,23 +427,58 @@ def test_write_story_files_clears_stale_files(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# mark_video_as_backlog
+# New-feed auto-ignore (ignored_too_old stubs written by process_feed)
 # ---------------------------------------------------------------------------
 
-def test_mark_video_as_backlog_creates_stub_dir(tmp_path):
-    mark_video_as_backlog(tmp_path, "Abc123VidXX")
-    assert (tmp_path / "2000-01-01_Abc123VidXX").is_dir()
+def test_new_feed_marks_older_videos_ignored_too_old(tmp_path, monkeypatch):
+    """On a new feed's first run, all videos except the most recent get
+    ignored_too_old stubs so the first run doesn't process months of old meetings."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
-def test_mark_video_as_backlog_metadata_content(tmp_path):
-    mark_video_as_backlog(tmp_path, "Abc123VidXX")
-    meta = json.loads((tmp_path / "2000-01-01_Abc123VidXX" / "metadata.json").read_text())
-    assert meta["video_id"] == "Abc123VidXX"
-    assert meta["status"] == "ignored_too_old"
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    videos = [
+        {"id": "VID_NEWEST_1", "title": "Meeting 1", "date": yesterday, "is_live": False},
+        {"id": "VID_OLDER_2", "title": "Meeting 2", "date": yesterday, "is_live": False},
+        {"id": "VID_OLDEST_3", "title": "Meeting 3", "date": yesterday, "is_live": False},
+    ]
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: videos)
+    monkeypatch.setattr(TubeNews, "process_video", lambda **kw: ("skipped", 0))
 
-def test_mark_video_as_backlog_idempotent(tmp_path):
-    mark_video_as_backlog(tmp_path, "Abc123VidXX")
-    mark_video_as_backlog(tmp_path, "Abc123VidXX")  # should not raise
-    assert (tmp_path / "2000-01-01_Abc123VidXX").is_dir()
+    feed = {"channel_id": "UC_TEST_ID", "channel_name": "Test Channel", "focus": "test"}
+    process_feed(feed, None, {}, None)
+
+    channel_dir = tmp_path / "Test_Channel"
+    # All videos except index 0 must have ignored_too_old stubs.
+    for vid_id in ("VID_OLDER_2", "VID_OLDEST_3"):
+        stub_dir = channel_dir / f"2000-01-01_{vid_id}"
+        assert stub_dir.is_dir(), f"Expected ignored_too_old stub for {vid_id}"
+        meta = json.loads((stub_dir / "metadata.json").read_text())
+        assert meta["status"] == "ignored_too_old"
+        assert meta["video_id"] == vid_id
+
+    # The most-recent video must NOT receive a too-old stub.
+    assert not (channel_dir / "2000-01-01_VID_NEWEST_1").exists()
+
+
+def test_new_feed_ignored_stubs_are_idempotent(tmp_path, monkeypatch):
+    """Running process_feed twice on a new feed must not raise even though stubs already exist."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    videos = [
+        {"id": "VID_NEWEST_1", "title": "Meeting 1", "date": yesterday, "is_live": False},
+        {"id": "VID_OLDER_2", "title": "Meeting 2", "date": yesterday, "is_live": False},
+    ]
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: videos)
+    monkeypatch.setattr(TubeNews, "process_video", lambda **kw: ("skipped", 0))
+
+    feed = {"channel_id": "UC_TEST_ID", "channel_name": "Test Channel", "focus": "test"}
+    process_feed(feed, None, {}, None)
+    process_feed(feed, None, {}, None)  # must not raise
+
+    assert (tmp_path / "Test_Channel" / "2000-01-01_VID_OLDER_2").is_dir()
 
 
 # ---------------------------------------------------------------------------

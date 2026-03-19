@@ -123,7 +123,6 @@ YouTube Channel Pages (HTML scrape)
 
 | Function | Description |
 |---|---|
-| `mark_video_as_backlog(feed_dir, video_id)` | Writes a `2000-01-01_<id>` stub so the video is skipped on future runs |
 | `process_video(video_id, ...)` | Fetch + analyse one video; returns `"content_written"`, `"ai_rate_limited"`, or `"skipped"` |
 | `process_feed(feed, ...)` | Processes all new videos for one channel; returns `(content_changed, ai_rate_limited)` |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
@@ -203,7 +202,7 @@ archive/
 │   │   ├── metadata.json       # {video_id, video_title, status, processed_at}
 │   │   ├── 01_Story_Title.md
 │   │   └── 02_Another_Story.md
-│   ├── 2000-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 2000 date
+│   ├── 2000-01-01_XXXXXXXXXXX/ # ignored_too_old stubs use 2000 date prefix
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
 └── rss.xml                     # Regional meta-feed (all channels)

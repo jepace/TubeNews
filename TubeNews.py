@@ -869,26 +869,6 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
 # ---------------------------------------------------------------------------
 
 
-def mark_video_as_backlog(feed_dir: Path, video_id: str) -> None:
-    """Create a stub archive folder marking *video_id* as a backlog item.
-
-    When a channel is first added to the config, its entire back-catalogue
-    would be processed on the next run.  To avoid that, we call this function
-    for every video except the newest one, creating a dated stub that the main
-    loop treats as already handled.
-
-    The ``2000-01-01`` date prefix keeps these stubs sorted before real
-    meetings in tab completion while staying clearly distinct from actual dates.
-    """
-    stub_dir = feed_dir / f"2000-01-01_{video_id}"
-    stub_dir.mkdir(exist_ok=True)
-    metadata = {
-        "video_id": video_id,
-        "status": "ignored_too_old",
-        "processed_at": time.time(),
-    }
-    (stub_dir / "metadata.json").write_text(json.dumps(metadata))
-
 
 def process_video(
     video_id: str,
@@ -1067,11 +1047,11 @@ def process_feed(
         logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
 
     if is_new_feed:
-        backlog_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
-        if backlog_count:
-            logger.info(f"{channel_name}: TubeNews: New feed — marking {backlog_count} backlog video(s) as watched")
+        too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
+        if too_old_count:
+            logger.info(f"{channel_name}: TubeNews: New feed — marking {too_old_count} existing video(s) as too old to process")
 
-    # Videos that will actually be processed (not back-catalogued, not too fresh).
+    # Videos that will actually be processed (not too old, not too fresh).
     videos_to_process = [
         v for v in unprocessed
         if not (is_new_feed and all_ids.index(v["id"]) > 0)
@@ -1080,11 +1060,17 @@ def process_feed(
     total = len(videos_to_process)
 
     for video_info in unprocessed:
-        # On a brand-new feed, skip the entire back-catalogue except the
-        # most-recent video (index 0 in all_ids).  This prevents the
-        # first run from processing months of old meetings.
+        # On a brand-new feed, mark all but the most recent video as
+        # ignored_too_old so the first run doesn't process months of
+        # old meetings.
         if is_new_feed and all_ids.index(video_info["id"]) > 0:
-            mark_video_as_backlog(feed_dir, video_info["id"])
+            stub_dir = feed_dir / f"2000-01-01_{video_info['id']}"
+            stub_dir.mkdir(exist_ok=True)
+            (stub_dir / "metadata.json").write_text(json.dumps({
+                "video_id": video_info["id"],
+                "status": "ignored_too_old",
+                "processed_at": time.time(),
+            }))
             content_changed = True
             continue
 
