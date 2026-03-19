@@ -232,6 +232,14 @@ def _blog_url(token: str) -> str:
         return f"{base}/blog/{token}.html"
     return url_for("serve_blog_public", token=token, _external=True).replace(f"/blog/{token}", f"/blog/{token}.html")
 
+@app.context_processor
+def inject_user_blog_url():
+    """Make the current user's public blog URL available in every template."""
+    if current_user.is_authenticated and current_user.channel_ids:
+        return {"user_blog_url": _blog_url(current_user.feed_token)}
+    return {"user_blog_url": None}
+
+
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
     if not ts:
@@ -461,24 +469,6 @@ def serve_blog_public(token: str):
             continue
     abort(404)
 
-
-@app.route("/blog.html")
-@app.route("/blog")
-@login_required
-def serve_blog():
-    """Regenerate and serve the current user's blog page."""
-    cfg = _load_config()
-    try:
-        rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90))
-    except Exception as exc:
-        flash(f"Blog generation failed: {exc}", "error")
-        return redirect(url_for("dashboard"))
-    from TubeNews import slugify
-    blog_path = USERS_ROOT / slugify(current_user._data["name"]) / "index.html"
-    if not blog_path.exists():
-        flash("No blog content yet — run TubeNews.py to fetch stories first.", "error")
-        return redirect(url_for("dashboard"))
-    return send_file(blog_path, mimetype="text/html")
 
 
 # ---------------------------------------------------------------------------
