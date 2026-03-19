@@ -409,3 +409,70 @@ button.btn-danger-sm {
   margin-top: 0;
 }
 button.btn-danger-sm:hover { background: #fee2e2; }
+
+/* ── Blog page ───────────────────────────────────────────────── */
+
+.blog-header {
+  margin-bottom: 1.75rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--border);
+}
+
+.blog-header h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.blog-meta {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.blog-meta a { color: var(--accent); }
+
+.story {
+  padding: 1.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.story:last-child { border-bottom: none; }
+
+.story h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.story-dateline {
+  font-style: italic;
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.story-source {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.story-body p {
+  margin: 0.4rem 0;
+  line-height: 1.65;
+}
+
+.story-watch {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--danger);
+  text-decoration: none;
+}
+
+.story-watch:hover { text-decoration: underline; }
+
+.blog-empty {
+  color: var(--muted);
+  margin-top: 2rem;
+  font-size: 0.95rem;
+}
