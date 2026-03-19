@@ -43,6 +43,13 @@
           {% endfor %}
         </div>
 
+        <div class="form-row" style="margin-top:1rem;">
+          <label for="blog_name">Blog name <span class="hint">(optional — shown as the page title)</span></label>
+          <input type="text" id="blog_name" name="blog_name"
+                 value="{{ current_user._data.get('blog_name', '') }}"
+                 placeholder="TubeNews — {{ current_user.name }}">
+        </div>
+
         <button type="submit" class="btn-save">Subscribe</button>
       </form>
     {% else %}

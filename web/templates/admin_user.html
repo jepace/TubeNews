@@ -26,6 +26,12 @@
         <label for="email">Email</label>
         <input type="email" id="email" name="email" value="{{ u.email }}" required>
       </div>
+      <div class="form-row">
+        <label for="blog_name">Blog name <span class="hint">(optional)</span></label>
+        <input type="text" id="blog_name" name="blog_name"
+               value="{{ u._data.get('blog_name', '') }}"
+               placeholder="TubeNews — {{ u.name }}">
+      </div>
       <button type="submit">Save info</button>
     </form>
   </section>

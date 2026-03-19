@@ -394,6 +394,9 @@ def dashboard():
         selected = set(request.form.getlist("channel_ids"))
         valid_ids = {ch["channel_id"] for ch in channels}
         current_user.set_channel_ids(sorted(selected & valid_ids))
+        blog_name = request.form.get("blog_name", "").strip()
+        current_user._data["blog_name"] = blog_name
+        current_user._save()
         cfg = _load_config()
         try:
             rebuild_user_feed(current_user._data, base_url=_base_url())
@@ -529,6 +532,7 @@ def admin_user_info(uid: str):
             return redirect(url_for("admin_user", uid=uid))
     user._data["name"] = new_name
     user._data["email"] = new_email
+    user._data["blog_name"] = request.form.get("blog_name", "").strip()
     user._save()
     flash("User info updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
@@ -669,7 +673,8 @@ def admin_runs():
 @login_required
 @admin_required
 def admin_feeds():
-    return render_template("admin_feeds.html", channels=_load_channels())
+    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
+    return render_template("admin_feeds.html", channels=channels)
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])
@@ -693,43 +698,46 @@ def admin_feed_add():
                 _save_feeds(channels)
                 flash(f"Feed '{channel_name}' added.", "success")
                 return redirect(url_for("admin_feeds"))
-    return render_template("admin_feed.html", feed=None, idx=None)
+    return render_template("admin_feed.html", feed=None, channel_id=None)
 
 
-@app.route("/admin/feeds/<int:idx>/edit", methods=["GET", "POST"])
+@app.route("/admin/feeds/<channel_id>/edit", methods=["GET", "POST"])
 @login_required
 @admin_required
-def admin_feed_edit(idx: int):
+def admin_feed_edit(channel_id: str):
     channels = _load_channels()
-    if idx < 0 or idx >= len(channels):
+    idx = next((i for i, ch in enumerate(channels) if ch["channel_id"] == channel_id), None)
+    if idx is None:
         abort(404)
     feed = channels[idx]
     if request.method == "POST":
-        channel_id = request.form.get("channel_id", "").strip()
+        new_channel_id = request.form.get("channel_id", "").strip()
         channel_name = request.form.get("channel_name", "").strip()
         focus = request.form.get("focus", "").strip()
-        if not channel_id or not channel_name or not focus:
+        if not new_channel_id or not channel_name or not focus:
             flash("All fields are required.", "error")
-        elif not channel_id.startswith("UC"):
+        elif not new_channel_id.startswith("UC"):
             flash("Channel ID must start with 'UC'.", "error")
         else:
-            if any(ch["channel_id"] == channel_id and i != idx for i, ch in enumerate(channels)):
+            if any(ch["channel_id"] == new_channel_id and i != idx for i, ch in enumerate(channels)):
                 flash("Another feed already uses that channel ID.", "error")
             else:
-                channels[idx] = {"channel_id": channel_id, "channel_name": channel_name, "focus": focus}
+                channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
                 _save_feeds(channels)
                 flash(f"Feed '{channel_name}' updated.", "success")
                 return redirect(url_for("admin_feeds"))
-        feed = {"channel_id": channel_id, "channel_name": channel_name, "focus": focus}
-    return render_template("admin_feed.html", feed=feed, idx=idx)
+        feed = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
+        channel_id = new_channel_id
+    return render_template("admin_feed.html", feed=feed, channel_id=channel_id)
 
 
-@app.route("/admin/feeds/<int:idx>/delete", methods=["POST"])
+@app.route("/admin/feeds/<channel_id>/delete", methods=["POST"])
 @login_required
 @admin_required
-def admin_feed_delete(idx: int):
+def admin_feed_delete(channel_id: str):
     channels = _load_channels()
-    if idx < 0 or idx >= len(channels):
+    idx = next((i for i, ch in enumerate(channels) if ch["channel_id"] == channel_id), None)
+    if idx is None:
         abort(404)
     removed = channels.pop(idx)
     _save_feeds(channels)

@@ -785,11 +785,12 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90) -> No
             f"</article>"
         )
 
-    page_title = f"TubeNews — {name}"
+    page_title = user.get("blog_name") or f"TubeNews — {name}"
     meta_line = (
         f"{len(all_stories)} stories from {len(subscribed)} channel{'s' if len(subscribed) != 1 else ''} "
         f"— last {blog_days} days"
     )
+    nav_root = base_url.rstrip("/") if base_url else ""
     if base_url:
         rss_href = f"{base_url}/users/{slugify(name)}/rss.xml"
         rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_href}">'
@@ -803,9 +804,24 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90) -> No
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{page_title}</title>
 {rss_link}
-<style>{CSS}</style>
+<style>
+        nav.blog-nav {{
+            background: #fff; border-bottom: 1px solid #d1d5db;
+            padding: 0.55rem 1.25rem; margin: -40px -20px 30px;
+            display: flex; align-items: center; gap: 1.5rem;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }}
+        nav.blog-nav a {{ color: #2563eb; text-decoration: none; font-size: 0.9rem; }}
+        nav.blog-nav a:hover {{ text-decoration: underline; }}
+        nav.blog-nav .nav-brand {{ font-weight: 700; font-size: 1rem; }}
+        {CSS}
+</style>
 </head>
 <body>
+<nav class="blog-nav">
+  <a href="{nav_root}/" class="nav-brand">TubeNews</a>
+  <a href="{nav_root}/dashboard">My feed</a>
+</nav>
 <h1>{page_title}</h1>
 <p class="meta">{meta_line}</p>
 {"".join(story_blocks) if story_blocks else "<p>No stories yet.</p>"}
