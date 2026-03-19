@@ -236,7 +236,7 @@ def _blog_url(token: str) -> str:
 def inject_user_blog_url():
     """Make the current user's public blog URL available in every template."""
     if current_user.is_authenticated and current_user.channel_ids:
-        return {"user_blog_url": _blog_url(current_user.feed_token)}
+        return {"user_blog_url": url_for("serve_blog_public", token=current_user.feed_token)}
     return {"user_blog_url": None}
 
 
@@ -420,7 +420,7 @@ def dashboard():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
-        blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
+        blog_url=url_for("serve_blog_public", token=current_user.feed_token) if current_user.channel_ids else None,
     )
 
 
