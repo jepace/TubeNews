@@ -28,12 +28,8 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <div class="select-all-row">
-          <label class="checkbox-label">
-            <input type="checkbox" id="select-all"
-                   {% if channels|length == subscribed|length and channels %}checked{% endif %}>
-            <strong>All Channels (Meta Feed)</strong>
-            <span class="hint"> — receive everything</span>
-          </label>
+          <button type="button" class="btn-select-all" id="btn-select-all">Select all</button>
+          <button type="button" class="btn-select-all" id="btn-unselect-all">Unselect all</button>
         </div>
 
         <div class="channel-list" id="channel-list">
@@ -47,7 +43,7 @@
           {% endfor %}
         </div>
 
-        <button type="submit" class="btn-save">Save subscriptions</button>
+        <button type="submit" class="btn-save">Subscribe</button>
       </form>
     {% else %}
       <p class="muted">No channels are configured in TubeNews.json yet.</p>
@@ -56,35 +52,14 @@
 </div>
 
 <script>
-  // "All Channels" toggle
-  const selectAll = document.getElementById('select-all');
   const checkboxes = document.querySelectorAll('.channel-checkbox');
-
-  selectAll.addEventListener('change', () => {
-    checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+  document.getElementById('btn-select-all').addEventListener('click', () => {
+    checkboxes.forEach(cb => { cb.checked = true; });
+  });
+  document.getElementById('btn-unselect-all').addEventListener('click', () => {
+    checkboxes.forEach(cb => { cb.checked = false; });
   });
 
-  checkboxes.forEach(cb => {
-    cb.addEventListener('change', () => {
-      selectAll.checked = [...checkboxes].every(c => c.checked);
-      if (!selectAll.checked && [...checkboxes].some(c => c.checked)) {
-        selectAll.indeterminate = true;
-      } else {
-        selectAll.indeterminate = false;
-      }
-    });
-  });
-
-  // Set indeterminate state on load if partially selected
-  (function () {
-    const total = checkboxes.length;
-    const checked = [...checkboxes].filter(c => c.checked).length;
-    if (checked > 0 && checked < total) {
-      selectAll.indeterminate = true;
-    }
-  })();
-
-  // Copy feed URL
   function copyFeedUrl() {
     const input = document.getElementById('feed-url');
     navigator.clipboard.writeText(input.value).then(() => {

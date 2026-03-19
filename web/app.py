@@ -201,7 +201,7 @@ def _load_config() -> dict:
 
 def _save_feeds(feeds: list[dict]) -> None:
     cfg = _load_config()
-    cfg["feeds"] = feeds
+    cfg["feeds"] = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
 
@@ -587,6 +587,29 @@ def admin_user_lock(uid: str):
     return redirect(url_for("admin_user", uid=uid))
 
 
+@app.route("/admin/user/<uid>/promote", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_promote(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    if user.email == current_user.email:
+        flash("You cannot change your own admin status.", "error")
+        return redirect(url_for("admin_user", uid=uid))
+    cfg = _load_config()
+    admin_emails = [e.strip().lower() for e in cfg.get("admin_emails", [])]
+    if user.email in admin_emails:
+        admin_emails.remove(user.email)
+        flash(f"Admin access revoked for {user.email}.", "success")
+    else:
+        admin_emails.append(user.email)
+        flash(f"{user.email} is now an admin.", "success")
+    cfg["admin_emails"] = admin_emails
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    return redirect(url_for("admin_user", uid=uid))
+
+
 @app.route("/admin/user/<uid>/rotate-token", methods=["POST"])
 @login_required
 @admin_required
@@ -646,8 +669,7 @@ def admin_runs():
 @login_required
 @admin_required
 def admin_feeds():
-    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
-    return render_template("admin_feeds.html", channels=channels)
+    return render_template("admin_feeds.html", channels=_load_channels())
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])
