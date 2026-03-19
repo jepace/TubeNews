@@ -225,6 +225,13 @@ def _feed_url(token: str) -> str:
         return f"{base}/feed/{token}.xml"
     return url_for("serve_feed", token=token, _external=True).replace(f"/feed/{token}", f"/feed/{token}.xml")
 
+
+def _blog_url(token: str) -> str:
+    base = _base_url()
+    if base:
+        return f"{base}/blog/{token}.html"
+    return url_for("serve_blog_public", token=token, _external=True).replace(f"/blog/{token}", f"/blog/{token}.html")
+
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
     if not ts:
@@ -352,7 +359,7 @@ def dashboard():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
-        blog_url=url_for("serve_blog") + ".html" if current_user.channel_ids else None,
+        blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
     )
 
 
@@ -377,6 +384,25 @@ def serve_feed(token: str):
                 rss_path = user_json.parent / "rss.xml"
                 if rss_path.exists():
                     return send_file(rss_path, mimetype="application/rss+xml")
+                abort(404)
+        except Exception:
+            continue
+    abort(404)
+
+
+@app.route("/blog/<token>.html")
+@app.route("/blog/<token>")
+def serve_blog_public(token: str):
+    """Serve a user's blog page by secret token — no login required."""
+    if not USERS_ROOT.is_dir():
+        abort(404)
+    for user_json in USERS_ROOT.glob("*/user.json"):
+        try:
+            data = json.loads(user_json.read_text())
+            if data.get("feed_token") == token:
+                blog_path = user_json.parent / "index.html"
+                if blog_path.exists():
+                    return send_file(blog_path, mimetype="text/html")
                 abort(404)
         except Exception:
             continue
