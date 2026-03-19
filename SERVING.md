@@ -48,7 +48,7 @@ Add your email to `TubeNews.json`:
 
 ```json
 {
-  "admin_emails": ["you@example.com"],
+  "admin_users": ["you@example.com"],
   ...
 }
 ```
@@ -60,7 +60,7 @@ python web/app.py
 ```
 
 Open `http://your-server:8000` in a browser (default port; change with `"port"` in `TubeNews.json`). Register an account — your email
-matches `admin_emails` so you will have admin access automatically.
+matches `admin_users` so you will have admin access automatically.
 
 ### 5. Set base_url
 

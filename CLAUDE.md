@@ -399,7 +399,7 @@ error and redirects to the dashboard instead.
 | GET | `/logout` | `logout` | Clears session |
 | GET | `/blog` | `serve_blog` | Regenerates and serves the logged-in user's blog |
 
-**Admin required (`admin_emails` in config):**
+**Admin required (`admin_users` in config):**
 
 | Method | Route | Handler | Description |
 |---|---|---|---|
@@ -422,7 +422,7 @@ error and redirects to the dashboard instead.
 - Login and register routes are rate-limited (flask-limiter).
 - `SESSION_COOKIE_SECURE` is only set when `TUBENEWS_HTTPS=true` is in the
   environment, so local dev works without HTTPS.
-- Admins are determined solely by email match against `admin_emails` in
+- Admins are determined solely by email match against `admin_users` in
   `TubeNews.json` — there is no `is_admin` flag stored in `user.json`.
 - Locked accounts (`"locked": true`) fail `is_active` and are rejected by
   flask-login on every request without needing to log out.
