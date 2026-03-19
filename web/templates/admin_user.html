@@ -43,11 +43,8 @@
     <form method="post" action="{{ url_for('admin_user_subscriptions', uid=u.get_id()) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="select-all-row">
-        <label class="checkbox-label">
-          <input type="checkbox" id="select-all"
-                 {% if channels|length == subscribed|length and channels %}checked{% endif %}>
-          <strong>All Channels</strong>
-        </label>
+        <button type="button" class="btn-select-all" id="btn-select-all">Select all</button>
+        <button type="button" class="btn-select-all" id="btn-unselect-all">Select none</button>
       </div>
       <div class="channel-list" id="channel-list">
         {% for ch in channels %}
@@ -151,22 +148,12 @@
 </div>
 
 <script>
-  // Select-all toggle
-  const selectAll = document.getElementById('select-all');
   const checkboxes = document.querySelectorAll('.channel-checkbox');
-  if (selectAll) {
-    selectAll.addEventListener('change', () => {
-      checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
-    });
-    checkboxes.forEach(cb => {
-      cb.addEventListener('change', () => {
-        const total = checkboxes.length, checked = [...checkboxes].filter(c => c.checked).length;
-        selectAll.checked = checked === total;
-        selectAll.indeterminate = checked > 0 && checked < total;
-      });
-    });
-    const total = checkboxes.length, checked = [...checkboxes].filter(c => c.checked).length;
-    if (checked > 0 && checked < total) selectAll.indeterminate = true;
+  const btnSelectAll = document.getElementById('btn-select-all');
+  const btnUnselectAll = document.getElementById('btn-unselect-all');
+  if (btnSelectAll) {
+    btnSelectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = true; }); });
+    btnUnselectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = false; }); });
   }
 
   function copyFeedUrl() {

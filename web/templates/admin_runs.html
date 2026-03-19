@@ -67,7 +67,7 @@
         <td>{{ ch.processed }}</td>
         <td>{{ ch.story_count }}</td>
         <td class="muted">{{ ch.ignored + ch.no_stories }}</td>
-        <td class="muted">{{ ch.last_processed | format_ts }}</td>
+        <td class="muted">{{ ch.last_processed | format_datetime }}</td>
       </tr>
       {% endfor %}
     </tbody>
