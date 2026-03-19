@@ -250,6 +250,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
 | `blog_days` | No | Days of stories to include in per-user blog pages (default: `90`) |
+| `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
 
