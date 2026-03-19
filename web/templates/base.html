@@ -16,7 +16,7 @@
           <a href="{{ url_for('admin_feeds') }}">Feeds</a>
           <a href="{{ url_for('admin_runs') }}">Runs</a>
         {% endif %}
-        <a href="{{ url_for('serve_blog') }}">Blog</a>
+        {% if user_blog_url %}<a href="{{ user_blog_url }}">Blog</a>{% endif %}
         {% if current_user.is_admin %}
           <a href="{{ url_for('admin_user', uid=current_user.get_id()) }}" class="nav-user">{{ current_user.name }}</a>
         {% else %}
