@@ -130,7 +130,7 @@ class User(UserMixin):
     def is_admin(self) -> bool:
         try:
             cfg = json.loads(CONFIG_FILE.read_text())
-            return self.email in [e.strip().lower() for e in cfg.get("admin_emails", [])]
+            return self.email in [e.strip().lower() for e in cfg.get("admin_users", [])]
         except Exception:
             return False
 
@@ -683,14 +683,14 @@ def admin_user_promote(uid: str):
         flash("You cannot change your own admin status.", "error")
         return redirect(url_for("admin_user", uid=uid))
     cfg = _load_config()
-    admin_emails = [e.strip().lower() for e in cfg.get("admin_emails", [])]
-    if user.email in admin_emails:
-        admin_emails.remove(user.email)
+    admin_users = [e.strip().lower() for e in cfg.get("admin_users", [])]
+    if user.email in admin_users:
+        admin_users.remove(user.email)
         flash(f"Admin access revoked for {user.email}.", "success")
     else:
-        admin_emails.append(user.email)
+        admin_users.append(user.email)
         flash(f"{user.email} is now an admin.", "success")
-    cfg["admin_emails"] = admin_emails
+    cfg["admin_users"] = admin_users
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
     return redirect(url_for("admin_user", uid=uid))
 
