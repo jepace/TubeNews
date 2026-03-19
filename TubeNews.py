@@ -1091,18 +1091,24 @@ def main() -> None:
     ai_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()
 
-    def _run_feed(feed: dict) -> int:
+    def _run_feed(feed: dict) -> dict:
         content_changed, _, stories_written = process_feed(
             feed, supadata_client, config, ai_rate_limit_event
         )
         if content_changed:
             rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
             any_content_changed.set()
-        return stories_written
+        return {
+            "channel_id": feed["channel_id"],
+            "channel_name": feed["channel_name"],
+            "stories_written": stories_written,
+        }
 
+    started_at = time.time()
     max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        total_stories = sum(executor.map(_run_feed, config["feeds"]))
+        feed_results = list(executor.map(_run_feed, config["feeds"]))
+    total_stories = sum(r["stories_written"] for r in feed_results)
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
         rebuild_meta_feed(base_url=config.get("base_url", ""))
@@ -1116,6 +1122,23 @@ def main() -> None:
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
+
+    run_log_path = STORAGE_ROOT / "run_log.json"
+    try:
+        runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
+    except Exception:
+        runs = []
+    runs.append({
+        "started_at": started_at,
+        "finished_at": time.time(),
+        "total_stories": total_stories,
+        "ai_rate_limited": ai_rate_limit_event.is_set(),
+        "feeds": feed_results,
+    })
+    try:
+        run_log_path.write_text(json.dumps(runs[-30:], indent=2))
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

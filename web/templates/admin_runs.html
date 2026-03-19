@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Runs — TubeNews{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <h1>Run History</h1>
+
+  {% if runs %}
+  <table class="user-table">
+    <thead>
+      <tr>
+        <th>Started</th>
+        <th>Duration</th>
+        <th>Stories</th>
+        <th>AI</th>
+        <th>Channels</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td class="mono">{{ run.started_at | int | format_datetime }}</td>
+        <td class="muted">{{ ((run.finished_at - run.started_at) | int) }}s</td>
+        <td>{{ run.total_stories }}</td>
+        <td>
+          {% if run.ai_rate_limited %}
+            <span class="pill pill-locked">Rate limited</span>
+          {% else %}
+            <span class="pill pill-active">OK</span>
+          {% endif %}
+        </td>
+        <td>
+          {% set active = run.feeds | selectattr("stories_written", "gt", 0) | list %}
+          {% if active %}
+            {% for f in active %}
+              <span title="{{ f.channel_name }}">{{ f.channel_name }} (+{{ f.stories_written }})</span>{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          {% else %}
+            <span class="muted">No new stories</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No runs recorded yet. Run <code>TubeNews.py</code> to generate the first entry.</p>
+  {% endif %}
+
+  <h1 style="margin-top: 2.5rem;">Channel Health</h1>
+
+  {% if channel_stats %}
+  <table class="user-table">
+    <thead>
+      <tr>
+        <th>Channel</th>
+        <th>Processed</th>
+        <th>Stories</th>
+        <th>Skipped</th>
+        <th>Last activity</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ch in channel_stats %}
+      <tr>
+        <td>{{ ch.channel_name }}</td>
+        <td>{{ ch.processed }}</td>
+        <td>{{ ch.story_count }}</td>
+        <td class="muted">{{ ch.ignored + ch.no_stories }}</td>
+        <td class="muted">{{ ch.last_processed | format_ts }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No archive data found.</p>
+  {% endif %}
+</div>
+{% endblock %}

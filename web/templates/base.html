@@ -14,6 +14,7 @@
         {% if current_user.is_admin %}
           <a href="{{ url_for('admin_users') }}">Users</a>
           <a href="{{ url_for('admin_feeds') }}">Feeds</a>
+          <a href="{{ url_for('admin_runs') }}">Runs</a>
         {% endif %}
         <span class="nav-user">{{ current_user.name }}</span>
         <a href="{{ url_for('logout') }}">Log out</a>

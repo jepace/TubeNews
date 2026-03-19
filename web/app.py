@@ -239,6 +239,13 @@ def format_ts(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+@app.template_filter("format_datetime")
+def format_datetime(ts: int) -> str:
+    if not ts:
+        return "—"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def admin_required(f):
     """Decorator: 403 unless the logged-in user is an admin."""
     @wraps(f)
@@ -247,6 +254,49 @@ def admin_required(f):
             abort(403)
         return f(*args, **kwargs)
     return decorated
+
+
+def _archive_channel_stats() -> list[dict]:
+    """Scan archive dirs and return per-channel processing stats."""
+    stats = []
+    if not STORAGE_ROOT.is_dir():
+        return stats
+    for channel_dir in STORAGE_ROOT.iterdir():
+        if not channel_dir.is_dir() or channel_dir.name == "users":
+            continue
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            info = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        processed = ignored = no_stories = story_count = 0
+        last_processed = 0
+        for meta_file in channel_dir.glob("*/metadata.json"):
+            try:
+                meta = json.loads(meta_file.read_text())
+                status = meta.get("status")
+                if status == "processed":
+                    processed += 1
+                    story_count += len(list(meta_file.parent.glob("[0-9]*.md")))
+                    last_processed = max(last_processed, meta.get("processed_at", 0))
+                elif status == "ignored_too_old":
+                    ignored += 1
+                elif status == "no_stories":
+                    no_stories += 1
+            except Exception:
+                continue
+        stats.append({
+            "channel_id": info.get("channel_id", ""),
+            "channel_name": info.get("channel_name", channel_dir.name),
+            "processed": processed,
+            "ignored": ignored,
+            "no_stories": no_stories,
+            "story_count": story_count,
+            "last_processed": last_processed,
+        })
+    return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +624,22 @@ def admin_user_delete(uid: str):
 # ---------------------------------------------------------------------------
 # Admin feed routes
 # ---------------------------------------------------------------------------
+
+
+@app.route("/admin/runs")
+@login_required
+@admin_required
+def admin_runs():
+    run_log_path = STORAGE_ROOT / "run_log.json"
+    try:
+        runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
+    except Exception:
+        runs = []
+    return render_template(
+        "admin_runs.html",
+        runs=list(reversed(runs)),
+        channel_stats=_archive_channel_stats(),
+    )
 
 
 @app.route("/admin/feeds")
