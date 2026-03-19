@@ -779,7 +779,7 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
             + (f" &mdash; <em>{video_title}</em>" if video_title else "")
             + f"</p>\n"
             f"  <div class='body'>{paras}</div>\n"
-            f"  <a class='watch' href='{yt_url}'>&#9654; Watch source video</a>\n"
+            f"  <a class='watch' href='{yt_url}' target='_blank' rel='noopener'>&#9654; Watch source video</a>\n"
             f"</article>"
         )
 
