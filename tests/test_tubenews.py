@@ -20,6 +20,7 @@ from TubeNews import (
     rebuild_meta_feed,
     rebuild_user_feed,
     rebuild_user_blog,
+    build_user_feed_xml,
     write_story_files,
     mark_video_as_backlog,
     _relative_date_to_iso,
@@ -602,3 +603,194 @@ def test_process_feed_empty_videos_no_content_changed_when_rss_exists(tmp_path, 
     feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
     content_changed, _, _ = process_feed(feed, None, {}, None)
     assert not content_changed
+
+
+# ---------------------------------------------------------------------------
+# build_user_feed_xml
+# ---------------------------------------------------------------------------
+
+def test_build_user_feed_xml_returns_bytes(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    result = build_user_feed_xml(user)
+    assert isinstance(result, bytes)
+
+def test_build_user_feed_xml_is_valid_rss(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    result = build_user_feed_xml(user)
+    assert b"<rss" in result
+    assert b"</rss>" in result
+
+def test_build_user_feed_xml_includes_subscribed(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    result = build_user_feed_xml(user)
+    assert b"Alpha City Council" in result
+
+def test_build_user_feed_xml_excludes_unsubscribed(user_archive):
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    result = build_user_feed_xml(user)
+    assert b"Beta City Council" not in result
+
+def test_build_user_feed_xml_no_subscriptions_empty_feed(user_archive):
+    user = {"name": "No Subs", "channel_ids": []}
+    result = build_user_feed_xml(user)
+    assert b"Alpha City Council" not in result
+    assert b"Beta City Council" not in result
+
+def test_build_user_feed_xml_multiple_channels(user_archive):
+    user = {"name": "Both", "channel_ids": ["UC_ALPHA_ID", "UC_BETA__ID"]}
+    result = build_user_feed_xml(user)
+    assert b"Alpha City Council" in result
+    assert b"Beta City Council" in result
+
+def test_build_user_feed_xml_does_not_write_to_disk(user_archive):
+    """Key contract: build_user_feed_xml must never touch the filesystem."""
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    build_user_feed_xml(user)
+    assert not (user_archive / "users" / "Jane_Doe" / "rss.xml").exists()
+
+def test_build_user_feed_xml_skips_ignored_too_old(tmp_path, monkeypatch):
+    """Stories from ignored_too_old meetings must not appear in the feed."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    channel_dir = tmp_path / "test_ch"
+    m_ignored = _make_meeting(channel_dir, "2000-01-01", "OLDVID12345", "Old Meeting",
+                              status="ignored_too_old")
+    _write_story(m_ignored, "01_Old.md", "Ghost Story", "CITY — Jan 1, 2000", "Old.", 0)
+    m_recent = _make_meeting(channel_dir, "2026-01-01", "NEWVID12345", "Recent Meeting")
+    _write_story(m_recent, "01_New.md", "New Story", "CITY — Jan 1, 2026", "New.", 60)
+    (channel_dir / "channel.json").write_text(
+        json.dumps({"channel_id": "UC_TEST_ID", "channel_name": "Test Channel"})
+    )
+
+    user = {"name": "Checker", "channel_ids": ["UC_TEST_ID"]}
+    result = build_user_feed_xml(user).decode()
+    assert "Ghost Story" not in result
+    assert "New Story" in result
+
+def test_build_user_feed_xml_includes_youtube_link(user_archive):
+    """Each story entry must link to the YouTube video with a timestamp."""
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    result = build_user_feed_xml(user).decode()
+    assert "youtu.be/" in result
+    assert "?t=" in result
+
+def test_rebuild_user_feed_writes_same_stories_as_build_user_feed_xml(user_archive):
+    """rebuild_user_feed is a thin wrapper: the file it writes must have the same
+    story content as build_user_feed_xml returns."""
+    user = {"name": "Compare", "channel_ids": ["UC_ALPHA_ID"]}
+
+    xml_bytes = build_user_feed_xml(user)
+    rebuild_user_feed(user)
+    written = (user_archive / "users" / "Compare" / "rss.xml").read_bytes()
+
+    # Both must include Alpha stories …
+    assert b"Story 1 from Alpha City Council" in xml_bytes
+    assert b"Story 1 from Alpha City Council" in written
+    # … and exclude Beta stories.
+    assert b"Beta City Council" not in xml_bytes
+    assert b"Beta City Council" not in written
+
+
+# ---------------------------------------------------------------------------
+# Feed / blog parity — feed and blog must surface the same stories
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def parity_archive(tmp_path, monkeypatch):
+    """Archive with two channels, two stories each; all meetings are recent."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    _setup_channel(tmp_path, "channel_a", "UC_PA_ID", "Channel A", story_count=2)
+    _setup_channel(tmp_path, "channel_b", "UC_PB_ID", "Channel B", story_count=2)
+    return tmp_path
+
+
+def test_feed_and_blog_contain_same_story_titles(parity_archive):
+    """Every story title present in the RSS feed must also appear in the blog and vice versa."""
+    user = {
+        "name": "Parity",
+        "channel_ids": ["UC_PA_ID", "UC_PB_ID"],
+        "feed_token": "parity-tok",
+    }
+
+    feed_xml = build_user_feed_xml(user).decode()
+    rebuild_user_blog(user)
+    blog_html = (parity_archive / "users" / "Parity" / "index.html").read_text()
+
+    expected_titles = [
+        "Story 1 from Channel A",
+        "Story 2 from Channel A",
+        "Story 1 from Channel B",
+        "Story 2 from Channel B",
+    ]
+    for title in expected_titles:
+        assert title in feed_xml,  f"Feed missing story: {title!r}"
+        assert title in blog_html, f"Blog missing story: {title!r}"
+
+
+def test_feed_and_blog_exclude_same_unsubscribed_stories(parity_archive):
+    """Stories from an unsubscribed channel must be absent from both feed and blog."""
+    user = {
+        "name": "Selective",
+        "channel_ids": ["UC_PA_ID"],          # subscribed to A only
+        "feed_token": "selective-tok",
+    }
+
+    feed_xml = build_user_feed_xml(user).decode()
+    rebuild_user_blog(user)
+    blog_html = (parity_archive / "users" / "Selective" / "index.html").read_text()
+
+    assert "Story 1 from Channel A" in feed_xml
+    assert "Story 1 from Channel A" in blog_html
+    assert "Story 1 from Channel B" not in feed_xml,  "Feed must exclude unsubscribed channel"
+    assert "Story 1 from Channel B" not in blog_html, "Blog must exclude unsubscribed channel"
+
+
+def test_feed_and_blog_empty_when_no_subscriptions(parity_archive):
+    """A user with no subscriptions must get an empty feed and an empty-state blog."""
+    user = {
+        "name": "Empty",
+        "channel_ids": [],
+        "feed_token": "empty-tok",
+    }
+
+    feed_xml = build_user_feed_xml(user).decode()
+    rebuild_user_blog(user)
+    blog_html = (parity_archive / "users" / "Empty" / "index.html").read_text()
+
+    assert "Channel A" not in feed_xml
+    assert "Channel B" not in feed_xml
+    assert "Channel A" not in blog_html
+    assert "Channel B" not in blog_html
+
+
+def test_blog_date_filter_does_not_affect_feed(tmp_path, monkeypatch):
+    """An old story (beyond blog_days) is absent from the blog but still present
+    in the RSS feed, which has no date filter."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    channel_dir = tmp_path / "old_ch"
+    old_meta = {
+        "video_id": "VIDold12345",
+        "video_title": "Old Meeting",
+        "status": "processed",
+        "processed_at": int(time.time()) - (200 * 86400),  # 200 days ago
+    }
+    meeting_dir = channel_dir / "2020-01-01_VIDold12345"
+    meeting_dir.mkdir(parents=True)
+    (meeting_dir / "metadata.json").write_text(json.dumps(old_meta))
+    _write_story(meeting_dir, "01_Old.md", "Ancient Story", "CITY — Jan 1, 2020", "Old.", 0)
+    (channel_dir / "channel.json").write_text(
+        json.dumps({"channel_id": "UC_OLD_ID", "channel_name": "Old Channel"})
+    )
+
+    user = {"name": "Time", "channel_ids": ["UC_OLD_ID"], "feed_token": "time-tok"}
+
+    feed_xml = build_user_feed_xml(user).decode()
+    rebuild_user_blog(user, blog_days=90)
+    blog_html = (tmp_path / "users" / "Time" / "index.html").read_text()
+
+    assert "Ancient Story" in feed_xml,      "Feed has no date filter — old stories must still appear"
+    assert "Ancient Story" not in blog_html, "Blog date filter must exclude old stories"
