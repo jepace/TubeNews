@@ -341,12 +341,7 @@ def fetch_transcript(
                 f"{int(getattr(seg, 'offset', 0) / 1000)}s --> {getattr(seg, 'text', '')}"
                 for seg in segments
             ]
-            lang = getattr(transcript_response, "lang", "?")
-            available = getattr(transcript_response, "available_langs", [])
-            logger.debug(
-                f"{prefix}Supadata: Received {len(segments)} segments "
-                f"(lang={lang}, available={available})"
-            )
+            logger.debug(f"{prefix}Supadata: Received {len(segments)} segments")
             return "\n".join(lines)
     except Exception as exc:
         if "live streaming" in str(exc).lower():
