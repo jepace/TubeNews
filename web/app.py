@@ -388,7 +388,7 @@ def register():
 @app.route("/dashboard", methods=["GET", "POST"])
 @login_required
 def dashboard():
-    channels = _load_channels()
+    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
 
     if request.method == "POST":
         selected = set(request.form.getlist("channel_ids"))
@@ -502,7 +502,7 @@ def admin_user(uid: str):
     user = _find_user_by_id(uid)
     if not user:
         abort(404)
-    channels = _load_channels()
+    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
     return render_template(
         "admin_user.html",
         u=user,

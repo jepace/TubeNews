@@ -743,8 +743,9 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90) -> No
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
 
     CSS = """
-        body { font-family: Georgia, serif; max-width: 740px; margin: 40px auto;
-               padding: 0 20px; color: #222; background: #fafaf8; }
+        body { font-family: Georgia, serif; margin: 0; padding: 0;
+               color: #222; background: #fafaf8; }
+        .blog-content { max-width: 740px; margin: 0 auto; padding: 30px 20px 40px; }
         h1 { font-size: 1.6em; border-bottom: 2px solid #333; padding-bottom: 8px; }
         .meta { font-size: 0.85em; color: #666; margin-bottom: 28px; }
         article { border-bottom: 1px solid #ddd; padding: 24px 0; }
@@ -807,24 +808,29 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90) -> No
 <style>
         nav.blog-nav {{
             background: #fff; border-bottom: 1px solid #d1d5db;
-            padding: 0.55rem 1.25rem; margin: -40px -20px 30px;
-            display: flex; align-items: center; gap: 1.5rem;
+            padding: 0 1.5rem; height: 52px;
+            display: flex; align-items: center; justify-content: space-between;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         }}
+        nav.blog-nav .nav-left {{ display: flex; align-items: center; gap: 1.5rem; }}
         nav.blog-nav a {{ color: #2563eb; text-decoration: none; font-size: 0.9rem; }}
         nav.blog-nav a:hover {{ text-decoration: underline; }}
-        nav.blog-nav .nav-brand {{ font-weight: 700; font-size: 1rem; }}
+        nav.blog-nav .nav-brand {{ font-weight: 700; font-size: 1.1rem; }}
         {CSS}
 </style>
 </head>
 <body>
 <nav class="blog-nav">
-  <a href="{nav_root}/" class="nav-brand">TubeNews</a>
-  <a href="{nav_root}/dashboard">My feed</a>
+  <div class="nav-left">
+    <a href="/" class="nav-brand">TubeNews</a>
+    <a href="/dashboard">My feed</a>
+  </div>
 </nav>
+<div class="blog-content">
 <h1>{page_title}</h1>
 <p class="meta">{meta_line}</p>
 {"".join(story_blocks) if story_blocks else "<p>No stories yet.</p>"}
+</div>
 </body>
 </html>
 """

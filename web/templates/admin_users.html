@@ -46,8 +46,17 @@
         <td class="muted">
           {{ u._data.get('created_at', 0) | format_ts }}
         </td>
-        <td>
+        <td style="white-space:nowrap">
           <a href="{{ url_for('admin_user', uid=u.get_id()) }}" class="btn-sm">Edit</a>
+          {% if u.email != current_user.email %}
+          <form method="post" action="{{ url_for('admin_user_delete', uid=u.get_id()) }}"
+                style="display:inline"
+                onsubmit="return confirm('Permanently delete {{ u.email }}? This cannot be undone.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="confirm_email" value="{{ u.email }}">
+            <button type="submit" class="btn-danger-sm">Delete</button>
+          </form>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
