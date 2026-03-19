@@ -328,7 +328,8 @@ def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
                 if meta.get("processed_at", 0) < cutoff:
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
-                    raw.append({"file": story_file, "meta": meta, "channel_name": channel_name})
+                    raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
+                                "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
             except Exception:
                 continue
     raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
@@ -344,6 +345,8 @@ def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
                 "video_id": entry["meta"]["video_id"],
                 "video_title": entry["meta"].get("video_title", ""),
                 "channel_name": entry["channel_name"],
+                "channel_slug": entry.get("channel_slug", ""),
+                "meeting_id": entry.get("meeting_id", ""),
                 "processed_at": entry["meta"].get("processed_at", 0),
             })
         except Exception:
@@ -371,6 +374,37 @@ def serve_archive(filename=""):
         abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None
     return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
+
+
+@app.route("/transcript/<channel_slug>/<meeting_id>")
+def serve_transcript(channel_slug, meeting_id):
+    """Render a transcript as a readable HTML page with per-segment anchors.
+
+    URL fragment ``#t<seconds>`` scrolls to (and highlights) the matching
+    segment, e.g. ``/transcript/my_channel/2026-03-14_abc123#t120``.
+    """
+    import re as _re
+    transcript_path = STORAGE_ROOT / channel_slug / meeting_id / "transcript.txt"
+    if not transcript_path.exists():
+        abort(404)
+
+    raw = transcript_path.read_text(encoding="utf-8")
+    segments = []
+    for line in raw.splitlines():
+        m = _re.match(r"^(\d+)s\s+-->\s+(.*)", line)
+        if m:
+            segments.append({"seconds": int(m.group(1)), "text": m.group(2)})
+
+    # Derive a human-readable title from the meeting directory name
+    meeting_label = meeting_id.replace("_", " — ", 1)
+
+    return render_template(
+        "transcript.html",
+        channel_slug=channel_slug,
+        meeting_id=meeting_id,
+        meeting_label=meeting_label,
+        segments=segments,
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])

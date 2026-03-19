@@ -393,7 +393,7 @@ def call_gemini_api(
         "Pyramid style.\n"
         "2. CONTENT: Focus on the 'Why it Matters'. Skip ceremonial talk.\n"
         "3. DATELINE: Construct a formal AP-style dateline "
-        "(e.g., 'GONZALES, Calif. — March 14, 2026').\n\n"
+        "(e.g., 'SPRINGFIELD, Mo. — March 14, 2026').\n\n"
         "Return result ONLY as raw JSON list of objects with keys: "
         "'title', 'dateline', 'content', 'start_time_seconds'."
     )
@@ -733,7 +733,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
                 if metadata.get("processed_at", 0) < cutoff:
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
-                    all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name})
+                    all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name,
+                                        "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
             except Exception:
                 continue
 
@@ -771,13 +772,19 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
             for p in story["body_html"].split("<br>")
             if p.strip()
         )
+        transcript_link = ""
+        if entry.get("channel_slug") and entry.get("meeting_id"):
+            t_url = f"/transcript/{entry['channel_slug']}/{entry['meeting_id']}#t{story['start_seconds']}"
+            transcript_link = f" &mdash; <a class='watch' href='{t_url}' target='_blank' rel='noopener'>&#128221; Read transcript</a>"
         story_blocks.append(
             f"<article>\n"
             f"  <h2>{story['title']}</h2>\n"
             f"  <p class='dateline'>{story['dateline']}</p>\n"
             f"  <p class='source'>{entry['channel_name']}"
             + (f" &mdash; <em>{video_title}</em>" if video_title else "")
-            + f" &mdash; <a class='watch' href='{yt_url}' target='_blank' rel='noopener'>&#9654; Watch source</a></p>\n"
+            + f" &mdash; <a class='watch' href='{yt_url}' target='_blank' rel='noopener'>&#9654; Watch source</a>"
+            + transcript_link
+            + f"</p>\n"
             f"  <div class='body'>{paras}</div>\n"
             f"</article>"
         )
