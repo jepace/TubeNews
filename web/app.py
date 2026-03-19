@@ -49,7 +49,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, rebuild_user_blog, rebuild_user_feed  # noqa: E402
+from TubeNews import STORAGE_ROOT, rebuild_user_feed, parse_story_file  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -232,13 +232,6 @@ def _blog_url(token: str) -> str:
         return f"{base}/blog/{token}.html"
     return url_for("serve_blog_public", token=token, _external=True).replace(f"/blog/{token}", f"/blog/{token}.html")
 
-@app.context_processor
-def inject_user_blog_url():
-    """Make the current user's public blog URL available in every template."""
-    if current_user.is_authenticated and current_user.channel_ids:
-        return {"user_blog_url": url_for("serve_blog_public", token=current_user.feed_token)}
-    return {"user_blog_url": None}
-
 
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
@@ -307,6 +300,56 @@ def _archive_channel_stats() -> list[dict]:
     return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
+def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
+    """Return parsed stories for a user's subscribed channels, newest-first."""
+    subscribed = set(user_data.get("channel_ids", []))
+    cutoff = time.time() - blog_days * 86400
+    raw: list[dict] = []
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            channel_info = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        if channel_info.get("channel_id") not in subscribed:
+            continue
+        channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+        for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            meta_path = meeting_dir / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+                if meta.get("status") == "ignored_too_old":
+                    continue
+                if meta.get("processed_at", 0) < cutoff:
+                    continue
+                for story_file in meeting_dir.glob("[0-9]*.md"):
+                    raw.append({"file": story_file, "meta": meta, "channel_name": channel_name})
+            except Exception:
+                continue
+    raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
+    stories = []
+    for entry in raw:
+        try:
+            s = parse_story_file(entry["file"])
+            stories.append({
+                "title": s["title"],
+                "dateline": s["dateline"],
+                "body_html": s["body_html"],
+                "start_seconds": s["start_seconds"],
+                "video_id": entry["meta"]["video_id"],
+                "video_title": entry["meta"].get("video_title", ""),
+                "channel_name": entry["channel_name"],
+                "processed_at": entry["meta"].get("processed_at", 0),
+            })
+        except Exception:
+            continue
+    return stories
+
+
 # ---------------------------------------------------------------------------
 # Public routes
 # ---------------------------------------------------------------------------
@@ -315,7 +358,7 @@ def _archive_channel_stats() -> list[dict]:
 @app.route("/")
 def index():
     if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("serve_blog"))
     return redirect(url_for("login"))
 
 
@@ -346,7 +389,7 @@ def login():
                 flash("This account has been locked. Contact an administrator.", "error")
             else:
                 login_user(user, remember=remember)
-                return redirect(request.args.get("next") or url_for("dashboard"))
+                return redirect(request.args.get("next") or url_for("serve_blog"))
         else:
             flash("Invalid email or password.", "error")
 
@@ -408,7 +451,6 @@ def dashboard():
         cfg = _load_config()
         try:
             rebuild_user_feed(current_user._data, base_url=_base_url(), user_id=current_user.get_id())
-            rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90), user_id=current_user.get_id())
         except Exception as exc:
             flash(f"Subscriptions saved, but feed rebuild failed: {exc}", "error")
         else:
@@ -454,21 +496,35 @@ def serve_feed(token: str):
 @app.route("/blog/<token>.html")
 @app.route("/blog/<token>")
 def serve_blog_public(token: str):
-    """Serve a user's blog page by secret token — no login required."""
+    """Render a user's blog by secret token — no login required."""
     if not USERS_ROOT.is_dir():
         abort(404)
     for user_json in USERS_ROOT.glob("*/user.json"):
         try:
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
-                blog_path = user_json.parent / "index.html"
-                if blog_path.exists():
-                    return send_file(blog_path, mimetype="text/html")
-                abort(404)
+                cfg = _load_config()
+                stories = _get_user_stories(data, cfg.get("blog_days", 90))
+                blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
+                return render_template("blog.html", stories=stories, blog_name=blog_name,
+                                       feed_url=_feed_url(token))
         except Exception:
             continue
     abort(404)
 
+
+@app.route("/blog")
+@login_required
+def serve_blog():
+    """Render the logged-in user's blog inside the app template."""
+    if not current_user.channel_ids:
+        flash("Subscribe to channels to start reading your blog.", "info")
+        return redirect(url_for("dashboard"))
+    cfg = _load_config()
+    stories = _get_user_stories(current_user._data, cfg.get("blog_days", 90))
+    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    return render_template("blog.html", stories=stories, blog_name=blog_name,
+                           feed_url=_feed_url(current_user.feed_token))
 
 
 # ---------------------------------------------------------------------------
