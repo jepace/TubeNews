@@ -222,22 +222,28 @@ def _base_url() -> str:
 def _feed_url(token: str) -> str:
     base = _base_url()
     if base:
-        return f"{base}/feed/{token}"
-    return url_for("serve_feed", token=token, _external=True)
+        return f"{base}/feed/{token}.xml"
+    return url_for("serve_feed", token=token, _external=True).replace(f"/feed/{token}", f"/feed/{token}.xml")
 
 
-def _blog_url() -> str:
+def _blog_url(token: str) -> str:
     base = _base_url()
     if base:
-        return f"{base}/blog"
-    return url_for("serve_blog", _external=True)
-
+        return f"{base}/blog/{token}.html"
+    return url_for("serve_blog_public", token=token, _external=True).replace(f"/blog/{token}", f"/blog/{token}.html")
 
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
     if not ts:
         return "—"
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+@app.template_filter("format_datetime")
+def format_datetime(ts: int) -> str:
+    if not ts:
+        return "—"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def admin_required(f):
@@ -248,6 +254,49 @@ def admin_required(f):
             abort(403)
         return f(*args, **kwargs)
     return decorated
+
+
+def _archive_channel_stats() -> list[dict]:
+    """Scan archive dirs and return per-channel processing stats."""
+    stats = []
+    if not STORAGE_ROOT.is_dir():
+        return stats
+    for channel_dir in STORAGE_ROOT.iterdir():
+        if not channel_dir.is_dir() or channel_dir.name == "users":
+            continue
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            info = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        processed = ignored = no_stories = story_count = 0
+        last_processed = 0
+        for meta_file in channel_dir.glob("*/metadata.json"):
+            try:
+                meta = json.loads(meta_file.read_text())
+                status = meta.get("status")
+                if status == "processed":
+                    processed += 1
+                    story_count += len(list(meta_file.parent.glob("[0-9]*.md")))
+                    last_processed = max(last_processed, meta.get("processed_at", 0))
+                elif status == "ignored_too_old":
+                    ignored += 1
+                elif status == "no_stories":
+                    no_stories += 1
+            except Exception:
+                continue
+        stats.append({
+            "channel_id": info.get("channel_id", ""),
+            "channel_name": info.get("channel_name", channel_dir.name),
+            "processed": processed,
+            "ignored": ignored,
+            "no_stories": no_stories,
+            "story_count": story_count,
+            "last_processed": last_processed,
+        })
+    return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +409,7 @@ def dashboard():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
-        blog_url=_blog_url() if current_user.channel_ids else None,
+        blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
     )
 
 
@@ -372,6 +421,7 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/feed/<token>.xml")
 @app.route("/feed/<token>")
 def serve_feed(token: str):
     """Serve a user's RSS feed by secret token — no login required."""
@@ -390,6 +440,26 @@ def serve_feed(token: str):
     abort(404)
 
 
+@app.route("/blog/<token>.html")
+@app.route("/blog/<token>")
+def serve_blog_public(token: str):
+    """Serve a user's blog page by secret token — no login required."""
+    if not USERS_ROOT.is_dir():
+        abort(404)
+    for user_json in USERS_ROOT.glob("*/user.json"):
+        try:
+            data = json.loads(user_json.read_text())
+            if data.get("feed_token") == token:
+                blog_path = user_json.parent / "index.html"
+                if blog_path.exists():
+                    return send_file(blog_path, mimetype="text/html")
+                abort(404)
+        except Exception:
+            continue
+    abort(404)
+
+
+@app.route("/blog.html")
 @app.route("/blog")
 @login_required
 def serve_blog():
@@ -554,6 +624,22 @@ def admin_user_delete(uid: str):
 # ---------------------------------------------------------------------------
 # Admin feed routes
 # ---------------------------------------------------------------------------
+
+
+@app.route("/admin/runs")
+@login_required
+@admin_required
+def admin_runs():
+    run_log_path = STORAGE_ROOT / "run_log.json"
+    try:
+        runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
+    except Exception:
+        runs = []
+    return render_template(
+        "admin_runs.html",
+        runs=list(reversed(runs)),
+        channel_stats=_archive_channel_stats(),
+    )
 
 
 @app.route("/admin/feeds")

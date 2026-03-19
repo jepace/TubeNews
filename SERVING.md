@@ -79,11 +79,12 @@ Set `base_url` in `TubeNews.json` to the public root of your Flask app
 | URL | What you get |
 |---|---|
 | `/` | Login / dashboard |
-| `/dashboard` | Subscribe to channels, copy your feed URL |
+| `/dashboard` | Subscribe to channels, copy your feed and blog URLs |
 | `/admin` | Manage users and channels |
 | `/archive/rss.xml` | Regional meta-feed |
 | `/archive/<channel>/rss.xml` | Per-channel feed |
-| `/feed/<token>` | Your personal RSS feed (token shown on dashboard) |
+| `/feed/<token>.xml` | Your personal RSS feed (token shown on dashboard) |
+| `/blog/<token>.html` | Your personal blog page (shareable, no login required) |
 
 ---
 
@@ -234,9 +235,17 @@ archive/users/<user_slug>/rss.xml      ← RSS feed for their subscribed channel
 archive/users/<user_slug>/index.html   ← readable blog page
 ```
 
-These are accessible at:
-- `/archive/users/<user_slug>/rss.xml`
-- `/archive/users/<user_slug>/index.html`
+Use the token-based URLs shown on the dashboard — they work without knowing the
+user's slug and are safe to share:
 
-Or use the token-based URL shown on the dashboard (`/feed/<token>`) — it works
-without knowing the user's slug and is safe to share with a feed reader.
+| URL | What it serves |
+|---|---|
+| `/feed/<token>.xml` | Personal RSS feed — add to any feed reader |
+| `/blog/<token>.html` | Personal blog page — shareable, no login required |
+
+Both URLs use the same token. The token is shown on the dashboard and can be
+reset by an admin if needed.
+
+The blog page is generated on demand when the logged-in user visits `/blog` or
+saves their subscriptions. The public `/blog/<token>.html` URL serves the
+pre-built file, so it is fast and does not require a login.
