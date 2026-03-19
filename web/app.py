@@ -508,7 +508,7 @@ def serve_blog_public(token: str):
                 stories = _get_user_stories(data, cfg.get("blog_days", 90))
                 blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
                 return render_template("blog.html", stories=stories, blog_name=blog_name,
-                                       feed_url=_feed_url(token))
+                                       feed_path=f"/feed/{token}.xml")
         except Exception:
             continue
     abort(404)
@@ -525,7 +525,7 @@ def serve_blog():
     stories = _get_user_stories(current_user._data, cfg.get("blog_days", 90))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
-                           feed_url=_feed_url(current_user.feed_token))
+                           feed_path=f"/feed/{current_user.feed_token}.xml")
 
 
 # ---------------------------------------------------------------------------

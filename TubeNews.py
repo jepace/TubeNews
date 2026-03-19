@@ -788,12 +788,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
         f"{len(all_stories)} stories from {len(subscribed)} channel{'s' if len(subscribed) != 1 else ''} "
         f"— last {blog_days} days"
     )
-    nav_root = base_url.rstrip("/") if base_url else ""
-    if base_url:
-        rss_href = f"{base_url}/users/{slugify(name)}/rss.xml"
-        rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_href}">'
-    else:
-        rss_link = ""
+    rss_feed_path = f"/feed/{user['feed_token']}.xml"
+    rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_feed_path}">'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -813,6 +809,7 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
         nav.blog-nav a {{ color: #2563eb; text-decoration: none; font-size: 0.9rem; }}
         nav.blog-nav a:hover {{ text-decoration: underline; }}
         nav.blog-nav .nav-brand {{ font-weight: 700; font-size: 1.1rem; }}
+        nav.blog-nav .nav-rss {{ display: flex; align-items: center; }}
         {CSS}
 </style>
 </head>
@@ -822,6 +819,13 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
     <a href="/" class="nav-brand">TubeNews</a>
     <a href="/dashboard">My feed</a>
   </div>
+  <a href="{rss_feed_path}" class="nav-rss" title="Subscribe via RSS">
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="3" cy="13" r="2" fill="#f26522"/>
+      <path fill="#f26522" d="M1 5a8 8 0 0 1 8 8H7a6 6 0 0 0-6-6V5z"/>
+      <path fill="#f26522" d="M1 1a12 12 0 0 1 12 12h-2A10 10 0 0 0 1 3V1z"/>
+    </svg>
+  </a>
 </nav>
 <div class="blog-content">
 <h1>{page_title}</h1>
