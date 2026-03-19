@@ -68,3 +68,39 @@ per-video lock (keyed on video ID) or an atomic `mkdir` check would fix this.
 - **`rebuild_meta_feed()`:** Its read-all-channels + write-one-file pattern
   makes it inherently a serial barrier operation; it should always run after
   all other work completes.
+
+---
+
+## Design Decisions & Far-Future Considerations
+
+### Storage architecture
+
+The current storage model is intentionally simple:
+
+- **Feeds** are stored as a JSON array in `TubeNews.json` under `feeds`.
+  This is the operator config file — read directly by the CLI tool at startup.
+- **Users** are stored as individual `archive/users/<uuid>/user.json` files
+  with no central index. Discovery happens by globbing `archive/users/*/user.json`
+  at runtime.
+
+These two patterns are deliberately different: feeds are configuration (small,
+operator-managed, read at startup), users are application state (runtime-created,
+individually owned).
+
+**If the user count grows large enough that glob-scanning on every login/lookup
+becomes a bottleneck**, consider adding a lightweight `archive/users/index.json`
+that maps email → uuid. The per-user files stay as-is; the index just speeds up
+`_find_user_by_email()`. Rebuild the index on registration, deletion, and email
+change. No schema migration needed for existing user directories.
+
+**If `TubeNews.json` becomes unwieldy** (many feeds + many server config keys),
+consider splitting it:
+
+- `TubeNews.json` — server/runtime config only: API keys, model name, base URL,
+  port, admin emails, rate limits, etc.
+- `feeds.json` — the channel list only.
+
+Both files would live in the project root. `TubeNews.py` and `web/app.py` would
+need small updates to load from two files. This separation makes it easier to
+check `feeds.json` into version control (no secrets) while keeping
+`TubeNews.json` gitignored.

@@ -5,7 +5,7 @@
 <div class="admin">
   <div class="admin-header">
     <a href="{{ url_for('admin_feeds') }}" class="back-link">← All feeds</a>
-    <h1>{% if feed and idx is not none %}Edit feed{% else %}Add feed{% endif %}</h1>
+    <h1>{% if feed and channel_id is not none %}Edit feed{% else %}Add feed{% endif %}</h1>
   </div>
 
   <section class="admin-section">
@@ -30,17 +30,17 @@
                   placeholder="housing, zoning, development permits, budget decisions">{{ feed.focus if feed else '' }}</textarea>
       </div>
       <div style="display:flex; gap:0.75rem; align-items:center; margin-top:0.5rem;">
-        <button type="submit">{% if feed and idx is not none %}Save changes{% else %}Add feed{% endif %}</button>
+        <button type="submit">{% if feed and channel_id is not none %}Save changes{% else %}Add feed{% endif %}</button>
         <a href="{{ url_for('admin_feeds') }}" class="back-link" style="margin:0;">Cancel</a>
       </div>
     </form>
   </section>
 
-  {% if feed and idx is not none %}
+  {% if feed and channel_id is not none %}
   <section class="admin-section danger-zone">
     <h2>Remove feed</h2>
     <p class="muted">Archive data is not deleted.</p>
-    <form method="post" action="{{ url_for('admin_feed_delete', idx=idx) }}"
+    <form method="post" action="{{ url_for('admin_feed_delete', channel_id=channel_id) }}"
           onsubmit="return confirm('Remove this feed? Archive data is not deleted.')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn-danger">Remove feed</button>
