@@ -604,8 +604,11 @@ def rebuild_meta_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
-    """Generate ``archive/users/<id>/rss.xml`` filtered to a user's subscribed channels.
+def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> bytes:
+    """Build and return RSS feed XML bytes for a user's subscribed channels.
+
+    Contains all the feed-building logic.  Does *not* write anything to disk —
+    callers decide what to do with the returned bytes (serve directly or cache).
 
     Reads ``channel.json`` from each channel directory (written by :func:`rebuild_feed`)
     to determine which archive folders correspond to the user's ``channel_ids``.  Stories
@@ -619,10 +622,6 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
-    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"TubeNews: Rebuilding user feed for {name}")
 
     feed = FeedGenerator()
     feed.id(f"tubenews_user_{slugify(name)}")
@@ -684,7 +683,27 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
         except Exception:
             continue
 
-    feed.rss_file(user_dir / "rss.xml", pretty=True)
+    return feed.rss_str(pretty=True)
+
+
+def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
+    """Write ``archive/users/<id>/rss.xml`` for a user's subscribed channels.
+
+    Thin wrapper around :func:`build_user_feed_xml` that writes the result to
+    disk.  Used by the CLI (``main()``) to pre-cache feeds after each run.
+    The web app serves feeds dynamically via :func:`build_user_feed_xml` instead.
+
+    Args:
+        user:     User config dict from ``archive/users/<id>/user.json``.
+        base_url: Public URL root; passed through to :func:`build_user_feed_xml`.
+        user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
+    """
+    name = user["name"]
+    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
+    user_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"TubeNews: Rebuilding user feed for {name}")
+    xml_bytes = build_user_feed_xml(user, base_url=base_url, user_id=user_id)
+    (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
 def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_id: str = "") -> None:

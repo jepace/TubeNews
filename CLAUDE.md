@@ -115,7 +115,8 @@ YouTube Channel Pages (HTML scrape)
 |---|---|
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
 | `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
-| `rebuild_user_feed(user, base_url)` | Generates `archive/users/<slug>/rss.xml` filtered to a user's subscribed channels |
+| `build_user_feed_xml(user, base_url)` | Builds and returns RSS feed XML bytes for a user's subscribed channels; does **not** write to disk |
+| `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `archive/users/<slug>/rss.xml` to disk |
 | `rebuild_user_blog(user, base_url)` | Generates `archive/users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
 
 ### Processing orchestration
@@ -308,7 +309,7 @@ The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)
 
 The Flask web UI sits on top of `TubeNews.py` and provides user accounts,
 subscriptions, and a dashboard for sharing feeds and blog pages. It imports
-`rebuild_user_feed`, `rebuild_user_blog`, and `STORAGE_ROOT` directly from
+`build_user_feed_xml`, `parse_story_file`, and `STORAGE_ROOT` directly from
 `TubeNews.py`.
 
 ### User Storage
@@ -319,8 +320,8 @@ Each user is stored as a UUID-named directory under `archive/users/`:
 archive/users/
 └── <uuid>/
     ├── user.json      # account data (see schema below)
-    ├── rss.xml        # personal RSS feed (built by rebuild_user_feed)
-    └── index.html     # personal blog page (built by rebuild_user_blog)
+    ├── rss.xml        # personal RSS feed (pre-built by CLI; not used by web app)
+    └── index.html     # personal blog page (built by rebuild_user_blog; not used by web app)
 ```
 
 **`user.json` schema:**
@@ -350,26 +351,31 @@ One `feed_token` per user covers two public URLs:
 | `/feed/<token>.xml` | Personal RSS feed |
 | `/blog/<token>.html` | Personal blog page |
 
-The `/feed/<token>.xml` route serves a pre-built static file from the user's
-directory. The `/blog/<token>.html` route renders the blog **dynamically** on
-each request by calling `_get_user_stories()` and passing the result to the
-`blog.html` Jinja2 template — no static file is read or written.
+Both `/feed/<token>.xml` and `/blog/<token>.html` are generated **dynamically
+on every request** — no static file is read or written by the web app.
 The extension-less variants (`/feed/<token>`, `/blog/<token>`) also work for
 backwards compatibility.
 
-### Blog Rendering Flow
+### On-request Generation Flow
 
-The blog is rendered dynamically on every request — no static file is cached:
+Both the feed and blog are generated fresh on each request from the live archive:
 
-1. **Request:** Any visitor hits `/blog/<token>.html` or the logged-in `/blog`
-2. **Stories:** `_get_user_stories()` scans `archive/` and returns stories from
-   the user's subscribed channels processed within the last `blog_days` days
-3. **Render:** Flask renders `blog.html` with the story list and returns HTML
+**RSS feed** (`/feed/<token>.xml`):
+1. Token matched to a user in `archive/users/`
+2. `build_user_feed_xml()` scans `archive/` and builds feedgen XML in memory
+3. XML bytes returned directly as the HTTP response — nothing written to disk
 
-Because it reads the archive on every request, the blog always reflects the
-latest stories without any explicit rebuild step.  `rebuild_user_blog()` exists
-in `TubeNews.py` as a standalone utility (e.g. for generating a static snapshot)
-but the web app does **not** call it — the web UI uses dynamic rendering only.
+**Blog** (`/blog/<token>.html` and logged-in `/blog`):
+1. `_get_user_stories()` scans `archive/` and returns stories from the user's
+   subscribed channels processed within the last `blog_days` days
+2. Flask renders `blog.html` with the story list and returns HTML
+
+Because both read the archive on every request, they always reflect the latest
+stories without any explicit rebuild step.
+
+`rebuild_user_feed()` and `rebuild_user_blog()` exist in `TubeNews.py` as
+standalone utilities (used by the CLI, or for generating static snapshots) but
+the web app does **not** call either — the web UI uses dynamic generation only.
 
 ### Key Helpers
 
