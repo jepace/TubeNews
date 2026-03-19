@@ -1103,6 +1103,31 @@ def process_feed(
 # ---------------------------------------------------------------------------
 
 
+def _send_ntfy(topic: str, total_stories: int, feed_results: list[dict], started_at: float) -> None:
+    """POST a run-summary notification to ntfy.sh/<topic>."""
+    import urllib.request as _urllib_request
+
+    timestamp = datetime.fromtimestamp(started_at).strftime("%B %-d, %Y at %-I:%M %p")
+    story_word = "story" if total_stories == 1 else "stories"
+    lines = [f"{total_stories} new {story_word} — {timestamp}"]
+    for r in feed_results:
+        if r["stories_written"]:
+            lines.append(f"  \u2022 {r['channel_name']}: {r['stories_written']}")
+    message = "\n".join(lines)
+
+    req = _urllib_request.Request(
+        f"https://ntfy.sh/{topic}",
+        data=message.encode(),
+        method="POST",
+        headers={"Title": "TubeNews", "Priority": "default"},
+    )
+    try:
+        _urllib_request.urlopen(req, timeout=10)
+        logger.debug(f"ntfy.sh/{topic}: notification sent")
+    except Exception as exc:
+        logger.warning(f"ntfy.sh/{topic}: notification failed: {exc}")
+
+
 def main() -> None:
     """Load config, process each feed, and rebuild RSS outputs."""
     parser = argparse.ArgumentParser(description="TubeNews — YouTube channel monitor")
@@ -1168,6 +1193,10 @@ def main() -> None:
         run_log_path.write_text(json.dumps(runs[-30:], indent=2))
     except Exception:
         pass
+
+    ntfy_topic = config.get("ntfy_topic")
+    if ntfy_topic and total_stories > 0:
+        _send_ntfy(ntfy_topic, total_stories, feed_results, started_at)
 
 
 if __name__ == "__main__":
