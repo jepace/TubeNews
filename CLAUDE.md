@@ -32,9 +32,12 @@ TubeNews/
 ├── tests/
 │   ├── __init__.py
 │   └── test_tubenews.py     # pytest unit tests
-└── helpers/
-    ├── catchup.py           # Mark all existing videos as "too old" (first-run util)
-    └── check_quota.py       # Test Gemini API key quota across models
+├── helpers/
+│   ├── catchup.py           # Mark all existing videos as "too old" (first-run util)
+│   └── check_quota.py       # Test Gemini API key quota across models
+└── web/
+    ├── app.py               # Flask web UI (user accounts, subscriptions, admin)
+    └── templates/           # Jinja2 HTML templates
 ```
 
 ---
@@ -295,6 +298,133 @@ The Gemini prompt is in `call_gemini_api()`. It instructs the model to:
 - Return a raw JSON list (no markdown code fences)
 
 The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)` to handle any extra prose the model may prepend. If the model starts returning malformed JSON, add debug logging inside `call_gemini_api()` to inspect `raw_text` before parsing.
+
+---
+
+## Web Application (`web/app.py`)
+
+The Flask web UI sits on top of `TubeNews.py` and provides user accounts,
+subscriptions, and a dashboard for sharing feeds and blog pages. It imports
+`rebuild_user_feed`, `rebuild_user_blog`, and `STORAGE_ROOT` directly from
+`TubeNews.py`.
+
+### User Storage
+
+Each user is stored as a UUID-named directory under `archive/users/`:
+
+```
+archive/users/
+└── <uuid>/
+    ├── user.json      # account data (see schema below)
+    ├── rss.xml        # personal RSS feed (built by rebuild_user_feed)
+    └── index.html     # personal blog page (built by rebuild_user_blog)
+```
+
+**`user.json` schema:**
+
+```json
+{
+  "name": "Alice",
+  "email": "alice@example.com",
+  "password_hash": "scrypt:...",
+  "channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
+  "feed_token": "550e8400-e29b-41d4-a716-446655440000",
+  "created_at": 1741910400,
+  "locked": false
+}
+```
+
+`feed_token` is a UUID generated at registration. It is the secret that
+authenticates all public (no-login) URLs for that user. Rotating it
+invalidates both the RSS feed URL and the blog URL simultaneously.
+
+### Token Model
+
+One `feed_token` per user covers two public URLs:
+
+| URL | Content |
+|---|---|
+| `/feed/<token>.xml` | Personal RSS feed |
+| `/blog/<token>.html` | Personal blog page |
+
+Both serve pre-built files from the user's directory — no login required.
+The extension-less variants (`/feed/<token>`, `/blog/<token>`) also work for
+backwards compatibility.
+
+### Blog Regeneration Flow
+
+The blog is a static HTML file built on demand, not on every request:
+
+1. **Trigger:** User saves subscriptions (dashboard POST) or visits `/blog`
+2. **Build:** `rebuild_user_blog()` writes `archive/users/<uuid>/index.html`
+3. **Serve:** `/blog/<token>.html` reads and serves the cached file
+
+If the file does not exist yet (e.g. no stories have been generated),
+`/blog/<token>.html` returns 404. The logged-in `/blog` route flashes an
+error and redirects to the dashboard instead.
+
+### Key Helpers
+
+| Function | Description |
+|---|---|
+| `_load_config()` | Reads `TubeNews.json`; returns `{}` on failure |
+| `_save_feeds(feeds)` | Writes updated `feeds` list back to `TubeNews.json` |
+| `_load_channels()` | Returns the `feeds` list from config |
+| `_base_url()` | Returns `base_url` from config (empty string if not set) |
+| `_feed_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
+| `_blog_url(token)` | Builds the full `/blog/<token>.html` URL using `base_url` or `url_for` |
+| `_find_user_by_email(email)` | Scans `archive/users/` for a matching email |
+| `_find_user_by_id(uid)` | Loads a user by their UUID directory name |
+| `_all_users()` | Returns all users sorted by name |
+
+### Route Map
+
+**No authentication required:**
+
+| Method | Route | Handler | Description |
+|---|---|---|---|
+| GET | `/` | `index` | Redirects to dashboard or login |
+| GET/POST | `/login` | `login` | Login form (rate-limited: 10/min) |
+| GET/POST | `/register` | `register` | Registration form (rate-limited: 5/min) |
+| GET | `/archive/<path>` | `serve_archive` | Serves files from `archive/` directory |
+| GET | `/feed/<token>.xml` | `serve_feed` | Personal RSS feed by token |
+| GET | `/blog/<token>.html` | `serve_blog_public` | Personal blog page by token |
+
+**Login required:**
+
+| Method | Route | Handler | Description |
+|---|---|---|---|
+| GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
+| GET | `/logout` | `logout` | Clears session |
+| GET | `/blog` | `serve_blog` | Regenerates and serves the logged-in user's blog |
+
+**Admin required (`admin_emails` in config):**
+
+| Method | Route | Handler | Description |
+|---|---|---|---|
+| GET | `/admin` | `admin_users` | User list |
+| GET | `/admin/user/<uid>` | `admin_user` | User detail / edit |
+| POST | `/admin/user/<uid>/info` | `admin_user_info` | Update name and email |
+| POST | `/admin/user/<uid>/subscriptions` | `admin_user_subscriptions` | Update channel subscriptions |
+| POST | `/admin/user/<uid>/password` | `admin_user_password` | Reset password |
+| POST | `/admin/user/<uid>/lock` | `admin_user_lock` | Toggle account lock |
+| POST | `/admin/user/<uid>/rotate-token` | `admin_rotate_token` | Issue new feed token (invalidates old URLs) |
+| POST | `/admin/user/<uid>/delete` | `admin_user_delete` | Delete account (requires email confirmation) |
+| GET | `/admin/feeds` | `admin_feeds` | Feed (channel) list |
+| GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config |
+| GET/POST | `/admin/feeds/<idx>/edit` | `admin_feed_edit` | Edit a channel in config |
+| POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config |
+
+### Security Notes
+
+- All state-changing routes use CSRF tokens (flask-wtf).
+- Login and register routes are rate-limited (flask-limiter).
+- `SESSION_COOKIE_SECURE` is only set when `TUBENEWS_HTTPS=true` is in the
+  environment, so local dev works without HTTPS.
+- Admins are determined solely by email match against `admin_emails` in
+  `TubeNews.json` — there is no `is_admin` flag stored in `user.json`.
+- Locked accounts (`"locked": true`) fail `is_active` and are rejected by
+  flask-login on every request without needing to log out.
 
 ---
 
