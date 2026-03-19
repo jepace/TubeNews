@@ -483,7 +483,6 @@ def dashboard():
         blog_name = request.form.get("blog_name", "").strip()
         current_user._data["blog_name"] = blog_name
         current_user._save()
-        cfg = _load_config()
         try:
             rebuild_user_feed(current_user._data, base_url=_base_url(), user_id=current_user.get_id())
         except Exception as exc:

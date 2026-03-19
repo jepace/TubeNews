@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from TubeNews import (
     slugify,
     parse_story_file,
+    process_feed,
     rebuild_feed,
     rebuild_meta_feed,
     rebuild_user_feed,
@@ -513,18 +514,18 @@ def test_rebuild_user_feed_multiple_channels(user_archive):
 # ---------------------------------------------------------------------------
 
 def test_rebuild_user_blog_creates_html(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
     rebuild_user_blog(user)
     assert (user_archive / "users" / "Jane_Doe" / "index.html").exists()
 
 def test_rebuild_user_blog_includes_subscribed_stories(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
     rebuild_user_blog(user)
     content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_blog_excludes_unsubscribed_stories(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
     rebuild_user_blog(user)
     content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
     assert "Beta City Council" not in content
@@ -550,7 +551,54 @@ def test_rebuild_user_blog_date_filter(tmp_path, monkeypatch):
         json.dumps({"channel_id": "UC_OLD_ID", "channel_name": "Old Channel"})
     )
 
-    user = {"name": "Test User", "channel_ids": ["UC_OLD_ID"]}
+    user = {"name": "Test User", "channel_ids": ["UC_OLD_ID"], "feed_token": "test-token-2"}
     rebuild_user_blog(user, blog_days=90)  # only 90 days; story is 200 days old
     content = (tmp_path / "users" / "Test_User" / "index.html").read_text()
     assert "Very Old Story" not in content
+
+
+# ---------------------------------------------------------------------------
+# process_feed — early-return tuple regression (Bug: 2-tuple vs 3-tuple)
+# ---------------------------------------------------------------------------
+
+def test_process_feed_empty_videos_returns_three_tuple(tmp_path, monkeypatch):
+    """Regression: when discover_videos returns [], process_feed must return a 3-tuple.
+
+    Previously returned (content_changed, ai_rate_limited) — a 2-tuple — which caused
+    a ValueError at the call site in _run_feed, crashing main() before rebuild_user_feed
+    could run and leaving all personal RSS feeds stale.
+    """
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [])
+
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    content_changed, ai_rate_limited, stories_written = process_feed(feed, None, {}, None)
+    assert stories_written == 0
+    assert not ai_rate_limited
+
+
+def test_process_feed_empty_videos_content_changed_when_no_rss(tmp_path, monkeypatch):
+    """content_changed is True on empty discover when rss.xml doesn't exist yet."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [])
+
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    content_changed, _, _ = process_feed(feed, None, {}, None)
+    assert content_changed  # no rss.xml yet → content_changed starts True
+
+
+def test_process_feed_empty_videos_no_content_changed_when_rss_exists(tmp_path, monkeypatch):
+    """content_changed is False on empty discover when rss.xml already exists."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [])
+
+    channel_dir = tmp_path / "Test_Channel"
+    channel_dir.mkdir()
+    (channel_dir / "rss.xml").write_text("<rss/>")
+
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    content_changed, _, _ = process_feed(feed, None, {}, None)
+    assert not content_changed

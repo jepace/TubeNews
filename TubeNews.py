@@ -1013,7 +1013,7 @@ def process_feed(
 
     all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
     if not all_videos:
-        return content_changed, ai_rate_limited
+        return content_changed, ai_rate_limited, stories_written
 
     all_ids = [v["id"] for v in all_videos]
     video_meta = {v["id"]: v for v in all_videos}
@@ -1146,17 +1146,28 @@ def main() -> None:
     any_content_changed = threading.Event()
 
     def _run_feed(feed: dict) -> dict:
-        content_changed, _, stories_written = process_feed(
-            feed, supadata_client, config, ai_rate_limit_event
-        )
-        if content_changed:
-            rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
-            any_content_changed.set()
-        return {
-            "channel_id": feed["channel_id"],
-            "channel_name": feed["channel_name"],
-            "stories_written": stories_written,
-        }
+        try:
+            content_changed, _, stories_written = process_feed(
+                feed, supadata_client, config, ai_rate_limit_event
+            )
+            if content_changed:
+                rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
+                any_content_changed.set()
+            return {
+                "channel_id": feed["channel_id"],
+                "channel_name": feed["channel_name"],
+                "stories_written": stories_written,
+            }
+        except Exception:
+            logger.warning(
+                f"{feed.get('channel_name', feed.get('channel_id', '?'))}: "
+                "TubeNews: Feed processing failed — skipping"
+            )
+            return {
+                "channel_id": feed.get("channel_id", ""),
+                "channel_name": feed.get("channel_name", ""),
+                "stories_written": 0,
+            }
 
     started_at = time.time()
     max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
@@ -1165,7 +1176,10 @@ def main() -> None:
     total_stories = sum(r["stories_written"] for r in feed_results)
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
-        rebuild_meta_feed(base_url=config.get("base_url", ""))
+        try:
+            rebuild_meta_feed(base_url=config.get("base_url", ""))
+        except Exception:
+            logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
 
     users_dir = STORAGE_ROOT / "users"
     if users_dir.is_dir():
