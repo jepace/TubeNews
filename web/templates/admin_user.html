@@ -158,11 +158,26 @@
 
   function copyFeedUrl() {
     const input = document.getElementById('feed-url');
-    navigator.clipboard.writeText(input.value).then(() => {
-      const btn = document.querySelector('.btn-copy');
+    const btn = document.querySelector('.btn-copy');
+    function onCopied() {
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-    });
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(input.value).then(onCopied).catch(() => fallbackCopy(input, onCopied));
+    } else {
+      fallbackCopy(input, onCopied);
+    }
+  }
+
+  function fallbackCopy(input, onCopied) {
+    input.select();
+    input.setSelectionRange(0, 99999);
+    try {
+      document.execCommand('copy');
+      onCopied();
+    } catch (e) {}
+    window.getSelection().removeAllRanges();
   }
 </script>
 {% endblock %}
