@@ -6,18 +6,22 @@
   <h1>My Feed</h1>
 
   <section class="feed-url-section">
-    <h2>Your RSS feed URL</h2>
+    <h2>Sharing URLs</h2>
     {% if current_user.channel_ids %}
-      <p>Add this URL to your RSS reader:</p>
+      <p>RSS feed — add to your RSS reader:</p>
       <div class="feed-url-row">
         <input type="text" id="feed-url" class="feed-url-input" value="{{ feed_url }}" readonly>
-        <button type="button" onclick="copyFeedUrl()" class="btn-copy">Copy</button>
+        <button type="button" onclick="copyUrl('feed-url', this)" class="btn-copy">Copy</button>
       </div>
       {% if blog_url %}
-        <p style="margin-top:0.75rem">Or <a href="{{ blog_url }}">read your blog</a> in the browser.</p>
+        <p style="margin-top:1rem">Blog — share a readable view in the browser:</p>
+        <div class="feed-url-row">
+          <input type="text" id="blog-url" class="feed-url-input" value="{{ blog_url }}" readonly>
+          <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
+        </div>
       {% endif %}
     {% else %}
-      <p class="muted">Subscribe to at least one channel below to generate your feed URL.</p>
+      <p class="muted">Subscribe to at least one channel below to generate your sharing URLs.</p>
     {% endif %}
   </section>
 
@@ -67,9 +71,8 @@
     checkboxes.forEach(cb => { cb.checked = false; });
   });
 
-  function copyFeedUrl() {
-    const input = document.getElementById('feed-url');
-    const btn = document.querySelector('.btn-copy');
+  function copyUrl(inputId, btn) {
+    const input = document.getElementById(inputId);
     function onCopied() {
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
