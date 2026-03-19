@@ -407,8 +407,8 @@ def dashboard():
         current_user._save()
         cfg = _load_config()
         try:
-            rebuild_user_feed(current_user._data, base_url=_base_url())
-            rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90))
+            rebuild_user_feed(current_user._data, base_url=_base_url(), user_id=current_user.get_id())
+            rebuild_user_blog(current_user._data, base_url=_base_url(), blog_days=cfg.get("blog_days", 90), user_id=current_user.get_id())
         except Exception as exc:
             flash(f"Subscriptions saved, but feed rebuild failed: {exc}", "error")
         else:
@@ -540,7 +540,7 @@ def admin_user_subscriptions(uid: str):
     selected = set(request.form.getlist("channel_ids")) & valid_ids
     user.set_channel_ids(sorted(selected))
     try:
-        rebuild_user_feed(user._data, base_url=_base_url())
+        rebuild_user_feed(user._data, base_url=_base_url(), user_id=uid)
     except Exception as exc:
         flash(f"Saved, but feed rebuild failed: {exc}", "error")
     else:

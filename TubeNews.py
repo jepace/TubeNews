@@ -604,21 +604,22 @@ def rebuild_meta_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def rebuild_user_feed(user: dict, base_url: str = "") -> None:
-    """Generate ``archive/users/<slug>/rss.xml`` filtered to a user's subscribed channels.
+def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
+    """Generate ``archive/users/<id>/rss.xml`` filtered to a user's subscribed channels.
 
     Reads ``channel.json`` from each channel directory (written by :func:`rebuild_feed`)
     to determine which archive folders correspond to the user's ``channel_ids``.  Stories
     are sorted newest-first, matching :func:`rebuild_meta_feed` behaviour.
 
     Args:
-        user:     User config dict from ``archive/users/<slug>/user.json``.
+        user:     User config dict from ``archive/users/<id>/user.json``.
                   Must contain ``name`` (str) and ``channel_ids`` (list[str]).
         base_url: Public URL root; currently unused but reserved for future self-links.
+        user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
-    user_dir = STORAGE_ROOT / "users" / slugify(name)
+    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"TubeNews: Rebuilding user feed for {name}")
@@ -686,8 +687,8 @@ def rebuild_user_feed(user: dict, base_url: str = "") -> None:
     feed.rss_file(user_dir / "rss.xml", pretty=True)
 
 
-def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90) -> None:
-    """Generate ``archive/users/<slug>/index.html`` — a static blog page for a user.
+def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_id: str = "") -> None:
+    """Generate ``archive/users/<id>/index.html`` — a static blog page for a user.
 
     Pulls stories from the user's subscribed channels (same logic as
     :func:`rebuild_user_feed`) and renders them as a self-contained HTML page
@@ -695,13 +696,14 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90) -> No
     are included so the page stays a manageable size.
 
     Args:
-        user:      User config dict from ``archive/users/<slug>/user.json``.
+        user:      User config dict from ``archive/users/<id>/user.json``.
         base_url:  Public URL root; used to build a self-link in the page header.
         blog_days: How many days of stories to include (default 90).
+        user_id:   UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
-    user_dir = STORAGE_ROOT / "users" / slugify(name)
+    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"TubeNews: Rebuilding blog for {name}")
@@ -1134,8 +1136,9 @@ def main() -> None:
     if users_dir.is_dir():
         for user_json in sorted(users_dir.glob("*/user.json")):
             user = json.loads(user_json.read_text())
-            rebuild_user_feed(user, base_url=config.get("base_url", ""))
-            rebuild_user_blog(user, base_url=config.get("base_url", ""), blog_days=config.get("blog_days", 90))
+            uid = user_json.parent.name
+            rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
+            rebuild_user_blog(user, base_url=config.get("base_url", ""), blog_days=config.get("blog_days", 90), user_id=uid)
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
