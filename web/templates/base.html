@@ -17,7 +17,11 @@
           <a href="{{ url_for('admin_runs') }}">Runs</a>
         {% endif %}
         <a href="{{ url_for('serve_blog') }}">Blog</a>
-        <span class="nav-user">{{ current_user.name }}</span>
+        {% if current_user.is_admin %}
+          <a href="{{ url_for('admin_user', uid=current_user.get_id()) }}" class="nav-user">{{ current_user.name }}</a>
+        {% else %}
+          <a href="{{ url_for('dashboard') }}" class="nav-user">{{ current_user.name }}</a>
+        {% endif %}
         <a href="{{ url_for('logout') }}">Log out</a>
       {% else %}
         <a href="{{ url_for('login') }}">Log in</a>

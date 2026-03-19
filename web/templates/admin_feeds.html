@@ -22,14 +22,14 @@
       </tr>
     </thead>
     <tbody>
-      {% for idx, ch in channels %}
+      {% for ch in channels %}
       <tr>
         <td>{{ ch.channel_name }}</td>
         <td class="mono">{{ ch.channel_id }}</td>
         <td class="muted">{{ ch.focus | truncate(60) }}</td>
         <td style="white-space: nowrap;">
-          <a href="{{ url_for('admin_feed_edit', idx=idx) }}" class="btn-sm">Edit</a>
-          <form method="post" action="{{ url_for('admin_feed_delete', idx=idx) }}"
+          <a href="{{ url_for('admin_feed_edit', idx=loop.index0) }}" class="btn-sm">Edit</a>
+          <form method="post" action="{{ url_for('admin_feed_delete', idx=loop.index0) }}"
                 class="inline-form"
                 onsubmit="return confirm('Remove \'{{ ch.channel_name }}\'? Archive data is not deleted.')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

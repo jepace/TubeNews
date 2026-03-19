@@ -62,7 +62,9 @@ nav a:hover { text-decoration: underline; }
 .nav-user {
   font-size: 0.9rem;
   color: var(--muted);
+  text-decoration: none;
 }
+.nav-user:hover { color: var(--text); text-decoration: underline; }
 
 /* Main */
 main {
