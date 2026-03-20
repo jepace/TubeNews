@@ -45,7 +45,40 @@ from supadata import Supadata
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
-STORAGE_ROOT = BASE_DIR / "archive"
+
+def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]:
+    """Read path/network settings from *config_file* before main() runs.
+
+    Returns ``(STORAGE_ROOT, REQUEST_TIMEOUT)``.  All keys are optional;
+    sensible defaults are returned when the file is absent or a key is missing.
+
+    Args:
+        config_file: Path to TubeNews.json.
+        base_dir:    Directory used to resolve relative ``archive_dir`` paths.
+    """
+    try:
+        cfg = json.loads(config_file.read_text())
+
+        # archive_dir — where processed content is stored.
+        # Absolute paths are used as-is; relative paths resolve from base_dir.
+        archive_dir = cfg.get("archive_dir", "")
+        if archive_dir:
+            p = Path(archive_dir)
+            storage_root = p if p.is_absolute() else (base_dir / p).resolve()
+        else:
+            storage_root = base_dir / "archive"
+
+        # request_timeout — seconds before giving up on YouTube / Supadata calls.
+        request_timeout = int(cfg.get("request_timeout", 15))
+
+    except Exception:
+        storage_root = base_dir / "archive"
+        request_timeout = 15
+
+    return storage_root, request_timeout
+
+
+STORAGE_ROOT, REQUEST_TIMEOUT = _resolve_early_config(CONFIG_FILE, BASE_DIR)
 
 # FreeBSD ships its CA bundle in a non-standard location; tell Python where
 # to find it so HTTPS requests succeed. On Linux/macOS this path won't exist
@@ -54,9 +87,9 @@ _FREEBSD_CERT = "/usr/local/share/certs/ca-root-nss.crt"
 if os.path.exists(_FREEBSD_CERT):
     os.environ["SSL_CERT_FILE"] = _FREEBSD_CERT
 
-# A short default timeout prevents the script hanging indefinitely when
-# YouTube or an API endpoint is slow to respond.
-socket.setdefaulttimeout(15)
+# Apply the timeout as the process-wide socket default so every network call
+# (including Supadata's underlying HTTP) respects it automatically.
+socket.setdefaulttimeout(REQUEST_TIMEOUT)
 
 # Mimic a real browser so YouTube doesn't serve a bot-detection page instead
 # of the normal HTML (which contains the metadata we need to scrape).
@@ -272,7 +305,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
         for attempt in range(3):
             logger.debug(f"{prefix}YouTube: Fetching {tab} tab" + (f" (retry {attempt})" if attempt else ""))
             try:
-                response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=15)
+                response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=REQUEST_TIMEOUT)
                 if response.status_code == 200:
                     return tab, response.text
             except Exception as exc:

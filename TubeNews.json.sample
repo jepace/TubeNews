@@ -3,6 +3,8 @@
   "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "ADD_SUPADATA-KEY",
   "base_url": "",
+  "archive_dir": "",
+  "request_timeout": 15,
   "ntfy_topic": "TubeNewsAdmin",
   "blog_days": 90,
   "tubenews_key": "generate with: python -c 'import secrets; print(secrets.token_hex(32))'",

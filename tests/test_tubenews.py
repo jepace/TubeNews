@@ -24,6 +24,7 @@ from TubeNews import (
     write_story_files,
     _relative_date_to_iso,
     _parse_channel_page_metadata,
+    _resolve_early_config,
 )
 
 
@@ -828,3 +829,81 @@ def test_blog_date_filter_does_not_affect_feed(tmp_path, monkeypatch):
 
     assert "Ancient Story" in feed_xml,      "Feed has no date filter — old stories must still appear"
     assert "Ancient Story" not in blog_html, "Blog date filter must exclude old stories"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_early_config — archive_dir and request_timeout
+# ---------------------------------------------------------------------------
+
+def test_resolve_archive_dir_absolute(tmp_path):
+    """An absolute archive_dir is used as-is for STORAGE_ROOT."""
+    custom = tmp_path / "my_archive"
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == custom
+
+
+def test_resolve_archive_dir_relative(tmp_path):
+    """A relative archive_dir is resolved against base_dir."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"archive_dir": "subdir/archive"}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == (tmp_path / "subdir" / "archive").resolve()
+
+
+def test_resolve_archive_dir_absent_defaults_to_base_archive(tmp_path):
+    """When archive_dir is omitted, STORAGE_ROOT defaults to base_dir/archive."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"gemini_api_key": "x"}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == tmp_path / "archive"
+
+
+def test_resolve_archive_dir_empty_string_defaults_to_base_archive(tmp_path):
+    """An explicit empty string for archive_dir is treated the same as absent."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"archive_dir": ""}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == tmp_path / "archive"
+
+
+def test_resolve_request_timeout_custom(tmp_path):
+    """A configured request_timeout is returned as an int."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"request_timeout": 30}))
+    _, timeout = _resolve_early_config(cfg, tmp_path)
+    assert timeout == 30
+
+
+def test_resolve_request_timeout_absent_defaults_to_15(tmp_path):
+    """When request_timeout is omitted the default of 15 is returned."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"gemini_api_key": "x"}))
+    _, timeout = _resolve_early_config(cfg, tmp_path)
+    assert timeout == 15
+
+
+def test_resolve_falls_back_on_missing_config_file(tmp_path):
+    """If TubeNews.json does not exist both defaults are returned without raising."""
+    missing = tmp_path / "no_such_file.json"
+    storage_root, timeout = _resolve_early_config(missing, tmp_path)
+    assert storage_root == tmp_path / "archive"
+    assert timeout == 15
+
+
+def test_resolve_falls_back_on_invalid_json(tmp_path):
+    """Corrupt JSON must not crash — defaults are returned instead."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text("{ NOT VALID JSON }")
+    storage_root, timeout = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == tmp_path / "archive"
+    assert timeout == 15
+
+
+def test_resolve_request_timeout_is_int_not_string(tmp_path):
+    """request_timeout must be returned as int even if stored as a JSON number."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"request_timeout": 45}))
+    _, timeout = _resolve_early_config(cfg, tmp_path)
+    assert isinstance(timeout, int)

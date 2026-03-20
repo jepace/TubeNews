@@ -248,6 +248,8 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `feeds[].channel_id` | Yes | YouTube channel ID (starts with `UC`) |
 | `feeds[].channel_name` | Yes | Human-readable name; used to create `archive/` subfolder |
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
+| `archive_dir` | No | Path to the archive directory (default: `archive/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point the archive at your web server's document root |
+| `request_timeout` | No | Seconds before giving up on YouTube scrape and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
 | `blog_days` | No | Days of stories to include in per-user blog pages (default: `90`) |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
