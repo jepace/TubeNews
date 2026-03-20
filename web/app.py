@@ -778,6 +778,23 @@ def admin_user_password(uid: str):
     return redirect(url_for("admin_user", uid=uid))
 
 
+@app.route("/admin/user/<uid>/prefs", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_prefs(uid: str):
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    font_size = request.form.get("font_size", "normal")
+    if font_size not in ("normal", "large", "larger"):
+        font_size = "normal"
+    dark_mode = "dark_mode" in request.form
+    user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+    user._save()
+    flash("Display preferences updated.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
 @app.route("/admin/user/<uid>/lock", methods=["POST"])
 @login_required
 @admin_required

@@ -63,6 +63,38 @@
     {% endif %}
   </section>
 
+  <!-- ── Display preferences ───────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Display preferences</h2>
+    <form method="post" action="{{ url_for('admin_user_prefs', uid=u.get_id()) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label>Text size</label>
+        <div class="radio-group">
+          {% set fs = u._data.get('preferences', {}).get('font_size', 'normal') %}
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="normal" {% if fs == 'normal' %}checked{% endif %}>
+            Normal
+          </label>
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="large" {% if fs == 'large' %}checked{% endif %}>
+            Large
+          </label>
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="larger" {% if fs == 'larger' %}checked{% endif %}>
+            Largest
+          </label>
+        </div>
+      </div>
+      <label class="checkbox-label" style="margin-top:0.5rem;">
+        <input type="checkbox" name="dark_mode"
+               {% if u._data.get('preferences', {}).get('dark_mode') %}checked{% endif %}>
+        Dark mode
+      </label>
+      <button type="submit">Save display preferences</button>
+    </form>
+  </section>
+
   <!-- ── RSS feed ──────────────────────────────────────────────── -->
   <section class="admin-section">
     <h2>RSS feed URL</h2>
