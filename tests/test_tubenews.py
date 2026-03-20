@@ -875,3 +875,30 @@ def test_storage_root_falls_back_on_missing_config():
     # The module was already imported; verify the fallback default is sensible.
     # (Tests that monkeypatch CONFIG_FILE to a nonexistent path trigger the except branch.)
     assert TubeNews.BASE_DIR / "archive" == TubeNews.BASE_DIR / "archive"
+
+
+# ---------------------------------------------------------------------------
+# request_timeout config key
+# ---------------------------------------------------------------------------
+
+def test_request_timeout_default_is_15(tmp_path):
+    """When request_timeout is absent from config the resolved value must be 15."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"gemini_api_key": "x"}))
+    timeout = int(json.loads(cfg.read_text()).get("request_timeout", 15))
+    assert timeout == 15
+
+
+def test_request_timeout_custom_value(tmp_path):
+    """When request_timeout is set in config that value must be used."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"request_timeout": 30}))
+    timeout = int(json.loads(cfg.read_text()).get("request_timeout", 15))
+    assert timeout == 30
+
+
+def test_request_timeout_module_constant_is_int():
+    """REQUEST_TIMEOUT exported from TubeNews must always be an int."""
+    import TubeNews
+    assert isinstance(TubeNews.REQUEST_TIMEOUT, int)
+    assert TubeNews.REQUEST_TIMEOUT > 0

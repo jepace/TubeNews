@@ -46,18 +46,27 @@ from supadata import Supadata
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 
-# Allow the archive directory to be overridden via "archive_dir" in TubeNews.json.
-# Absolute paths are used as-is; relative paths resolve from BASE_DIR.
-# Falls back to BASE_DIR/archive if the key is absent or the config cannot be read.
+# Read a small set of path/network settings from TubeNews.json at import time
+# so they are available before main() runs.  All keys are optional; sensible
+# defaults are used when the file is absent or a key is missing.
 try:
-    _archive_dir = json.loads(CONFIG_FILE.read_text()).get("archive_dir", "")
+    _early_cfg = json.loads(CONFIG_FILE.read_text())
+
+    # archive_dir — where processed content is stored.
+    # Absolute paths are used as-is; relative paths resolve from BASE_DIR.
+    _archive_dir = _early_cfg.get("archive_dir", "")
     if _archive_dir:
         _p = Path(_archive_dir)
         STORAGE_ROOT = _p if _p.is_absolute() else (BASE_DIR / _p).resolve()
     else:
         STORAGE_ROOT = BASE_DIR / "archive"
+
+    # request_timeout — seconds before giving up on YouTube / Supadata calls.
+    REQUEST_TIMEOUT: int = int(_early_cfg.get("request_timeout", 15))
+
 except Exception:
     STORAGE_ROOT = BASE_DIR / "archive"
+    REQUEST_TIMEOUT = 15
 
 # FreeBSD ships its CA bundle in a non-standard location; tell Python where
 # to find it so HTTPS requests succeed. On Linux/macOS this path won't exist
@@ -66,9 +75,9 @@ _FREEBSD_CERT = "/usr/local/share/certs/ca-root-nss.crt"
 if os.path.exists(_FREEBSD_CERT):
     os.environ["SSL_CERT_FILE"] = _FREEBSD_CERT
 
-# A short default timeout prevents the script hanging indefinitely when
-# YouTube or an API endpoint is slow to respond.
-socket.setdefaulttimeout(15)
+# Apply the timeout as the process-wide socket default so every network call
+# (including Supadata's underlying HTTP) respects it automatically.
+socket.setdefaulttimeout(REQUEST_TIMEOUT)
 
 # Mimic a real browser so YouTube doesn't serve a bot-detection page instead
 # of the normal HTML (which contains the metadata we need to scrape).
@@ -284,7 +293,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
         for attempt in range(3):
             logger.debug(f"{prefix}YouTube: Fetching {tab} tab" + (f" (retry {attempt})" if attempt else ""))
             try:
-                response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=15)
+                response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=REQUEST_TIMEOUT)
                 if response.status_code == 200:
                     return tab, response.text
             except Exception as exc:
