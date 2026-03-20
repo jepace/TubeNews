@@ -443,6 +443,29 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 ---
 
+## Testing Policy
+
+**Writing tests is an ongoing responsibility, not a one-time task.**
+
+Every time you add or change a function in `TubeNews.py` or `web/app.py`, ask yourself:
+- Does this change have a regression risk?
+- Is there existing test coverage for this behaviour?
+- If not, write tests **in the same commit** as the code change.
+
+Test files:
+- `tests/test_tubenews.py` — covers `TubeNews.py` functions
+- `tests/test_web.py` — covers `web/app.py` helpers (URL generation, prefs, etc.)
+
+When a bug is fixed, a regression test for that exact bug must be added before closing the fix. If you find yourself writing the same class of fix twice (e.g., URL generation producing absolute instead of relative links), that is a sign the test suite was insufficient — expand it.
+
+Run the full suite before every commit:
+
+```bash
+pytest tests/ -v
+```
+
+---
+
 ## URL Generation Rules
 
 **Never use `_external=True` with `url_for()`** in the web UI. The deployment does not yet have HTTPS configured, and `_external=True` produces absolute URLs (with scheme and host) that break when the scheme or host is wrong.
