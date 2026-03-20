@@ -18,6 +18,7 @@
           <a href="{{ url_for('admin_runs') }}">Runs</a>
         {% endif %}
         <a href="{{ url_for('serve_blog') }}">Blog</a>
+        {% block nav_extra %}{% endblock %}
         <a href="{{ url_for('dashboard') }}">Settings</a>
         {% if current_user.is_admin %}
           <a href="{{ url_for('admin_user', uid=current_user.get_id()) }}" class="nav-user">{{ current_user.name }}</a>
@@ -27,7 +28,6 @@
         <a href="{{ url_for('login') }}">Log in</a>
         <a href="{{ url_for('register') }}">Create account</a>
       {% endif %}
-      {% block nav_extra %}{% endblock %}
     </nav>
   </header>
 
