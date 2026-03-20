@@ -63,6 +63,43 @@
       <p class="muted">No channels are configured in TubeNews.json yet.</p>
     {% endif %}
   </section>
+
+  <section>
+    <h2>Display</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="prefs">
+
+      <div class="form-row">
+        <label>Text size</label>
+        <div class="radio-group">
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="normal"
+                   {% if prefs.get('font_size', 'normal') == 'normal' %}checked{% endif %}>
+            Normal
+          </label>
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="large"
+                   {% if prefs.get('font_size') == 'large' %}checked{% endif %}>
+            Large
+          </label>
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="larger"
+                   {% if prefs.get('font_size') == 'larger' %}checked{% endif %}>
+            Largest
+          </label>
+        </div>
+      </div>
+
+      <label class="checkbox-label" style="margin-top:0.5rem;">
+        <input type="checkbox" name="dark_mode"
+               {% if prefs.get('dark_mode') %}checked{% endif %}>
+        Dark mode
+      </label>
+
+      <button type="submit" class="btn-save">Save display preferences</button>
+    </form>
+  </section>
 </div>
 
 <script>
