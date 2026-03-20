@@ -51,7 +51,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml  # noqa: E402
+from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -259,20 +259,37 @@ def admin_required(f):
     return decorated
 
 
+def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[dict]) -> dict | None:
+    """Return ``{channel_id, channel_name}`` for *channel_dir*.
+
+    Reads ``channel.json`` when present; falls back to matching the directory
+    name against ``slugify(channel_name)`` for each configured channel so that
+    old archive directories created before ``channel.json`` was introduced are
+    still recognised.
+    """
+    channel_json = channel_dir / "channel.json"
+    if channel_json.exists():
+        try:
+            return json.loads(channel_json.read_text())
+        except Exception:
+            pass
+    for ch in channels_cfg:
+        if slugify(ch["channel_name"]) == channel_dir.name:
+            return {"channel_id": ch["channel_id"], "channel_name": ch["channel_name"]}
+    return None
+
+
 def _archive_channel_stats() -> list[dict]:
     """Scan archive dirs and return per-channel processing stats."""
     stats = []
     if not STORAGE_ROOT.is_dir():
         return stats
+    channels_cfg = _load_channels()
     for channel_dir in STORAGE_ROOT.iterdir():
         if not channel_dir.is_dir() or channel_dir.name == "users":
             continue
-        channel_json = channel_dir / "channel.json"
-        if not channel_json.exists():
-            continue
-        try:
-            info = json.loads(channel_json.read_text())
-        except Exception:
+        info = _channel_info_for_dir(channel_dir, channels_cfg)
+        if not info:
             continue
         processed = ignored = no_stories = story_count = 0
         last_processed = 0
@@ -311,17 +328,12 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
     """
     if not STORAGE_ROOT.is_dir():
         return None, []
+    channels_cfg = _load_channels()
     for channel_dir in STORAGE_ROOT.iterdir():
         if not channel_dir.is_dir() or channel_dir.name == "users":
             continue
-        channel_json = channel_dir / "channel.json"
-        if not channel_json.exists():
-            continue
-        try:
-            channel_info = json.loads(channel_json.read_text())
-        except Exception:
-            continue
-        if channel_info.get("channel_id") != channel_id:
+        channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+        if not channel_info or channel_info.get("channel_id") != channel_id:
             continue
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
         raw = []
@@ -366,15 +378,10 @@ def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
     subscribed = set(user_data.get("channel_ids", []))
     cutoff = time.time() - blog_days * 86400
     raw: list[dict] = []
+    channels_cfg = _load_channels()
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
-        channel_json = channel_dir / "channel.json"
-        if not channel_json.exists():
-            continue
-        try:
-            channel_info = json.loads(channel_json.read_text())
-        except Exception:
-            continue
-        if channel_info.get("channel_id") not in subscribed:
+        channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+        if not channel_info or channel_info.get("channel_id") not in subscribed:
             continue
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
         for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
