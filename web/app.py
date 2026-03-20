@@ -240,14 +240,14 @@ def _feed_url(token: str) -> str:
     base = _base_url()
     if base:
         return f"{base}/feed/{token}.xml"
-    return url_for("serve_feed", token=token, _external=True).replace(f"/feed/{token}", f"/feed/{token}.xml")
+    return f"/feed/{token}.xml"
 
 
 def _blog_url(token: str) -> str:
     base = _base_url()
     if base:
         return f"{base}/blog/{token}.html"
-    return url_for("serve_blog_public", token=token, _external=True).replace(f"/blog/{token}", f"/blog/{token}.html")
+    return f"/blog/{token}.html"
 
 
 def _prefs_to_classes(prefs: dict) -> str:

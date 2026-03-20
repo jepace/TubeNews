@@ -443,6 +443,16 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 ---
 
+## URL Generation Rules
+
+**Never use `_external=True` with `url_for()`** in the web UI. The deployment does not yet have HTTPS configured, and `_external=True` produces absolute URLs (with scheme and host) that break when the scheme or host is wrong.
+
+- `_feed_url(token)` and `_blog_url(token)` return relative paths (`/feed/<token>.xml`, `/blog/<token>.html`) when `base_url` is not set in `TubeNews.json`. They only prepend an absolute base when the operator has explicitly configured `base_url`.
+- All links rendered in HTML templates must be relative (use `url_for()` without `_external=True`, or hardcoded root-relative paths like `/feed/...`).
+- The only place absolute URLs are appropriate is inside generated RSS/Atom XML, and only when `base_url` is configured.
+
+---
+
 ## Commit & Branch Conventions
 
 This project uses descriptive commit messages. When working on this repo as an AI assistant, push to the branch specified in the task instructions. Never push to `main` directly.
