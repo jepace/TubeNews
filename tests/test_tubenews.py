@@ -581,14 +581,13 @@ def test_rebuild_user_blog_excludes_unsubscribed_stories(user_archive):
     content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
     assert "Beta City Council" not in content
 
-def test_rebuild_user_blog_date_filter(tmp_path, monkeypatch):
-    """Stories older than blog_days should be omitted."""
+def test_rebuild_user_blog_includes_old_stories(tmp_path, monkeypatch):
+    """Stories from years ago must appear in the blog — no date filter."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "old_channel"
     meeting_dir = _make_meeting(channel_dir, "2020-01-01", "VIDold12345", "Old Meeting")
-    # Override processed_at to a timestamp well in the past.
     old_meta = {
         "video_id": "VIDold12345",
         "video_title": "Old Meeting",
@@ -603,9 +602,9 @@ def test_rebuild_user_blog_date_filter(tmp_path, monkeypatch):
     )
 
     user = {"name": "Test User", "channel_ids": ["UC_OLD_ID"], "feed_token": "test-token-2"}
-    rebuild_user_blog(user, blog_days=90)  # only 90 days; story is 200 days old
+    rebuild_user_blog(user)
     content = (tmp_path / "users" / "Test_User" / "index.html").read_text()
-    assert "Very Old Story" not in content
+    assert "Very Old Story" in content
 
 
 # ---------------------------------------------------------------------------
@@ -815,9 +814,8 @@ def test_feed_and_blog_empty_when_no_subscriptions(parity_archive):
     assert "Channel B" not in blog_html
 
 
-def test_blog_date_filter_does_not_affect_feed(tmp_path, monkeypatch):
-    """An old story (beyond blog_days) is absent from the blog but still present
-    in the RSS feed, which has no date filter."""
+def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
+    """Old stories must appear in both the RSS feed and the blog — neither has a date filter."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
@@ -839,11 +837,11 @@ def test_blog_date_filter_does_not_affect_feed(tmp_path, monkeypatch):
     user = {"name": "Time", "channel_ids": ["UC_OLD_ID"], "feed_token": "time-tok"}
 
     feed_xml = build_user_feed_xml(user).decode()
-    rebuild_user_blog(user, blog_days=90)
+    rebuild_user_blog(user)
     blog_html = (tmp_path / "users" / "Time" / "index.html").read_text()
 
-    assert "Ancient Story" in feed_xml,      "Feed has no date filter — old stories must still appear"
-    assert "Ancient Story" not in blog_html, "Blog date filter must exclude old stories"
+    assert "Ancient Story" in feed_xml,  "Old stories must appear in RSS feed"
+    assert "Ancient Story" in blog_html, "Old stories must appear in blog — no date filter"
 
 
 # ---------------------------------------------------------------------------

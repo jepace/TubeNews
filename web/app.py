@@ -411,10 +411,9 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
     return None, []
 
 
-def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
+def _get_user_stories(user_data: dict) -> list[dict]:
     """Return parsed stories for a user's subscribed channels, newest-first."""
     subscribed = set(user_data.get("channel_ids", []))
-    cutoff = time.time() - blog_days * 86400
     raw: list[dict] = []
     channels_cfg = _load_channels()
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
@@ -429,8 +428,6 @@ def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
             try:
                 meta = json.loads(meta_path.read_text())
                 if meta.get("status") == "ignored_too_old":
-                    continue
-                if meta.get("processed_at", 0) < cutoff:
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
@@ -651,7 +648,7 @@ def serve_blog_public(token: str):
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
                 cfg = _load_config()
-                stories = _get_user_stories(data, cfg.get("blog_days", 90))
+                stories = _get_user_stories(data)
                 blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
                 return render_template("blog.html", stories=stories, blog_name=blog_name,
                                        feed_path=f"/feed/{token}.xml",
@@ -669,7 +666,7 @@ def serve_blog():
         flash("Subscribe to channels to start reading your blog.", "info")
         return redirect(url_for("dashboard"))
     cfg = _load_config()
-    stories = _get_user_stories(current_user._data, cfg.get("blog_days", 90))
+    stories = _get_user_stories(current_user._data)
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml")

@@ -6,7 +6,6 @@
   "archive_dir": "",
   "request_timeout": 15,
   "ntfy_topic": "TubeNewsAdmin",
-  "blog_days": 90,
   "tubenews_key": "generate with: python -c 'import secrets; print(secrets.token_hex(32))'",
   "admin_users": ["you@example.com"],
   "feeds": [

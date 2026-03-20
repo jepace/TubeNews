@@ -739,18 +739,16 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
     (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
-def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_id: str = "") -> None:
+def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None:
     """Generate ``archive/users/<id>/index.html`` — a static blog page for a user.
 
     Pulls stories from the user's subscribed channels (same logic as
     :func:`rebuild_user_feed`) and renders them as a self-contained HTML page
-    sorted newest-first.  Only stories processed within the last *blog_days* days
-    are included so the page stays a manageable size.
+    sorted newest-first.  All stories are included regardless of age.
 
     Args:
         user:      User config dict from ``archive/users/<id>/user.json``.
         base_url:  Public URL root; used to build a self-link in the page header.
-        blog_days: How many days of stories to include (default 90).
         user_id:   UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
@@ -759,8 +757,6 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
     user_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"TubeNews: Rebuilding blog for {name}")
-
-    cutoff = time.time() - blog_days * 86400
 
     all_stories: list[dict] = []
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
@@ -781,8 +777,6 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
             try:
                 metadata = json.loads(metadata_path.read_text())
                 if metadata.get("status") == "ignored_too_old":
-                    continue
-                if metadata.get("processed_at", 0) < cutoff:
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name,
@@ -843,8 +837,7 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
 
     page_title = user.get("blog_name") or f"TubeNews — {name}"
     meta_line = (
-        f"{len(all_stories)} stories from {len(subscribed)} channel{'s' if len(subscribed) != 1 else ''} "
-        f"— last {blog_days} days"
+        f"{len(all_stories)} stories from {len(subscribed)} channel{'s' if len(subscribed) != 1 else ''}"
     )
     rss_feed_path = f"/feed/{user['feed_token']}.xml"
     rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_feed_path}">'
