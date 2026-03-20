@@ -258,7 +258,7 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
             if "videoId" in obj and "title" in obj:
                 vid = obj["videoId"]
                 runs = obj["title"].get("runs", [])
-                title = runs[0].get("text", "") if runs else ""
+                title = runs[0].get("text", "") if runs else obj["title"].get("simpleText", "")
 
                 relative = obj.get("publishedTimeText", {}).get("simpleText", "")
                 date = _relative_date_to_iso(relative) if relative else datetime.now().strftime("%Y-%m-%d")

@@ -325,6 +325,18 @@ def test_parse_channel_page_metadata_extracts_video():
     assert result["abc123xyz"]["title"] == "Test Council Meeting"
     assert result["abc123xyz"]["is_live"] is False
 
+
+def test_parse_channel_page_metadata_simpletext_title():
+    """YouTube sometimes uses simpleText instead of runs for the title field."""
+    video = {
+        "videoId": "simple1xyzz",
+        "title": {"simpleText": "03 16 26 Joint CC & SA Meeting"},
+        "publishedTimeText": {"simpleText": "4 days ago"},
+        "thumbnailOverlays": [],
+    }
+    result = _parse_channel_page_metadata(_make_yt_html(video))
+    assert result["simple1xyzz"]["title"] == "03 16 26 Joint CC & SA Meeting"
+
 def test_parse_channel_page_metadata_no_yt_initial_data():
     result = _parse_channel_page_metadata("<html><body>No data here</body></html>")
     assert result == {}
