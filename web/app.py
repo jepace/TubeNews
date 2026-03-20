@@ -21,6 +21,7 @@ from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     redirect,
@@ -301,6 +302,65 @@ def _archive_channel_stats() -> list[dict]:
     return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
+def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
+    """Return (channel_name, stories) for a single channel, newest-first.
+
+    All processed stories are returned with no time cutoff — this is a full
+    archive browse, not a recency-filtered blog view.  Returns (None, []) if
+    no matching channel archive is found.
+    """
+    if not STORAGE_ROOT.is_dir():
+        return None, []
+    for channel_dir in STORAGE_ROOT.iterdir():
+        if not channel_dir.is_dir() or channel_dir.name == "users":
+            continue
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            channel_info = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        if channel_info.get("channel_id") != channel_id:
+            continue
+        channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+        raw = []
+        for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            meta_path = meeting_dir / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+                if meta.get("status") != "processed":
+                    continue
+                for story_file in meeting_dir.glob("[0-9]*.md"):
+                    raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
+                                "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
+            except Exception:
+                continue
+        raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
+        stories = []
+        for entry in raw:
+            try:
+                s = parse_story_file(entry["file"])
+                stories.append({
+                    "title": s["title"],
+                    "dateline": s["dateline"],
+                    "body_html": s["body_html"],
+                    "start_seconds": s["start_seconds"],
+                    "video_id": entry["meta"]["video_id"],
+                    "video_title": entry["meta"].get("video_title", ""),
+                    "channel_name": entry["channel_name"],
+                    "channel_slug": entry.get("channel_slug", ""),
+                    "meeting_id": entry.get("meeting_id", ""),
+                    "processed_at": entry["meta"].get("processed_at", 0),
+                })
+            except Exception:
+                continue
+        return channel_name, stories
+    return None, []
+
+
 def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
     """Return parsed stories for a user's subscribed channels, newest-first."""
     subscribed = set(user_data.get("channel_ids", []))
@@ -553,6 +613,20 @@ def serve_blog():
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml")
+
+
+@app.route("/channel/<channel_id>")
+@login_required
+def channel_blog(channel_id: str):
+    """Browse all stories for a single configured channel — no time cutoff."""
+    channels = _load_channels()
+    if not any(ch["channel_id"] == channel_id for ch in channels):
+        abort(404)
+    channel_name, stories = _get_channel_stories(channel_id)
+    display_name = channel_name or next(
+        (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
+    )
+    return render_template("blog.html", stories=stories, blog_name=display_name, feed_path=None)
 
 
 # ---------------------------------------------------------------------------
