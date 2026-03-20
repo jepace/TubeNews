@@ -537,6 +537,34 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 .story-watch:hover,
 .story-transcript:hover { text-decoration: underline; }
 
+.story-share {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.story-share button,
+.story-share a {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+.story-share button:hover,
+.story-share a:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
 .blog-empty {
   color: var(--muted);
   margin-top: 2rem;
