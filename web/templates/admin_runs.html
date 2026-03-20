@@ -1,9 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Runs — TubeNews{% endblock %}
 
+{% block head_extra %}{% if is_running %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+
 {% block content %}
 <div class="admin">
-  <h1>Run History</h1>
+
+  <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
+    <h1 style="margin:0;">Run History</h1>
+    {% if is_running %}
+      <span class="pill pill-locked" style="font-size:0.9rem;">&#9679; Running…</span>
+    {% else %}
+      <form method="post" action="{{ url_for('admin_run_now') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn-save">Run Now</button>
+      </form>
+    {% endif %}
+  </div>
 
   {% if runs %}
   <table class="user-table">

@@ -1169,6 +1169,39 @@ def _send_ntfy(topic: str, total_stories: int, feed_results: list[dict], started
         logger.warning(f"ntfy.sh/{topic}: notification failed: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Process locking — prevent concurrent runs
+# ---------------------------------------------------------------------------
+
+LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
+
+
+def _acquire_lock() -> bool:
+    """Atomically create the lock file containing this process's PID.
+
+    Returns True if the lock was acquired.  Returns False if another live
+    process already holds it.  Stale locks (dead PID) are removed and the
+    acquire is retried once.
+    """
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            pid = int(LOCK_FILE.read_text().strip())
+            os.kill(pid, 0)          # raises if process is gone
+            return False             # process is alive — lock is valid
+        except (ValueError, ProcessLookupError, PermissionError):
+            LOCK_FILE.unlink(missing_ok=True)   # stale lock
+            return _acquire_lock()
+
+
+def _release_lock() -> None:
+    LOCK_FILE.unlink(missing_ok=True)
+
+
 def main() -> None:
     """Load config, process each feed, and rebuild RSS outputs."""
     parser = argparse.ArgumentParser(description="TubeNews — YouTube channel monitor")
@@ -1177,6 +1210,18 @@ def main() -> None:
 
     setup_logging(args.debug)
 
+    if not _acquire_lock():
+        logger.error("TubeNews: Another instance is already running. Exiting.")
+        return
+
+    try:
+        _main_body(args)
+    finally:
+        _release_lock()
+
+
+def _main_body(args) -> None:
+    """Core run logic, called from main() after the lock is acquired."""
     with open(CONFIG_FILE, "r") as config_file:
         config = json.load(config_file)
 
