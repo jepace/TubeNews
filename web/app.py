@@ -250,6 +250,27 @@ def _blog_url(token: str) -> str:
     return url_for("serve_blog_public", token=token, _external=True).replace(f"/blog/{token}", f"/blog/{token}.html")
 
 
+def _prefs_to_classes(prefs: dict) -> str:
+    """Convert a user preferences dict to an HTML class string for <html>."""
+    classes = []
+    if prefs.get("dark_mode"):
+        classes.append("dark")
+    fs = prefs.get("font_size", "normal")
+    if fs in ("large", "larger"):
+        classes.append(f"font-{fs}")
+    return " ".join(classes)
+
+
+@app.context_processor
+def inject_body_classes():
+    """Make body_classes available in every template for the logged-in user."""
+    if current_user.is_authenticated:
+        classes = _prefs_to_classes(current_user._data.get("preferences", {}))
+    else:
+        classes = ""
+    return {"body_classes": classes}
+
+
 @app.template_filter("format_ts")
 def format_ts(ts: int) -> str:
     if not ts:
@@ -563,6 +584,16 @@ def dashboard():
     channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
 
     if request.method == "POST":
+        if request.form.get("action") == "prefs":
+            font_size = request.form.get("font_size", "normal")
+            if font_size not in ("normal", "large", "larger"):
+                font_size = "normal"
+            dark_mode = "dark_mode" in request.form
+            current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+            current_user._save()
+            flash("Display preferences saved.", "success")
+            return redirect(url_for("dashboard"))
+
         selected = set(request.form.getlist("channel_ids"))
         valid_ids = {ch["channel_id"] for ch in channels}
         current_user.set_channel_ids(sorted(selected & valid_ids))
@@ -572,12 +603,14 @@ def dashboard():
         flash("Subscriptions updated.", "success")
         return redirect(url_for("dashboard"))
 
+    prefs = current_user._data.get("preferences", {})
     return render_template(
         "dashboard.html",
         channels=channels,
         subscribed=set(current_user.channel_ids),
         feed_url=_feed_url(current_user.feed_token),
         blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
+        prefs=prefs,
     )
 
 
@@ -621,7 +654,8 @@ def serve_blog_public(token: str):
                 stories = _get_user_stories(data, cfg.get("blog_days", 90))
                 blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
                 return render_template("blog.html", stories=stories, blog_name=blog_name,
-                                       feed_path=f"/feed/{token}.xml")
+                                       feed_path=f"/feed/{token}.xml",
+                                       body_classes=_prefs_to_classes(data.get("preferences", {})))
         except Exception:
             continue
     abort(404)
