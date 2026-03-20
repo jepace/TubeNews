@@ -45,7 +45,19 @@ from supadata import Supadata
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
-STORAGE_ROOT = BASE_DIR / "archive"
+
+# Allow the archive directory to be overridden via "archive_dir" in TubeNews.json.
+# Absolute paths are used as-is; relative paths resolve from BASE_DIR.
+# Falls back to BASE_DIR/archive if the key is absent or the config cannot be read.
+try:
+    _archive_dir = json.loads(CONFIG_FILE.read_text()).get("archive_dir", "")
+    if _archive_dir:
+        _p = Path(_archive_dir)
+        STORAGE_ROOT = _p if _p.is_absolute() else (BASE_DIR / _p).resolve()
+    else:
+        STORAGE_ROOT = BASE_DIR / "archive"
+except Exception:
+    STORAGE_ROOT = BASE_DIR / "archive"
 
 # FreeBSD ships its CA bundle in a non-standard location; tell Python where
 # to find it so HTTPS requests succeed. On Linux/macOS this path won't exist
