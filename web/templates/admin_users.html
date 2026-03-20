@@ -5,26 +5,6 @@
 <div class="admin">
   <h1>Users <span class="badge">{{ users|length }}</span></h1>
 
-  <div class="admin-section" id="add-user-section">
-    <h2>Add user</h2>
-    <form method="post" action="{{ url_for('admin_user_add') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="form-row">
-        <label for="new-name">Name</label>
-        <input type="text" id="new-name" name="name" autocomplete="off" required>
-      </div>
-      <div class="form-row">
-        <label for="new-email">Email</label>
-        <input type="email" id="new-email" name="email" autocomplete="off" required>
-      </div>
-      <div class="form-row">
-        <label for="new-password">Password <span class="hint">(min 10 characters — share with the user and ask them to change it)</span></label>
-        <input type="text" id="new-password" name="password" autocomplete="off" required minlength="10">
-      </div>
-      <button type="submit" class="btn-save">Create account</button>
-    </form>
-  </div>
-
   {% if users %}
   <table class="user-table">
     <thead>
@@ -85,5 +65,25 @@
   {% else %}
     <p class="muted">No user accounts yet.</p>
   {% endif %}
+
+  <details class="admin-section add-user-details">
+    <summary>Add user</summary>
+    <form method="post" action="{{ url_for('admin_user_add') }}" style="margin-top:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="new-name">Name</label>
+        <input type="text" id="new-name" name="name" autocomplete="off" required>
+      </div>
+      <div class="form-row">
+        <label for="new-email">Email</label>
+        <input type="email" id="new-email" name="email" autocomplete="off" required>
+      </div>
+      <div class="form-row">
+        <label for="new-password">Password <span class="hint">(min 10 characters — share with the user and ask them to change it)</span></label>
+        <input type="text" id="new-password" name="password" autocomplete="off" required minlength="10">
+      </div>
+      <button type="submit" class="btn-save">Create account</button>
+    </form>
+  </details>
 </div>
 {% endblock %}
