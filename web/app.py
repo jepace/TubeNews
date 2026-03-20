@@ -717,6 +717,7 @@ def admin_user(uid: str):
         channels=channels,
         subscribed=set(user.channel_ids),
         feed_url=_feed_url(user.feed_token),
+        blog_url=_blog_url(user.feed_token),
     )
 
 

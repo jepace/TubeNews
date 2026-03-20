@@ -356,6 +356,17 @@ button[type="submit"]:hover,
   margin-bottom: 1.25rem;
 }
 
+.add-user-details > summary {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+.add-user-details > summary::-webkit-details-marker { display: none; }
+.add-user-details > summary::before { content: "+ "; }
+.add-user-details[open] > summary::before { content: "− "; }
+
 .admin-section h2 {
   font-size: 0.95rem;
   font-weight: 600;
