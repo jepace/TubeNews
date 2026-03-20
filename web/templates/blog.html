@@ -35,11 +35,15 @@
       <div class="story-share"
            data-title="{{ story.title | e }}"
            data-dateline="{{ story.dateline | e }}"
-           data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}">
-        <button class="share-copy-text" title="Copy article text">Copy article</button>
-        <button class="share-copy-link" title="Copy link to this article">Copy link</button>
-        <a class="share-email" href="#" title="Share via email">Email</a>
-        <button class="share-mastodon" title="Share to Mastodon">Mastodon</button>
+           data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}"
+           data-youtube="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}"
+           {% if story.channel_slug and story.meeting_id %}
+           data-transcript="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}"
+           {% endif %}>
+        <button class="share-copy-text" title="Copy article text">&#128203; Copy article</button>
+        <button class="share-copy-link" title="Copy link to this article">&#128279; Copy link</button>
+        <a class="share-email" href="#" title="Share via email">&#9993; Email</a>
+        <button class="share-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
       </div>
     </article>
     {% endfor %}
@@ -61,8 +65,24 @@
     var bodyEl  = article.querySelector('.story-body');
     var tmp = document.createElement('div');
     tmp.innerHTML = bodyEl.innerHTML;
-    return bar.dataset.title + '\n' + bar.dataset.dateline + '\n\n'
-           + (tmp.textContent || tmp.innerText || '');
+    tmp.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li').forEach(function (el) {
+      el.after('\n\n');
+    });
+    tmp.querySelectorAll('br').forEach(function (el) { el.after('\n'); });
+    var bodyText = (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+
+    var youtube    = bar.dataset.youtube    || '';
+    var transcript = bar.dataset.transcript
+                     ? window.location.origin + bar.dataset.transcript : '';
+    var link       = articleLink(bar.dataset.anchor);
+
+    var header = bar.dataset.title + '\n' + bar.dataset.dateline;
+    if (youtube) header += '\n' + youtube;
+
+    var footer = link;
+    if (transcript) footer += '\n' + transcript;
+
+    return header + '\n\n' + bodyText + '\n\n' + footer;
   }
 
   function articleLink(anchor) {
@@ -94,9 +114,8 @@
 
     bar.querySelector('.share-email').addEventListener('click', function (e) {
       e.preventDefault();
-      var body = plainText(bar) + '\n\n' + articleLink(anchor);
       window.location.href = 'mailto:?subject=' + encodeURIComponent(title)
-                           + '&body=' + encodeURIComponent(body);
+                           + '&body=' + encodeURIComponent(plainText(bar));
     });
 
     bar.querySelector('.share-mastodon').addEventListener('click', function () {
