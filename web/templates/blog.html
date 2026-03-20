@@ -79,8 +79,8 @@
     var header = bar.dataset.title + '\n' + bar.dataset.dateline;
     if (youtube) header += '\n' + youtube;
 
-    var footer = link;
-    if (transcript) footer += '\n' + transcript;
+    var footer = 'Blog: ' + link;
+    if (transcript) footer += '\nTranscript: ' + transcript;
 
     return header + '\n\n' + bodyText + '\n\n' + footer;
   }
