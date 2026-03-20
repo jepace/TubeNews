@@ -1,5 +1,6 @@
 """Unit tests for TubeNews.py — run with: pytest tests/ -v"""
 import json
+import os
 import re
 import sys
 import time
@@ -25,6 +26,8 @@ from TubeNews import (
     _relative_date_to_iso,
     _parse_channel_page_metadata,
     _resolve_early_config,
+    _acquire_lock,
+    _release_lock,
 )
 
 
@@ -907,3 +910,89 @@ def test_resolve_request_timeout_is_int_not_string(tmp_path):
     cfg.write_text(json.dumps({"request_timeout": 45}))
     _, timeout = _resolve_early_config(cfg, tmp_path)
     assert isinstance(timeout, int)
+
+
+# ---------------------------------------------------------------------------
+# _acquire_lock / _release_lock
+# ---------------------------------------------------------------------------
+
+def test_acquire_lock_creates_file(tmp_path, monkeypatch):
+    """Acquiring a free lock creates the lock file containing our PID."""
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    try:
+        assert _acquire_lock()
+        assert lock.exists()
+        assert int(lock.read_text().strip()) == os.getpid()
+    finally:
+        _release_lock()
+
+
+def test_acquire_lock_returns_false_when_held_by_live_process(tmp_path, monkeypatch):
+    """Returns False when the lock file already contains a live PID."""
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    # Write our own PID — we are alive, so the lock is legitimately held.
+    lock.write_text(str(os.getpid()))
+    assert not _acquire_lock()
+
+
+def test_acquire_lock_clears_stale_lock_and_succeeds(tmp_path, monkeypatch):
+    """A lock file containing a dead PID is removed and the acquire succeeds."""
+    import subprocess as _sp
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    # Spawn a process, wait for it to finish, then use its (now-dead) PID.
+    proc = _sp.Popen([sys.executable, "-c", "pass"])
+    dead_pid = proc.pid
+    proc.wait()
+    lock.write_text(str(dead_pid))
+    try:
+        assert _acquire_lock()
+        assert int(lock.read_text().strip()) == os.getpid()
+    finally:
+        _release_lock()
+
+
+def test_acquire_lock_clears_garbage_lock_and_succeeds(tmp_path, monkeypatch):
+    """A lock file with non-numeric content is treated as stale."""
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    lock.write_text("not-a-pid")
+    try:
+        assert _acquire_lock()
+    finally:
+        _release_lock()
+
+
+def test_release_lock_removes_file(tmp_path, monkeypatch):
+    """_release_lock removes the lock file."""
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    _acquire_lock()
+    _release_lock()
+    assert not lock.exists()
+
+
+def test_release_lock_is_noop_when_not_held(tmp_path, monkeypatch):
+    """_release_lock must not raise when no lock file exists."""
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    _release_lock()  # must not raise
+
+
+def test_acquire_lock_succeeds_again_after_release(tmp_path, monkeypatch):
+    """After releasing, acquiring the lock must succeed a second time."""
+    import TubeNews
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(TubeNews, "LOCK_FILE", lock)
+    assert _acquire_lock()
+    _release_lock()
+    assert _acquire_lock()
+    _release_lock()
