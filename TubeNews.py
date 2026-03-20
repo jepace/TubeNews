@@ -341,7 +341,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
             m = meta_lookup.get(vid, {})
             seen[vid] = {
                 "id": vid,
-                "title": m.get("title") or vid,
+                "title": m.get("title") or "",
                 "date": m.get("date") or today,
                 "is_live": m.get("is_live", False),
             }

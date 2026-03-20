@@ -370,13 +370,15 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
         for entry in raw:
             try:
                 s = parse_story_file(entry["file"])
+                vid = entry["meta"]["video_id"]
+                vt = entry["meta"].get("video_title", "")
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
                     "body_html": s["body_html"],
                     "start_seconds": s["start_seconds"],
-                    "video_id": entry["meta"]["video_id"],
-                    "video_title": entry["meta"].get("video_title", ""),
+                    "video_id": vid,
+                    "video_title": vt if vt != vid else "",
                     "channel_name": entry["channel_name"],
                     "channel_slug": entry.get("channel_slug", ""),
                     "meeting_id": entry.get("meeting_id", ""),
@@ -419,13 +421,15 @@ def _get_user_stories(user_data: dict, blog_days: int = 90) -> list[dict]:
     for entry in raw:
         try:
             s = parse_story_file(entry["file"])
+            vid = entry["meta"]["video_id"]
+            vt = entry["meta"].get("video_title", "")
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
                 "body_html": s["body_html"],
                 "start_seconds": s["start_seconds"],
-                "video_id": entry["meta"]["video_id"],
-                "video_title": entry["meta"].get("video_title", ""),
+                "video_id": vid,
+                "video_title": vt if vt != vid else "",
                 "channel_name": entry["channel_name"],
                 "channel_slug": entry.get("channel_slug", ""),
                 "meeting_id": entry.get("meeting_id", ""),
