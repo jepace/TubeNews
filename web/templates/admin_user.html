@@ -95,17 +95,22 @@
     </form>
   </section>
 
-  <!-- ── RSS feed ──────────────────────────────────────────────── -->
+  <!-- ── RSS feed & blog ───────────────────────────────────────── -->
   <section class="admin-section">
     <h2>RSS feed URL</h2>
     <div class="feed-url-row">
       <input type="text" class="feed-url-input" id="feed-url" value="{{ feed_url }}" readonly>
-      <button type="button" onclick="copyFeedUrl()" class="btn-copy">Copy</button>
+      <button type="button" onclick="copyUrl('feed-url', this)" class="btn-copy">Copy</button>
+    </div>
+    <h2 style="margin-top:1rem;">Blog URL</h2>
+    <div class="feed-url-row">
+      <input type="text" class="feed-url-input" id="blog-url" value="{{ blog_url }}" readonly>
+      <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
     </div>
     <form method="post" action="{{ url_for('admin_rotate_token', uid=u.get_id()) }}"
-          class="inline-form" onsubmit="return confirm('Rotate the feed token? The current RSS URL will stop working.')">
+          class="inline-form" onsubmit="return confirm('Rotate the feed token? The current RSS and blog URLs will stop working.')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn-danger-sm">Rotate token</button>
+      <button type="submit" class="btn-danger-sm" style="margin-top:0.75rem;">Rotate token</button>
     </form>
   </section>
 
@@ -188,9 +193,8 @@
     btnUnselectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = false; }); });
   }
 
-  function copyFeedUrl() {
-    const input = document.getElementById('feed-url');
-    const btn = document.querySelector('.btn-copy');
+  function copyUrl(inputId, btn) {
+    const input = document.getElementById(inputId);
     function onCopied() {
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
