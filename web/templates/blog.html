@@ -21,7 +21,7 @@
 
   {% if stories %}
     {% for story in stories %}
-    <article class="story">
+    <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}">
       <h2>{{ story.title }}</h2>
       <p class="story-dateline">{{ story.dateline }}</p>
       <p class="story-source">
@@ -32,10 +32,79 @@
         {% endif %}
       </p>
       <div class="story-body">{{ story.body_html | safe }}</div>
+      <div class="story-share"
+           data-title="{{ story.title | e }}"
+           data-dateline="{{ story.dateline | e }}"
+           data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}">
+        <button class="share-copy-text" title="Copy article text">Copy article</button>
+        <button class="share-copy-link" title="Copy link to this article">Copy link</button>
+        <a class="share-email" href="#" title="Share via email">Email</a>
+        <button class="share-mastodon" title="Share to Mastodon">Mastodon</button>
+      </div>
     </article>
     {% endfor %}
   {% else %}
     <p class="blog-empty">No stories yet. Check back after the next TubeNews run.</p>
   {% endif %}
 </div>
+
+<script>
+(function () {
+  function flash(el, msg) {
+    var orig = el.textContent;
+    el.textContent = msg;
+    setTimeout(function () { el.textContent = orig; }, 1800);
+  }
+
+  function plainText(bar) {
+    var article = bar.closest('article');
+    var bodyEl  = article.querySelector('.story-body');
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bodyEl.innerHTML;
+    return bar.dataset.title + '\n' + bar.dataset.dateline + '\n\n'
+           + (tmp.textContent || tmp.innerText || '');
+  }
+
+  function articleLink(anchor) {
+    return window.location.href.split('#')[0] + '#' + anchor;
+  }
+
+  function copyText(text, btn, msg) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { flash(btn, msg); });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+      flash(btn, msg);
+    }
+  }
+
+  document.querySelectorAll('.story-share').forEach(function (bar) {
+    var title  = bar.dataset.title;
+    var anchor = bar.dataset.anchor;
+
+    bar.querySelector('.share-copy-text').addEventListener('click', function () {
+      copyText(plainText(bar), this, 'Copied!');
+    });
+
+    bar.querySelector('.share-copy-link').addEventListener('click', function () {
+      copyText(articleLink(anchor), this, 'Copied!');
+    });
+
+    bar.querySelector('.share-email').addEventListener('click', function (e) {
+      e.preventDefault();
+      var body = plainText(bar) + '\n\n' + articleLink(anchor);
+      window.location.href = 'mailto:?subject=' + encodeURIComponent(title)
+                           + '&body=' + encodeURIComponent(body);
+    });
+
+    bar.querySelector('.share-mastodon').addEventListener('click', function () {
+      var text = title + '\n' + articleLink(anchor);
+      window.open('https://toot.kytta.dev/?text=' + encodeURIComponent(text),
+                  '_blank', 'noopener,width=600,height=400');
+    });
+  });
+})();
+</script>
 {% endblock %}
