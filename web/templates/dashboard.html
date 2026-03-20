@@ -38,12 +38,15 @@
 
         <div class="channel-list" id="channel-list">
           {% for ch in channels %}
-            <label class="checkbox-label channel-row">
-              <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
-                     {% if ch.channel_id in subscribed %}checked{% endif %}
-                     class="channel-checkbox">
-              {{ ch.channel_name }}
-            </label>
+            <div class="channel-row">
+              <label class="checkbox-label">
+                <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
+                       {% if ch.channel_id in subscribed %}checked{% endif %}
+                       class="channel-checkbox">
+                {{ ch.channel_name }}
+              </label>
+              <a href="{{ url_for('channel_blog', channel_id=ch.channel_id) }}" class="channel-browse" title="Browse stories">Browse</a>
+            </div>
           {% endfor %}
         </div>
 

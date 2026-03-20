@@ -284,7 +284,21 @@ button[type="submit"]:hover,
   .channel-list { grid-template-columns: 1fr; }
 }
 
-.channel-row { padding: 0.1rem 0; }
+.channel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+}
+
+.channel-browse {
+  font-size: 0.8rem;
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.channel-browse:hover { text-decoration: underline; }
 
 .muted { color: var(--muted); font-size: 0.9rem; }
 .mono  { font-family: monospace; font-size: 0.875rem; }
