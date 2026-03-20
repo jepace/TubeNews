@@ -478,7 +478,8 @@ button.btn-danger-sm:hover { background: #fee2e2; }
   line-height: 1.65;
 }
 
-.story-watch {
+.story-watch,
+.story-transcript {
   display: inline-block;
   margin-top: 0.75rem;
   font-size: 0.85rem;
@@ -486,7 +487,8 @@ button.btn-danger-sm:hover { background: #fee2e2; }
   text-decoration: none;
 }
 
-.story-watch:hover { text-decoration: underline; }
+.story-watch:hover,
+.story-transcript:hover { text-decoration: underline; }
 
 .blog-empty {
   color: var(--muted);
