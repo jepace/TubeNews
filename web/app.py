@@ -12,6 +12,7 @@ Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 
 import json
 import os
+import subprocess
 import sys
 import time
 import uuid
@@ -55,6 +56,8 @@ from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugif
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
+LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
+TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -192,6 +195,18 @@ def load_user(user_id: str) -> User | None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_running() -> bool:
+    """Return True if a TubeNews.py process currently holds the lock file."""
+    if not LOCK_FILE.exists():
+        return False
+    try:
+        pid = int(LOCK_FILE.read_text().strip())
+        os.kill(pid, 0)   # signal 0 = existence check only
+        return True
+    except (ValueError, ProcessLookupError, PermissionError):
+        return False
 
 
 def _load_config() -> dict:
@@ -816,7 +831,25 @@ def admin_runs():
         "admin_runs.html",
         runs=list(reversed(runs)),
         channel_stats=_archive_channel_stats(),
+        is_running=_is_running(),
     )
+
+
+@app.route("/admin/run-now", methods=["POST"])
+@login_required
+@admin_required
+def admin_run_now():
+    if _is_running():
+        flash("TubeNews is already running.", "info")
+        return redirect(url_for("admin_runs"))
+    subprocess.Popen(
+        [sys.executable, str(TUBENEWS_PY)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    flash("TubeNews run started.", "success")
+    return redirect(url_for("admin_runs"))
 
 
 @app.route("/admin/feeds")

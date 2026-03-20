@@ -8,10 +8,12 @@ Run with:  pytest tests/test_webapp.py -v
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -341,3 +343,155 @@ def test_dashboard_subscribe_updates_channels(logged_in_client, archive):
     }, follow_redirects=True)
     assert r.status_code == 200
     assert b"Subscriptions updated" in r.data
+
+
+# ---------------------------------------------------------------------------
+# Admin fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def admin_user(archive, monkeypatch):
+    """A user whose email is in admin_users; updates the temp config accordingly."""
+    cfg_path = webapp.CONFIG_FILE
+    cfg = json.loads(cfg_path.read_text())
+    cfg["admin_users"] = ["admin@example.com"]
+    cfg_path.write_text(json.dumps(cfg))
+    # Also patch LOCK_FILE so admin routes never touch the real filesystem.
+    monkeypatch.setattr(webapp, "LOCK_FILE", archive / ".tubenews.lock")
+    return _make_user(
+        archive / "users",
+        name="Admin",
+        email="admin@example.com",
+        channel_ids=[],
+    )
+
+
+@pytest.fixture
+def admin_client(client, admin_user):
+    """A test client authenticated as the admin user."""
+    client.post("/login", data={
+        "email": "admin@example.com",
+        "password": "testpassword123",
+    })
+    return client
+
+
+# ---------------------------------------------------------------------------
+# _is_running helper
+# ---------------------------------------------------------------------------
+
+def test_is_running_false_when_no_lock_file(tmp_path, monkeypatch):
+    """Returns False when no lock file exists."""
+    monkeypatch.setattr(webapp, "LOCK_FILE", tmp_path / ".tubenews.lock")
+    assert not webapp._is_running()
+
+
+def test_is_running_true_when_lock_has_live_pid(tmp_path, monkeypatch):
+    """Returns True when the lock file contains a currently-running PID."""
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(webapp, "LOCK_FILE", lock)
+    lock.write_text(str(os.getpid()))
+    assert webapp._is_running()
+
+
+def test_is_running_false_when_lock_has_dead_pid(tmp_path, monkeypatch):
+    """Returns False (and doesn't raise) when the lock PID is not alive."""
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(webapp, "LOCK_FILE", lock)
+    # Spawn a process, wait for it to finish, then use its (now-dead) PID.
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_pid = proc.pid
+    proc.wait()
+    lock.write_text(str(dead_pid))
+    assert not webapp._is_running()
+
+
+def test_is_running_false_when_lock_contains_garbage(tmp_path, monkeypatch):
+    """Returns False when the lock file has non-numeric content."""
+    lock = tmp_path / ".tubenews.lock"
+    monkeypatch.setattr(webapp, "LOCK_FILE", lock)
+    lock.write_text("not-a-pid")
+    assert not webapp._is_running()
+
+
+# ---------------------------------------------------------------------------
+# Admin runs page — Run Now button and status banner
+# ---------------------------------------------------------------------------
+
+def test_admin_runs_requires_login(client, archive):
+    r = client.get("/admin/runs")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_admin_runs_requires_admin(logged_in_client, archive):
+    r = logged_in_client.get("/admin/runs")
+    assert r.status_code == 403
+
+
+def test_admin_runs_shows_run_now_button_when_idle(admin_client, archive):
+    """When no lock file exists the page must show the Run Now button."""
+    r = admin_client.get("/admin/runs")
+    assert r.status_code == 200
+    assert b"Run Now" in r.data
+
+
+def test_admin_runs_shows_running_banner_when_locked(admin_client, archive):
+    """When the lock file contains our PID the page must show 'Running'."""
+    (archive / ".tubenews.lock").write_text(str(os.getpid()))
+    r = admin_client.get("/admin/runs")
+    assert b"Running" in r.data
+    assert b"Run Now" not in r.data
+
+
+# ---------------------------------------------------------------------------
+# POST /admin/run-now
+# ---------------------------------------------------------------------------
+
+def test_run_now_requires_login(client, archive):
+    r = client.post("/admin/run-now")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_run_now_requires_admin(logged_in_client, archive):
+    r = logged_in_client.post("/admin/run-now")
+    assert r.status_code == 403
+
+
+def test_run_now_launches_subprocess_when_idle(admin_client, monkeypatch):
+    """When idle, Run Now must launch exactly one detached subprocess."""
+    mock_popen = MagicMock()
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    r = admin_client.post("/admin/run-now", follow_redirects=False)
+    assert r.status_code == 302
+    mock_popen.assert_called_once()
+    # Must be launched detached (start_new_session=True).
+    _, kwargs = mock_popen.call_args
+    assert kwargs.get("start_new_session") is True
+
+
+def test_run_now_redirects_to_admin_runs(admin_client, monkeypatch):
+    """Successful launch must redirect back to /admin/runs."""
+    monkeypatch.setattr(subprocess, "Popen", MagicMock())
+    r = admin_client.post("/admin/run-now", follow_redirects=False)
+    assert "/admin/runs" in r.headers["Location"]
+
+
+def test_run_now_flash_already_running_when_locked(admin_client, archive, monkeypatch):
+    """When already running, must flash an info message instead of launching."""
+    (archive / ".tubenews.lock").write_text(str(os.getpid()))
+    mock_popen = MagicMock()
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    r = admin_client.post("/admin/run-now", follow_redirects=True)
+    assert b"already running" in r.data.lower()
+    mock_popen.assert_not_called()
+
+
+def test_run_now_does_not_launch_when_locked(admin_client, archive, monkeypatch):
+    """Subprocess must not be spawned if the lock is already held."""
+    (archive / ".tubenews.lock").write_text(str(os.getpid()))
+    mock_popen = MagicMock()
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    admin_client.post("/admin/run-now")
+    mock_popen.assert_not_called()
