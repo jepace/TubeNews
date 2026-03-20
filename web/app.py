@@ -50,7 +50,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, rebuild_user_feed, parse_story_file  # noqa: E402
+from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -483,13 +483,7 @@ def dashboard():
         blog_name = request.form.get("blog_name", "").strip()
         current_user._data["blog_name"] = blog_name
         current_user._save()
-        cfg = _load_config()
-        try:
-            rebuild_user_feed(current_user._data, base_url=_base_url(), user_id=current_user.get_id())
-        except Exception as exc:
-            flash(f"Subscriptions saved, but feed rebuild failed: {exc}", "error")
-        else:
-            flash("Subscriptions updated.", "success")
+        flash("Subscriptions updated.", "success")
         return redirect(url_for("dashboard"))
 
     return render_template(
@@ -512,17 +506,16 @@ def logout():
 @app.route("/feed/<token>.xml")
 @app.route("/feed/<token>")
 def serve_feed(token: str):
-    """Serve a user's RSS feed by secret token — no login required."""
+    """Generate and serve a user's RSS feed by secret token — no login required."""
     if not USERS_ROOT.is_dir():
         abort(404)
     for user_json in USERS_ROOT.glob("*/user.json"):
         try:
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
-                rss_path = user_json.parent / "rss.xml"
-                if rss_path.exists():
-                    return send_file(rss_path, mimetype="application/rss+xml")
-                abort(404)
+                uid = user_json.parent.name
+                xml_bytes = build_user_feed_xml(data, base_url=_base_url(), user_id=uid)
+                return Response(xml_bytes, mimetype="application/rss+xml")
         except Exception:
             continue
     abort(404)
@@ -630,12 +623,7 @@ def admin_user_subscriptions(uid: str):
     valid_ids = {ch["channel_id"] for ch in channels}
     selected = set(request.form.getlist("channel_ids")) & valid_ids
     user.set_channel_ids(sorted(selected))
-    try:
-        rebuild_user_feed(user._data, base_url=_base_url(), user_id=uid)
-    except Exception as exc:
-        flash(f"Saved, but feed rebuild failed: {exc}", "error")
-    else:
-        flash("Subscriptions updated.", "success")
+    flash("Subscriptions updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
 

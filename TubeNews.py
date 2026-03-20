@@ -604,8 +604,11 @@ def rebuild_meta_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
-    """Generate ``archive/users/<id>/rss.xml`` filtered to a user's subscribed channels.
+def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> bytes:
+    """Build and return RSS feed XML bytes for a user's subscribed channels.
+
+    Contains all the feed-building logic.  Does *not* write anything to disk —
+    callers decide what to do with the returned bytes (serve directly or cache).
 
     Reads ``channel.json`` from each channel directory (written by :func:`rebuild_feed`)
     to determine which archive folders correspond to the user's ``channel_ids``.  Stories
@@ -619,10 +622,6 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
-    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"TubeNews: Rebuilding user feed for {name}")
 
     feed = FeedGenerator()
     feed.id(f"tubenews_user_{slugify(name)}")
@@ -684,7 +683,27 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
         except Exception:
             continue
 
-    feed.rss_file(user_dir / "rss.xml", pretty=True)
+    return feed.rss_str(pretty=True)
+
+
+def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
+    """Write ``archive/users/<id>/rss.xml`` for a user's subscribed channels.
+
+    Thin wrapper around :func:`build_user_feed_xml` that writes the result to
+    disk.  Used by the CLI (``main()``) to pre-cache feeds after each run.
+    The web app serves feeds dynamically via :func:`build_user_feed_xml` instead.
+
+    Args:
+        user:     User config dict from ``archive/users/<id>/user.json``.
+        base_url: Public URL root; passed through to :func:`build_user_feed_xml`.
+        user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
+    """
+    name = user["name"]
+    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
+    user_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"TubeNews: Rebuilding user feed for {name}")
+    xml_bytes = build_user_feed_xml(user, base_url=base_url, user_id=user_id)
+    (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
 def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_id: str = "") -> None:
@@ -850,26 +869,6 @@ def rebuild_user_blog(user: dict, base_url: str = "", blog_days: int = 90, user_
 # ---------------------------------------------------------------------------
 
 
-def mark_video_as_backlog(feed_dir: Path, video_id: str) -> None:
-    """Create a stub archive folder marking *video_id* as a backlog item.
-
-    When a channel is first added to the config, its entire back-catalogue
-    would be processed on the next run.  To avoid that, we call this function
-    for every video except the newest one, creating a dated stub that the main
-    loop treats as already handled.
-
-    The ``2000-01-01`` date prefix keeps these stubs sorted before real
-    meetings in tab completion while staying clearly distinct from actual dates.
-    """
-    stub_dir = feed_dir / f"2000-01-01_{video_id}"
-    stub_dir.mkdir(exist_ok=True)
-    metadata = {
-        "video_id": video_id,
-        "status": "ignored_too_old",
-        "processed_at": time.time(),
-    }
-    (stub_dir / "metadata.json").write_text(json.dumps(metadata))
-
 
 def process_video(
     video_id: str,
@@ -899,7 +898,10 @@ def process_video(
                                  *n_stories* is 0.
         ``"skipped"``          – transcript unavailable, live stream, AI
                                  disabled, or AI returned nothing; *n_stories*
-                                 is 0.
+                                 is 0.  When Gemini returns an empty story list,
+                                 a ``metadata.json`` with ``status: "no_stories"``
+                                 is written so the video is not resubmitted to
+                                 the AI on future runs.
     """
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
@@ -980,7 +982,7 @@ def process_feed(
     supadata_client: Supadata,
     config: dict,
     ai_rate_limit_event: threading.Event | None = None,
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, int]:
     """Process all new videos for one configured channel.
 
     Discovers videos from YouTube, skips ones already archived, and calls
@@ -1013,7 +1015,7 @@ def process_feed(
 
     all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
     if not all_videos:
-        return content_changed, ai_rate_limited
+        return content_changed, ai_rate_limited, stories_written
 
     all_ids = [v["id"] for v in all_videos]
     video_meta = {v["id"]: v for v in all_videos}
@@ -1045,11 +1047,11 @@ def process_feed(
         logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
 
     if is_new_feed:
-        backlog_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
-        if backlog_count:
-            logger.info(f"{channel_name}: TubeNews: New feed — marking {backlog_count} backlog video(s) as watched")
+        too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
+        if too_old_count:
+            logger.info(f"{channel_name}: TubeNews: New feed — marking {too_old_count} existing video(s) as too old to process")
 
-    # Videos that will actually be processed (not back-catalogued, not too fresh).
+    # Videos that will actually be processed (not too old, not too fresh).
     videos_to_process = [
         v for v in unprocessed
         if not (is_new_feed and all_ids.index(v["id"]) > 0)
@@ -1058,11 +1060,17 @@ def process_feed(
     total = len(videos_to_process)
 
     for video_info in unprocessed:
-        # On a brand-new feed, skip the entire back-catalogue except the
-        # most-recent video (index 0 in all_ids).  This prevents the
-        # first run from processing months of old meetings.
+        # On a brand-new feed, mark all but the most recent video as
+        # ignored_too_old so the first run doesn't process months of
+        # old meetings.
         if is_new_feed and all_ids.index(video_info["id"]) > 0:
-            mark_video_as_backlog(feed_dir, video_info["id"])
+            stub_dir = feed_dir / f"2000-01-01_{video_info['id']}"
+            stub_dir.mkdir(exist_ok=True)
+            (stub_dir / "metadata.json").write_text(json.dumps({
+                "video_id": video_info["id"],
+                "status": "ignored_too_old",
+                "processed_at": time.time(),
+            }))
             content_changed = True
             continue
 
@@ -1146,17 +1154,28 @@ def main() -> None:
     any_content_changed = threading.Event()
 
     def _run_feed(feed: dict) -> dict:
-        content_changed, _, stories_written = process_feed(
-            feed, supadata_client, config, ai_rate_limit_event
-        )
-        if content_changed:
-            rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
-            any_content_changed.set()
-        return {
-            "channel_id": feed["channel_id"],
-            "channel_name": feed["channel_name"],
-            "stories_written": stories_written,
-        }
+        try:
+            content_changed, _, stories_written = process_feed(
+                feed, supadata_client, config, ai_rate_limit_event
+            )
+            if content_changed:
+                rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
+                any_content_changed.set()
+            return {
+                "channel_id": feed["channel_id"],
+                "channel_name": feed["channel_name"],
+                "stories_written": stories_written,
+            }
+        except Exception:
+            logger.warning(
+                f"{feed.get('channel_name', feed.get('channel_id', '?'))}: "
+                "TubeNews: Feed processing failed — skipping"
+            )
+            return {
+                "channel_id": feed.get("channel_id", ""),
+                "channel_name": feed.get("channel_name", ""),
+                "stories_written": 0,
+            }
 
     started_at = time.time()
     max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
@@ -1165,14 +1184,20 @@ def main() -> None:
     total_stories = sum(r["stories_written"] for r in feed_results)
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
-        rebuild_meta_feed(base_url=config.get("base_url", ""))
+        try:
+            rebuild_meta_feed(base_url=config.get("base_url", ""))
+        except Exception:
+            logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
 
     users_dir = STORAGE_ROOT / "users"
     if users_dir.is_dir():
         for user_json in sorted(users_dir.glob("*/user.json")):
-            user = json.loads(user_json.read_text())
-            uid = user_json.parent.name
-            rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
+            try:
+                user = json.loads(user_json.read_text())
+                uid = user_json.parent.name
+                rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
+            except Exception:
+                logger.warning(f"TubeNews: Failed to rebuild feed for user {user_json.parent.name} — skipping")
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
@@ -1191,8 +1216,8 @@ def main() -> None:
     })
     try:
         run_log_path.write_text(json.dumps(runs[-30:], indent=2))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"TubeNews: Failed to write run log: {exc}")
 
     ntfy_topic = config.get("ntfy_topic")
     if ntfy_topic and total_stories > 0:

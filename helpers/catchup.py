@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, json, requests, re, argparse
+import json, requests, re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent

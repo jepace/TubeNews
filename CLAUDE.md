@@ -115,14 +115,14 @@ YouTube Channel Pages (HTML scrape)
 |---|---|
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
 | `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
-| `rebuild_user_feed(user, base_url)` | Generates `archive/users/<slug>/rss.xml` filtered to a user's subscribed channels |
+| `build_user_feed_xml(user, base_url)` | Builds and returns RSS feed XML bytes for a user's subscribed channels; does **not** write to disk |
+| `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `archive/users/<slug>/rss.xml` to disk |
 | `rebuild_user_blog(user, base_url)` | Generates `archive/users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
 
 ### Processing orchestration
 
 | Function | Description |
 |---|---|
-| `mark_video_as_backlog(feed_dir, video_id)` | Writes a `2000-01-01_<id>` stub so the video is skipped on future runs |
 | `process_video(video_id, ...)` | Fetch + analyse one video; returns `"content_written"`, `"ai_rate_limited"`, or `"skipped"` |
 | `process_feed(feed, ...)` | Processes all new videos for one channel; returns `(content_changed, ai_rate_limited)` |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
@@ -202,7 +202,7 @@ archive/
 │   │   ├── metadata.json       # {video_id, video_title, status, processed_at}
 │   │   ├── 01_Story_Title.md
 │   │   └── 02_Another_Story.md
-│   ├── 2000-01-01_XXXXXXXXXXX/ # Ignored/backlog videos use 2000 date
+│   ├── 2000-01-01_XXXXXXXXXXX/ # ignored_too_old stubs use 2000 date prefix
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
 └── rss.xml                     # Regional meta-feed (all channels)
@@ -233,7 +233,7 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 }
 ```
 
-`status` values: `"processed"` | `"ignored_too_old"`
+`status` values: `"processed"` | `"ignored_too_old"` | `"no_stories"` (AI ran but returned no relevant stories)
 
 ---
 
@@ -253,6 +253,8 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
+| `tubenews_key` | Web UI only | Flask session secret key — generate with `python -c 'import secrets; print(secrets.token_hex(32))'`; also readable from `TUBENEWS_SECRET_KEY` env var |
+| `admin_users` | No | List of email addresses granted admin access to the web UI (e.g. `["alice@example.com"]`) |
 
 ---
 
@@ -306,7 +308,7 @@ The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)
 
 The Flask web UI sits on top of `TubeNews.py` and provides user accounts,
 subscriptions, and a dashboard for sharing feeds and blog pages. It imports
-`rebuild_user_feed`, `rebuild_user_blog`, and `STORAGE_ROOT` directly from
+`build_user_feed_xml`, `parse_story_file`, and `STORAGE_ROOT` directly from
 `TubeNews.py`.
 
 ### User Storage
@@ -317,8 +319,8 @@ Each user is stored as a UUID-named directory under `archive/users/`:
 archive/users/
 └── <uuid>/
     ├── user.json      # account data (see schema below)
-    ├── rss.xml        # personal RSS feed (built by rebuild_user_feed)
-    └── index.html     # personal blog page (built by rebuild_user_blog)
+    ├── rss.xml        # personal RSS feed (pre-built by CLI; not used by web app)
+    └── index.html     # personal blog page (built by rebuild_user_blog; not used by web app)
 ```
 
 **`user.json` schema:**
@@ -348,21 +350,31 @@ One `feed_token` per user covers two public URLs:
 | `/feed/<token>.xml` | Personal RSS feed |
 | `/blog/<token>.html` | Personal blog page |
 
-Both serve pre-built files from the user's directory — no login required.
+Both `/feed/<token>.xml` and `/blog/<token>.html` are generated **dynamically
+on every request** — no static file is read or written by the web app.
 The extension-less variants (`/feed/<token>`, `/blog/<token>`) also work for
 backwards compatibility.
 
-### Blog Regeneration Flow
+### On-request Generation Flow
 
-The blog is a static HTML file built on demand, not on every request:
+Both the feed and blog are generated fresh on each request from the live archive:
 
-1. **Trigger:** User saves subscriptions (dashboard POST) or visits `/blog`
-2. **Build:** `rebuild_user_blog()` writes `archive/users/<uuid>/index.html`
-3. **Serve:** `/blog/<token>.html` reads and serves the cached file
+**RSS feed** (`/feed/<token>.xml`):
+1. Token matched to a user in `archive/users/`
+2. `build_user_feed_xml()` scans `archive/` and builds feedgen XML in memory
+3. XML bytes returned directly as the HTTP response — nothing written to disk
 
-If the file does not exist yet (e.g. no stories have been generated),
-`/blog/<token>.html` returns 404. The logged-in `/blog` route flashes an
-error and redirects to the dashboard instead.
+**Blog** (`/blog/<token>.html` and logged-in `/blog`):
+1. `_get_user_stories()` scans `archive/` and returns stories from the user's
+   subscribed channels processed within the last `blog_days` days
+2. Flask renders `blog.html` with the story list and returns HTML
+
+Because both read the archive on every request, they always reflect the latest
+stories without any explicit rebuild step.
+
+`rebuild_user_feed()` and `rebuild_user_blog()` exist in `TubeNews.py` as
+standalone utilities (used by the CLI, or for generating static snapshots) but
+the web app does **not** call either — the web UI uses dynamic generation only.
 
 ### Key Helpers
 
