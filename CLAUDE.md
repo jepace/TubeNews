@@ -251,7 +251,6 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 | `archive_dir` | No | Path to the archive directory (default: `archive/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point the archive at your web server's document root |
 | `request_timeout` | No | Seconds before giving up on YouTube scrape and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
-| `blog_days` | No | Days of stories to include in per-user blog pages (default: `90`) |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
@@ -367,8 +366,8 @@ Both the feed and blog are generated fresh on each request from the live archive
 3. XML bytes returned directly as the HTTP response — nothing written to disk
 
 **Blog** (`/blog/<token>.html` and logged-in `/blog`):
-1. `_get_user_stories()` scans `archive/` and returns stories from the user's
-   subscribed channels processed within the last `blog_days` days
+1. `_get_user_stories()` scans `archive/` and returns all stories from the user's
+   subscribed channels
 2. Flask renders `blog.html` with the story list and returns HTML
 
 Because both read the archive on every request, they always reflect the latest
