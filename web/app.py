@@ -856,6 +856,40 @@ def admin_user_delete(uid: str):
 # ---------------------------------------------------------------------------
 
 
+@app.route("/admin/users/add", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_add():
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+
+    if not name:
+        flash("Name is required.", "error")
+    elif not email or "@" not in email or "." not in email.split("@")[-1]:
+        flash("Please enter a valid email address.", "error")
+    elif len(password) < 10:
+        flash("Password must be at least 10 characters.", "error")
+    elif _find_user_by_email(email):
+        flash(f"An account with {email} already exists.", "error")
+    else:
+        user_uuid = str(uuid.uuid4())
+        user_dir = USERS_ROOT / user_uuid
+        user_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "name": name,
+            "email": email,
+            "password_hash": generate_password_hash(password),
+            "channel_ids": [],
+            "feed_token": str(uuid.uuid4()),
+            "created_at": int(datetime.now(timezone.utc).timestamp()),
+        }
+        (user_dir / "user.json").write_text(json.dumps(data, indent=2))
+        flash(f"Account created for {name} ({email}).", "success")
+
+    return redirect(url_for("admin_users"))
+
+
 @app.route("/admin/runs")
 @login_required
 @admin_required
