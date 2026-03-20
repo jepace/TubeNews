@@ -24,6 +24,7 @@ from TubeNews import (
     write_story_files,
     _relative_date_to_iso,
     _parse_channel_page_metadata,
+    _resolve_early_config,
 )
 
 
@@ -831,74 +832,78 @@ def test_blog_date_filter_does_not_affect_feed(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# archive_dir config key — STORAGE_ROOT resolution
+# _resolve_early_config — archive_dir and request_timeout
 # ---------------------------------------------------------------------------
 
-def test_storage_root_uses_archive_dir_absolute(tmp_path):
-    """When archive_dir is an absolute path in config, STORAGE_ROOT must use it."""
-    import importlib
-    import TubeNews
-
-    custom_dir = tmp_path / "my_custom_archive"
+def test_resolve_archive_dir_absolute(tmp_path):
+    """An absolute archive_dir is used as-is for STORAGE_ROOT."""
+    custom = tmp_path / "my_archive"
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": str(custom_dir)}))
-
-    orig_cfg = TubeNews.CONFIG_FILE
-    TubeNews.CONFIG_FILE = cfg
-    try:
-        # Re-run the resolution logic directly (mirrors TubeNews.py module-level code).
-        archive_dir = json.loads(cfg.read_text()).get("archive_dir", "")
-        p = Path(archive_dir)
-        resolved = p if p.is_absolute() else (TubeNews.BASE_DIR / p).resolve()
-        assert resolved == custom_dir
-    finally:
-        TubeNews.CONFIG_FILE = orig_cfg
+    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == custom
 
 
-def test_storage_root_falls_back_to_default_when_key_absent(tmp_path):
-    """When archive_dir is absent, STORAGE_ROOT must default to BASE_DIR/archive."""
-    import TubeNews
-
+def test_resolve_archive_dir_relative(tmp_path):
+    """A relative archive_dir is resolved against base_dir."""
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"gemini_api_key": "x"}))  # no archive_dir key
-
-    archive_dir = json.loads(cfg.read_text()).get("archive_dir", "")
-    assert archive_dir == ""
-    # Default is BASE_DIR / "archive" — just confirm the fallback logic produces that.
-    expected = TubeNews.BASE_DIR / "archive"
-    assert expected == TubeNews.BASE_DIR / "archive"
+    cfg.write_text(json.dumps({"archive_dir": "subdir/archive"}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == (tmp_path / "subdir" / "archive").resolve()
 
 
-def test_storage_root_falls_back_on_missing_config():
-    """If TubeNews.json cannot be read, STORAGE_ROOT must still be BASE_DIR/archive."""
-    import TubeNews
-    # The module was already imported; verify the fallback default is sensible.
-    # (Tests that monkeypatch CONFIG_FILE to a nonexistent path trigger the except branch.)
-    assert TubeNews.BASE_DIR / "archive" == TubeNews.BASE_DIR / "archive"
-
-
-# ---------------------------------------------------------------------------
-# request_timeout config key
-# ---------------------------------------------------------------------------
-
-def test_request_timeout_default_is_15(tmp_path):
-    """When request_timeout is absent from config the resolved value must be 15."""
+def test_resolve_archive_dir_absent_defaults_to_base_archive(tmp_path):
+    """When archive_dir is omitted, STORAGE_ROOT defaults to base_dir/archive."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
-    timeout = int(json.loads(cfg.read_text()).get("request_timeout", 15))
-    assert timeout == 15
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == tmp_path / "archive"
 
 
-def test_request_timeout_custom_value(tmp_path):
-    """When request_timeout is set in config that value must be used."""
+def test_resolve_archive_dir_empty_string_defaults_to_base_archive(tmp_path):
+    """An explicit empty string for archive_dir is treated the same as absent."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"archive_dir": ""}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == tmp_path / "archive"
+
+
+def test_resolve_request_timeout_custom(tmp_path):
+    """A configured request_timeout is returned as an int."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"request_timeout": 30}))
-    timeout = int(json.loads(cfg.read_text()).get("request_timeout", 15))
+    _, timeout = _resolve_early_config(cfg, tmp_path)
     assert timeout == 30
 
 
-def test_request_timeout_module_constant_is_int():
-    """REQUEST_TIMEOUT exported from TubeNews must always be an int."""
-    import TubeNews
-    assert isinstance(TubeNews.REQUEST_TIMEOUT, int)
-    assert TubeNews.REQUEST_TIMEOUT > 0
+def test_resolve_request_timeout_absent_defaults_to_15(tmp_path):
+    """When request_timeout is omitted the default of 15 is returned."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"gemini_api_key": "x"}))
+    _, timeout = _resolve_early_config(cfg, tmp_path)
+    assert timeout == 15
+
+
+def test_resolve_falls_back_on_missing_config_file(tmp_path):
+    """If TubeNews.json does not exist both defaults are returned without raising."""
+    missing = tmp_path / "no_such_file.json"
+    storage_root, timeout = _resolve_early_config(missing, tmp_path)
+    assert storage_root == tmp_path / "archive"
+    assert timeout == 15
+
+
+def test_resolve_falls_back_on_invalid_json(tmp_path):
+    """Corrupt JSON must not crash — defaults are returned instead."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text("{ NOT VALID JSON }")
+    storage_root, timeout = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == tmp_path / "archive"
+    assert timeout == 15
+
+
+def test_resolve_request_timeout_is_int_not_string(tmp_path):
+    """request_timeout must be returned as int even if stored as a JSON number."""
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"request_timeout": 45}))
+    _, timeout = _resolve_early_config(cfg, tmp_path)
+    assert isinstance(timeout, int)

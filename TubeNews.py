@@ -46,27 +46,39 @@ from supadata import Supadata
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 
-# Read a small set of path/network settings from TubeNews.json at import time
-# so they are available before main() runs.  All keys are optional; sensible
-# defaults are used when the file is absent or a key is missing.
-try:
-    _early_cfg = json.loads(CONFIG_FILE.read_text())
+def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]:
+    """Read path/network settings from *config_file* before main() runs.
 
-    # archive_dir — where processed content is stored.
-    # Absolute paths are used as-is; relative paths resolve from BASE_DIR.
-    _archive_dir = _early_cfg.get("archive_dir", "")
-    if _archive_dir:
-        _p = Path(_archive_dir)
-        STORAGE_ROOT = _p if _p.is_absolute() else (BASE_DIR / _p).resolve()
-    else:
-        STORAGE_ROOT = BASE_DIR / "archive"
+    Returns ``(STORAGE_ROOT, REQUEST_TIMEOUT)``.  All keys are optional;
+    sensible defaults are returned when the file is absent or a key is missing.
 
-    # request_timeout — seconds before giving up on YouTube / Supadata calls.
-    REQUEST_TIMEOUT: int = int(_early_cfg.get("request_timeout", 15))
+    Args:
+        config_file: Path to TubeNews.json.
+        base_dir:    Directory used to resolve relative ``archive_dir`` paths.
+    """
+    try:
+        cfg = json.loads(config_file.read_text())
 
-except Exception:
-    STORAGE_ROOT = BASE_DIR / "archive"
-    REQUEST_TIMEOUT = 15
+        # archive_dir — where processed content is stored.
+        # Absolute paths are used as-is; relative paths resolve from base_dir.
+        archive_dir = cfg.get("archive_dir", "")
+        if archive_dir:
+            p = Path(archive_dir)
+            storage_root = p if p.is_absolute() else (base_dir / p).resolve()
+        else:
+            storage_root = base_dir / "archive"
+
+        # request_timeout — seconds before giving up on YouTube / Supadata calls.
+        request_timeout = int(cfg.get("request_timeout", 15))
+
+    except Exception:
+        storage_root = base_dir / "archive"
+        request_timeout = 15
+
+    return storage_root, request_timeout
+
+
+STORAGE_ROOT, REQUEST_TIMEOUT = _resolve_early_config(CONFIG_FILE, BASE_DIR)
 
 # FreeBSD ships its CA bundle in a non-standard location; tell Python where
 # to find it so HTTPS requests succeed. On Linux/macOS this path won't exist
