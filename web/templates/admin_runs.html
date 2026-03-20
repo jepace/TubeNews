@@ -9,7 +9,16 @@
   <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
     <h1 style="margin:0;">Run History</h1>
     {% if is_running %}
-      <span class="pill pill-locked" style="font-size:0.9rem;">&#9679; Running…</span>
+      <span class="pill pill-locked" style="font-size:0.9rem;">&#9679; Running<span id="run-dots"></span></span>
+      <script>
+        (function() {
+          var el = document.getElementById('run-dots');
+          var frames = ['.', '..', '...'];
+          var i = 0;
+          el.textContent = frames[0];
+          setInterval(function() { el.textContent = frames[++i % 3]; }, 500);
+        })();
+      </script>
     {% else %}
       <form method="post" action="{{ url_for('admin_run_now') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
