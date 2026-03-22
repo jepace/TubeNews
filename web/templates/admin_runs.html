@@ -1,7 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Runs — TubeNews{% endblock %}
 
-{% block head_extra %}{% if is_running %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block head_extra %}
+{% if is_running %}
+  {% if starting %}
+    <meta http-equiv="refresh" content="2;url={{ url_for('admin_runs') }}">
+  {% else %}
+    <meta http-equiv="refresh" content="5">
+  {% endif %}
+{% endif %}
+{% endblock %}
 
 {% block content %}
 <div class="admin">
@@ -78,7 +86,6 @@
         <th>Channel</th>
         <th>Processed</th>
         <th>Stories</th>
-        <th>Skipped</th>
         <th>Last activity</th>
       </tr>
     </thead>
@@ -88,7 +95,6 @@
         <td>{{ ch.channel_name }}</td>
         <td>{{ ch.processed }}</td>
         <td>{{ ch.story_count }}</td>
-        <td class="muted">{{ ch.ignored + ch.no_stories }}</td>
         <td class="muted">{{ ch.last_processed | format_datetime }}</td>
       </tr>
       {% endfor %}
