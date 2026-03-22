@@ -914,11 +914,14 @@ def admin_runs():
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
     except Exception:
         runs = []
+    starting = request.args.get("starting") == "1"
+    is_running = _is_running() or starting
     return render_template(
         "admin_runs.html",
         runs=list(reversed(runs)),
         channel_stats=_archive_channel_stats(),
-        is_running=_is_running(),
+        is_running=is_running,
+        starting=starting,
     )
 
 
@@ -936,7 +939,7 @@ def admin_run_now():
         start_new_session=True,
     )
     flash("TubeNews run started.", "success")
-    return redirect(url_for("admin_runs"))
+    return redirect(url_for("admin_runs") + "?starting=1")
 
 
 @app.route("/admin/feeds")

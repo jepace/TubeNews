@@ -1,17 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ blog_name }}{% endblock %}
 
-{% block nav_extra %}
-  {% if feed_path %}
-    <a href="{{ feed_path }}" class="nav-rss" title="Subscribe via RSS">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="3" cy="13" r="2" fill="#f26522"/>
-        <path fill="#f26522" d="M1 5a8 8 0 0 1 8 8H7a6 6 0 0 0-6-6V5z"/>
-        <path fill="#f26522" d="M1 1a12 12 0 0 1 12 12h-2A10 10 0 0 0 1 3V1z"/>
-      </svg>
-    </a>
-  {% endif %}
-{% endblock %}
 
 {% block content %}
 <div class="blog-page">

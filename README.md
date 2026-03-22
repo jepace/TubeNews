@@ -32,7 +32,7 @@ python TubeNews.py --debug   # verbose output
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - [Supadata API key](https://supadata.ai) — for transcript extraction
 - [Google Gemini API key](https://aistudio.google.com) — for AI story generation
 
@@ -55,9 +55,25 @@ See `TubeNews.json.sample` for the full template. Key fields:
 }
 ```
 
+## Web UI
+
+TubeNews includes a Flask web app (`web/app.py`) that provides user accounts,
+channel subscriptions, personalised RSS feeds, shareable blog pages, and an
+admin panel for managing users and channels.
+
+```bash
+# Add a secret key to TubeNews.json first:
+python -c 'import secrets; print(secrets.token_hex(32))'
+# Then start the UI:
+python web/app.py
+# Open http://localhost:8000
+```
+
+See `SERVING.md` for production deployment (gunicorn, nginx, HTTPS, cron).
+
 ## Output
 
-RSS feeds are written to `archive/`:
+RSS feeds and stories are written to `archive/`:
 
 ```
 archive/
@@ -67,7 +83,12 @@ archive/
 │   │   ├── metadata.json
 │   │   ├── 01_Story_Title.md
 │   │   └── 02_Another_Story.md
+│   ├── channel.json      ← channel ID/name mapping
 │   └── rss.xml           ← subscribe to this
+├── users/
+│   └── <uuid>/           ← one directory per registered user
+│       └── user.json
+├── run_log.json          ← last 30 run summaries
 └── rss.xml               ← aggregated regional feed
 ```
 
