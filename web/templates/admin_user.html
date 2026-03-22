@@ -47,13 +47,24 @@
         <button type="button" class="btn-select-all" id="btn-unselect-all">Select none</button>
       </div>
       <div class="channel-list" id="channel-list">
+        {% set channel_focus = u._data.get('channel_focus', {}) %}
         {% for ch in channels %}
-          <label class="checkbox-label">
-            <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
-                   {% if ch.channel_id in subscribed %}checked{% endif %}
-                   class="channel-checkbox">
-            {{ ch.channel_name }}
-          </label>
+          <div class="channel-row">
+            <div class="channel-row-top">
+              <label class="checkbox-label">
+                <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
+                       {% if ch.channel_id in subscribed %}checked{% endif %}
+                       class="channel-checkbox">
+                {{ ch.channel_name }}
+              </label>
+            </div>
+            <div class="channel-focus-row" {% if ch.channel_id not in subscribed %}style="display:none"{% endif %}>
+              <input type="text" name="focus_{{ ch.channel_id }}"
+                     value="{{ channel_focus.get(ch.channel_id, '') }}"
+                     placeholder="User's focus (optional — e.g. housing, zoning)"
+                     class="focus-input" autocomplete="off">
+            </div>
+          </div>
         {% endfor %}
       </div>
       <button type="submit">Save subscriptions</button>
@@ -188,9 +199,19 @@
   const checkboxes = document.querySelectorAll('.channel-checkbox');
   const btnSelectAll = document.getElementById('btn-select-all');
   const btnUnselectAll = document.getElementById('btn-unselect-all');
+
+  function updateFocusVisibility(cb) {
+    const focusRow = cb.closest('.channel-row').querySelector('.channel-focus-row');
+    if (focusRow) focusRow.style.display = cb.checked ? '' : 'none';
+  }
+
+  checkboxes.forEach(cb => {
+    cb.addEventListener('change', () => updateFocusVisibility(cb));
+  });
+
   if (btnSelectAll) {
-    btnSelectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = true; }); });
-    btnUnselectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = false; }); });
+    btnSelectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = true; updateFocusVisibility(cb); }); });
+    btnUnselectAll.addEventListener('click', () => { checkboxes.forEach(cb => { cb.checked = false; updateFocusVisibility(cb); }); });
   }
 
   function copyUrl(inputId, btn) {
