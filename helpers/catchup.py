@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, requests, re
+import json, requests, sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,8 +16,8 @@ except Exception:
     STORAGE_ROOT = BASE_DIR / "archive"
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'}
 
-def slugify(text):
-    return re.sub(r'[^a-zA-Z0-9]', '_', text).strip('_')
+sys.path.insert(0, str(BASE_DIR))
+from tubenews_utils import slugify
 
 def catchup():
     with open(CONFIG_FILE, 'r') as f:

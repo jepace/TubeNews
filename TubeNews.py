@@ -191,19 +191,22 @@ class FeedResult(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-def slugify(text: str) -> str:
-    """Convert *text* to a filesystem-safe slug.
+from tubenews_utils import slugify  # noqa: E402  (below module-level constants)
 
-    Every character that isn't a letter or digit is replaced with an
-    underscore, then leading/trailing underscores are stripped.
 
-    Examples:
-        >>> slugify("City Council")
-        'City_Council'
-        >>> slugify("---test---")
-        'test'
+def _fmt_no_leading_zeros(dt: datetime, fmt: str) -> str:
+    """Format *dt* with *fmt* and strip leading zeros from day/hour fields.
+
+    Replaces the POSIX-only ``%-d``/``%-I`` strftime codes with a portable
+    alternative.  Only zeros preceded by a space are removed, so two-digit
+    numbers such as 10, 11, 12 are unaffected.
+
+    Example::
+        >>> from datetime import datetime
+        >>> _fmt_no_leading_zeros(datetime(2026, 1, 5, 9, 30), "%B %d, %Y at %I:%M %p")
+        'January 5, 2026 at 9:30 AM'
     """
-    return re.sub(r"[^a-zA-Z0-9]", "_", text).strip("_")
+    return re.sub(r" 0(\d)", r" \1", dt.strftime(fmt))
 
 
 def parse_story_file(story_path: Path) -> ParsedStory:
@@ -1374,7 +1377,7 @@ def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], s
     """POST a run-summary notification to ntfy.sh/<topic>."""
     import urllib.request as _urllib_request
 
-    timestamp = datetime.fromtimestamp(started_at).strftime("%B %-d, %Y at %-I:%M %p")
+    timestamp = _fmt_no_leading_zeros(datetime.fromtimestamp(started_at), "%B %d, %Y at %I:%M %p")
     story_word = "story" if total_stories == 1 else "stories"
     lines = [f"{total_stories} new {story_word} — {timestamp}"]
     for r in feed_results:
@@ -1452,7 +1455,7 @@ def _main_body(args) -> None:
         config = json.load(config_file)
 
     supadata_client = Supadata(api_key=config["supadata_api_key"])
-    logger.info(f"Session Start | {datetime.now().strftime('%A, %B %-d, %Y')} | AI Model: {config.get('gemini_model')}")
+    logger.info(f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')} | AI Model: {config.get('gemini_model')}")
 
     ai_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()

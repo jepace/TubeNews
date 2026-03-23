@@ -29,6 +29,7 @@ TubeNews/
 ├── TODO.md                  # Known issues and maintainability backlog
 ├── LICENSE
 ├── .gitignore
+├── tubenews_utils.py        # Lightweight utils shared between TubeNews.py and helpers/
 ├── tests/
 │   ├── __init__.py
 │   └── test_tubenews.py     # pytest unit tests
@@ -115,7 +116,8 @@ Defined in `web/app.py`:
 
 | Function | Description |
 |---|---|
-| `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore) |
+| `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore). Defined in `tubenews_utils.py`; re-exported by `TubeNews.py`. |
+| `_fmt_no_leading_zeros(dt, fmt)` | Formats a `datetime` with `fmt` and strips POSIX-style leading zeros from day/hour fields. Portable replacement for `%-d`/`%-I`. |
 | `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory` |
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* may be a single string (legacy) or a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty (graceful degradation for old stories). |
 | `_needs_processing(video_id, feed_dir, focuses)` | Returns `True` if a video needs (re)processing: no archive dir, no `metadata.json`, or `metadata.json` is missing one or more of *focuses* in its `processed_focuses` list. Old metadata without `processed_focuses` is treated as fully done. |
