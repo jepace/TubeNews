@@ -15,9 +15,12 @@
       <p class="story-dateline">{{ story.dateline }}</p>
       <p class="story-source">
         {{ story.channel_name }}{% if story.video_title %} &mdash; <em>{{ story.video_title }}</em>{% endif %}
-        &mdash; <a class="story-watch" href="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}" target="_blank" rel="noopener">&#9654; Watch source</a>
+      </p>
+      <p class="story-links">
+        <a class="story-watch" href="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}" target="_blank" rel="noopener">&#9654; Watch source</a>
         {% if story.channel_slug and story.meeting_id %}
-        &mdash; <a class="story-transcript" href="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}" target="_blank" rel="noopener">&#128221; Read transcript</a>
+        <span class="story-links-sep">&middot;</span>
+        <a class="story-transcript" href="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}" target="_blank" rel="noopener">&#128221; Read transcript</a>
         {% endif %}
       </p>
       <div class="story-body">{{ story.body_html | safe }}</div>

@@ -543,7 +543,20 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 .story-source {
   font-size: 0.82rem;
   color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.story-links {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
   margin-bottom: 0.75rem;
+}
+
+.story-links-sep {
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .story-body p {
@@ -553,11 +566,10 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 
 .story-watch,
 .story-transcript {
-  display: inline-block;
-  margin-top: 0.75rem;
   font-size: 0.85rem;
   color: var(--danger);
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .story-watch:hover,
