@@ -755,3 +755,73 @@ def test_login_next_allows_local_path(client, archive, registered_user):
     )
     assert r.status_code == 302
     assert r.headers["Location"].endswith("/dashboard")
+
+
+# ---------------------------------------------------------------------------
+# ntfy notifications
+# ---------------------------------------------------------------------------
+
+def test_register_sends_ntfy(client, archive, monkeypatch):
+    """Successful registration fires a ntfy notification."""
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    client.post("/register", data={
+        "name": "Alice",
+        "email": "alice@example.com",
+        "password": "securepassword1",
+        "confirm_password": "securepassword1",
+    })
+    assert len(sent) == 1
+    assert "new user" in sent[0][0].lower()
+    assert "alice@example.com" in sent[0][1]
+
+
+def test_register_no_ntfy_on_failure(client, archive, monkeypatch):
+    """A failed registration (bad password) must not fire a ntfy notification."""
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    client.post("/register", data={
+        "name": "Alice",
+        "email": "alice@example.com",
+        "password": "short",
+        "confirm_password": "short",
+    })
+    assert sent == []
+
+
+def test_run_now_sends_ntfy(archive, monkeypatch):
+    """Admin triggering a manual run fires a ntfy notification."""
+    import json as _json
+    from werkzeug.security import generate_password_hash as _gph
+
+    # Create an admin user
+    users_dir = archive / "users"
+    uid = str(uuid.uuid4())
+    (users_dir / uid).mkdir()
+    (users_dir / uid / "user.json").write_text(_json.dumps({
+        "name": "Admin",
+        "email": "admin@example.com",
+        "password_hash": _gph("adminpassword1"),
+        "channel_ids": [],
+        "feed_token": str(uuid.uuid4()),
+        "created_at": int(time.time()),
+    }))
+    import web.app as _wa
+    cfg_path = _wa.CONFIG_FILE
+    cfg = _json.loads(cfg_path.read_text())
+    cfg["admin_users"] = ["admin@example.com"]
+    cfg_path.write_text(_json.dumps(cfg))
+
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    monkeypatch.setattr(webapp, "_is_running", lambda: False)
+    monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **kw: None)
+
+    flask_app.config["TESTING"] = True
+    flask_app.config["WTF_CSRF_ENABLED"] = False
+    with flask_app.test_client() as c:
+        c.post("/login", data={"email": "admin@example.com", "password": "adminpassword1"})
+        c.post("/admin/run-now")
+
+    assert len(sent) == 1
+    assert "run started" in sent[0][0].lower()

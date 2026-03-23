@@ -199,6 +199,29 @@ def load_user(user_id: str) -> User | None:
 # ---------------------------------------------------------------------------
 
 
+def _web_ntfy(title: str, message: str, priority: str = "default") -> None:
+    """Send a web-event notification to ntfy.sh if ntfy_topic is configured.
+
+    Uses the same topic as the CLI run-summary notifications.  Failures are
+    silently swallowed — notifications are best-effort and must never break
+    a web request.
+    """
+    topic = _load_config().get("ntfy_topic")
+    if not topic:
+        return
+    import urllib.request as _ur
+    req = _ur.Request(
+        f"https://ntfy.sh/{topic}",
+        data=message.encode(),
+        method="POST",
+        headers={"Title": title, "Priority": priority},
+    )
+    try:
+        _ur.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
 def _is_running() -> bool:
     """Return True if a TubeNews.py process currently holds the lock file."""
     if not LOCK_FILE.exists():
@@ -653,6 +676,7 @@ def register():
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
             login_user(User(user_dir, data))
+            _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
             flash("Account created. Choose your channels below.", "success")
             return redirect(url_for("dashboard"))
 
@@ -961,10 +985,12 @@ def admin_user_delete(uid: str):
     if confirm != user.email:
         flash("Email confirmation did not match — account not deleted.", "error")
         return redirect(url_for("admin_user", uid=uid))
+    deleted_email = user.email
     for f in user._dir.iterdir():
         f.unlink()
     user._dir.rmdir()
-    flash(f"Account for {user.email} deleted.", "success")
+    _web_ntfy("TubeNews: user deleted", f"{current_user.email} deleted account for {deleted_email}.")
+    flash(f"Account for {deleted_email} deleted.", "success")
     return redirect(url_for("admin_users"))
 
 
@@ -1040,6 +1066,7 @@ def admin_run_now():
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    _web_ntfy("TubeNews: run started", f"Manual run triggered by {current_user.email}.")
     flash("TubeNews run started.", "success")
     return redirect(url_for("admin_runs") + "?starting=1")
 
