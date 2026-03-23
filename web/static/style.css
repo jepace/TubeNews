@@ -322,10 +322,36 @@ button[type="submit"]:hover,
 
 .channel-row {
   display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.channel-row:last-child { border-bottom: none; }
+
+.channel-row-top {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.1rem 0;
+  width: 100%;
+}
+
+.channel-focus-row {
+  width: 100%;
+  padding-left: 1.4rem;
+}
+
+.focus-input {
+  width: 100%;
+  font-size: 0.82rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface, var(--bg));
+  color: var(--text);
+  box-sizing: border-box;
 }
 
 .channel-browse {

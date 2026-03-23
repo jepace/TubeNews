@@ -179,14 +179,55 @@ def parse_story_file(story_path: Path) -> dict:
     timestamp_match = re.search(r"\*\*Segment Start:\*\* (\d+)s", text)
     start_seconds = int(timestamp_match.group(1)) if timestamp_match else 0
 
+    topics_match = re.search(r"\*\*Topics:\*\*\s*(.+)", text)
+    topics = (
+        [t.strip() for t in topics_match.group(1).split(",") if t.strip()]
+        if topics_match else []
+    )
+
     return {
         "title": title,
         "dateline": dateline,
         "body_html": body_html,
         "start_seconds": start_seconds,
+        "topics": topics,
         # Keep a hash of the raw text so feed entry IDs are stable across runs.
         "content_hash": hashlib.md5(text.encode()).hexdigest(),
     }
+
+
+def _story_matches_focus(story_topics: list, focus_str: str) -> bool:
+    """Return True if a story should be shown for the given user focus string.
+
+    Matching rules:
+    - No focus set (empty string) → always True (show everything).
+    - Story has no topics (written before topic tagging was added) → always True
+      (graceful degradation; don't hide old content).
+    - Otherwise: any story topic that is a substring of a focus keyword, or vice
+      versa, counts as a match.  This handles plurals and compound phrases
+      (e.g. topic ``"housing"`` matches focus ``"affordable housing"``).
+
+    Examples:
+        >>> _story_matches_focus(["housing", "zoning"], "housing, permits")
+        True
+        >>> _story_matches_focus(["contracts"], "housing, zoning")
+        False
+        >>> _story_matches_focus([], "housing")
+        True
+        >>> _story_matches_focus(["budget"], "")
+        True
+    """
+    if not focus_str or not focus_str.strip():
+        return True
+    if not story_topics:
+        return True
+    focus_words = [w.strip().lower() for w in focus_str.split(",") if w.strip()]
+    for topic in story_topics:
+        t = topic.lower()
+        for fw in focus_words:
+            if t in fw or fw in t:
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +469,9 @@ def call_gemini_api(
         "3. DATELINE: Construct a formal AP-style dateline "
         "(e.g., 'SPRINGFIELD, Mo. — March 14, 2026').\n\n"
         "Return result ONLY as raw JSON list of objects with keys: "
-        "'title', 'dateline', 'content', 'start_time_seconds'."
+        "'title', 'dateline', 'content', 'start_time_seconds', 'topics'. "
+        "'topics' must be a list of 2-6 short lowercase keyword strings that "
+        "categorise the story (e.g. [\"housing\", \"zoning\", \"budget\"])."
     )
 
     payload = {
@@ -494,6 +537,9 @@ def write_story_files(stories: list, meeting_dir: Path, video_id: str = "") -> N
             fh.write(f"\n{story['content']}\n\n")
             fh.write("---\n")
             fh.write(f"**Segment Start:** {story.get('start_time_seconds', 0)}s\n")
+            topics = story.get("topics") or []
+            if topics:
+                fh.write(f"**Topics:** {', '.join(str(t).lower().strip() for t in topics)}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +683,7 @@ def rebuild_meta_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> bytes:
+def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict | None = None) -> bytes:
     """Build and return RSS feed XML bytes for a user's subscribed channels.
 
     Contains all the feed-building logic.  Does *not* write anything to disk —
@@ -648,13 +694,17 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> by
     are sorted newest-first, matching :func:`rebuild_meta_feed` behaviour.
 
     Args:
-        user:     User config dict from ``archive/users/<id>/user.json``.
-                  Must contain ``name`` (str) and ``channel_ids`` (list[str]).
-        base_url: Public URL root; currently unused but reserved for future self-links.
-        user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
+        user:          User config dict from ``archive/users/<id>/user.json``.
+                       Must contain ``name`` (str) and ``channel_ids`` (list[str]).
+        base_url:      Public URL root; currently unused but reserved for future self-links.
+        user_id:       UUID directory name for the user. Falls back to slugify(name) if omitted.
+        channel_focus: Optional override mapping ``{channel_id: focus_string}``.  When
+                       ``None``, falls back to ``user.get("channel_focus", {})``.
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
+    if channel_focus is None:
+        channel_focus = user.get("channel_focus", {})
 
     feed = FeedGenerator()
     feed.id(f"tubenews_user_{slugify(name)}")
@@ -671,7 +721,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> by
             channel_info = json.loads(channel_json.read_text())
         except Exception:
             continue
-        if channel_info.get("channel_id") not in subscribed:
+        channel_id = channel_info.get("channel_id")
+        if channel_id not in subscribed:
             continue
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
         for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
@@ -683,7 +734,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> by
                 if metadata.get("status") == "ignored_too_old":
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
-                    all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name})
+                    all_stories.append({"file": story_file, "meta": metadata,
+                                        "channel_name": channel_name, "channel_id": channel_id})
             except Exception:
                 continue
 
@@ -692,6 +744,9 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "") -> by
     for entry in all_stories:
         try:
             story = parse_story_file(entry["file"])
+            focus = channel_focus.get(entry.get("channel_id", ""), "")
+            if not _story_matches_focus(story.get("topics", []), focus):
+                continue
             feed_entry = feed.add_entry()
             feed_entry.id(story["content_hash"])
             feed_entry.title(f"[{entry['channel_name']}] {story['title']}")

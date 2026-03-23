@@ -52,7 +52,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify  # noqa: E402
+from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -412,14 +412,22 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
 
 
 def _get_user_stories(user_data: dict) -> list[dict]:
-    """Return parsed stories for a user's subscribed channels, newest-first."""
+    """Return parsed stories for a user's subscribed channels, newest-first.
+
+    Stories are filtered by the user's per-channel focus (``channel_focus`` in
+    ``user.json``).  If no focus is set for a channel, all stories from that
+    channel are returned.  Stories written before topic tagging was introduced
+    (no ``**Topics:**`` line) are always included regardless of focus.
+    """
     subscribed = set(user_data.get("channel_ids", []))
+    channel_focus = user_data.get("channel_focus", {})
     raw: list[dict] = []
     channels_cfg = _load_channels()
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
         channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
         if not channel_info or channel_info.get("channel_id") not in subscribed:
             continue
+        channel_id = channel_info.get("channel_id", "")
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
         for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
             meta_path = meeting_dir / "metadata.json"
@@ -431,6 +439,7 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
+                                "channel_id": channel_id,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
             except Exception:
                 continue
@@ -439,6 +448,9 @@ def _get_user_stories(user_data: dict) -> list[dict]:
     for entry in raw:
         try:
             s = parse_story_file(entry["file"])
+            focus = channel_focus.get(entry.get("channel_id", ""), "")
+            if not _story_matches_focus(s.get("topics", []), focus):
+                continue
             vid = entry["meta"]["video_id"]
             vt = entry["meta"].get("video_title", "")
             stories.append({
@@ -593,9 +605,16 @@ def dashboard():
 
         selected = set(request.form.getlist("channel_ids"))
         valid_ids = {ch["channel_id"] for ch in channels}
-        current_user.set_channel_ids(sorted(selected & valid_ids))
+        new_ids = sorted(selected & valid_ids)
+        current_user.set_channel_ids(new_ids)
         blog_name = request.form.get("blog_name", "").strip()
         current_user._data["blog_name"] = blog_name
+        channel_focus = {}
+        for ch_id in new_ids:
+            val = request.form.get(f"focus_{ch_id}", "").strip()
+            if val:
+                channel_focus[ch_id] = val
+        current_user._data["channel_focus"] = channel_focus
         current_user._save()
         flash("Subscriptions updated.", "success")
         return redirect(url_for("dashboard"))
@@ -605,6 +624,7 @@ def dashboard():
         "dashboard.html",
         channels=channels,
         subscribed=set(current_user.channel_ids),
+        channel_focus=current_user._data.get("channel_focus", {}),
         feed_url=_feed_url(current_user.feed_token),
         blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
         prefs=prefs,
@@ -753,8 +773,15 @@ def admin_user_subscriptions(uid: str):
         abort(404)
     channels = _load_channels()
     valid_ids = {ch["channel_id"] for ch in channels}
-    selected = set(request.form.getlist("channel_ids")) & valid_ids
-    user.set_channel_ids(sorted(selected))
+    new_ids = sorted(set(request.form.getlist("channel_ids")) & valid_ids)
+    user.set_channel_ids(new_ids)
+    channel_focus = {}
+    for ch_id in new_ids:
+        val = request.form.get(f"focus_{ch_id}", "").strip()
+        if val:
+            channel_focus[ch_id] = val
+    user._data["channel_focus"] = channel_focus
+    user._save()
     flash("Subscriptions updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 

@@ -81,6 +81,7 @@ YouTube Channel Pages (HTML scrape)
 - **Transcript caching:** If `transcript.txt` already exists in a video directory, Supadata is not called again — AI runs on the cached transcript instead. This allows re-running AI analysis without consuming API quota.
 - **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), the session flag `ai_disabled` is set and all remaining videos skip the AI step.
 - **Shared story parser:** `parse_story_file()` is used by both `rebuild_feed()` and `rebuild_meta_feed()` to read the Markdown story format into a structured dict. Edit this function if the story file format changes.
+- **Per-user topic filtering:** Gemini assigns a `topics` list to each generated story (written as a `**Topics:**` line in the `.md` file). Users can set per-channel focus keywords in their profile; `_story_matches_focus()` filters stories at serve time in `_get_user_stories()` and `build_user_feed_xml()`. Stories without a topics line always pass through (backwards compatibility).
 
 ---
 
@@ -91,7 +92,8 @@ YouTube Channel Pages (HTML scrape)
 | Function | Description |
 |---|---|
 | `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore) |
-| `parse_story_file(story_path)` | Reads a `.md` story file; returns `{title, dateline, body_html, start_seconds, content_hash}` |
+| `parse_story_file(story_path)` | Reads a `.md` story file; returns `{title, dateline, body_html, start_seconds, topics, content_hash}` |
+| `_story_matches_focus(story_topics, focus_str)` | Returns `True` if any story topic overlaps with the user's focus keywords (substring match). Always `True` when `focus_str` is empty or `story_topics` is empty (graceful degradation for old stories). |
 
 ### YouTube data-gathering
 
@@ -106,8 +108,8 @@ YouTube Channel Pages (HTML scrape)
 
 | Function | Description |
 |---|---|
-| `call_gemini_api(...)` | Posts to Gemini REST API; returns list of story dicts, `False` on rate-limit, `None` on failure |
-| `write_story_files(stories, meeting_dir)` | Writes each story dict as a numbered `.md` file |
+| `call_gemini_api(...)` | Posts to Gemini REST API; returns list of story dicts (each with `title`, `dateline`, `content`, `start_time_seconds`, `topics`), `False` on rate-limit, `None` on failure |
+| `write_story_files(stories, meeting_dir)` | Writes each story dict as a numbered `.md` file; includes `**Topics:**` line when topics are present |
 
 ### RSS feed builders
 
@@ -218,9 +220,11 @@ Story body text in AP inverted pyramid style...
 
 ---
 **Segment Start:** 1234s
+**Topics:** housing, zoning, permits
 ```
 
-The `**Segment Start:**` value links back to the exact timestamp in the source YouTube video. It is parsed by `parse_story_file()` and embedded in RSS entry links as `?t=<seconds>`.
+- `**Segment Start:**` links back to the exact timestamp in the source YouTube video. Parsed by `parse_story_file()` and embedded in RSS entry links as `?t=<seconds>`.
+- `**Topics:**` is a comma-separated list of 2–6 lowercase keywords assigned by Gemini. Used by `_story_matches_focus()` to filter stories per user's focus. Absent on stories written before topic tagging was introduced — those always show to all users.
 
 ### metadata.json Schema
 
@@ -274,9 +278,13 @@ The `**Segment Start:**` value links back to the exact timestamp in the source Y
 pytest tests/ -v
 ```
 
-Tests cover: `slugify`, `parse_story_file`, the JSON extraction regex used by `call_gemini_api`, `rebuild_feed`, and `rebuild_meta_feed`. All tests use `tmp_path` fixtures — no network calls and no real archive needed.
+| File | Covers |
+|---|---|
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`), `_story_matches_focus`, `write_story_files`, the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_meta_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
+| `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
+| `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger |
 
-To add a test for a new function, follow the patterns in `tests/test_tubenews.py`. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch` to avoid live API calls.
+All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
 
 ---
 
@@ -299,7 +307,8 @@ The Gemini prompt is in `call_gemini_api()`. It instructs the model to:
 - Identify stories relevant to the configured `focus`
 - Use AP-style inverted pyramid structure
 - Format a dateline (e.g., `CITY, State — Month DD, YYYY`)
-- Return a raw JSON list (no markdown code fences)
+- Return a raw JSON list (no markdown code fences) where each object has keys: `title`, `dateline`, `content`, `start_time_seconds`, `topics`
+- `topics` must be a list of 2–6 short lowercase keyword strings categorising the story (used for per-user filtering)
 
 The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)` to handle any extra prose the model may prepend. If the model starts returning malformed JSON, add debug logging inside `call_gemini_api()` to inspect `raw_text` before parsing.
 
@@ -309,8 +318,8 @@ The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)
 
 The Flask web UI sits on top of `TubeNews.py` and provides user accounts,
 subscriptions, and a dashboard for sharing feeds and blog pages. It imports
-`build_user_feed_xml`, `parse_story_file`, and `STORAGE_ROOT` directly from
-`TubeNews.py`.
+`build_user_feed_xml`, `parse_story_file`, `_story_matches_focus`, `slugify`,
+and `STORAGE_ROOT` directly from `TubeNews.py`.
 
 ### User Storage
 
@@ -332,15 +341,18 @@ archive/users/
   "email": "alice@example.com",
   "password_hash": "scrypt:...",
   "channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
+  "channel_focus": {
+    "UCxxxxxxx": "housing, zoning, permits"
+  },
   "feed_token": "550e8400-e29b-41d4-a716-446655440000",
   "created_at": 1741910400,
   "locked": false
 }
 ```
 
-`feed_token` is a UUID generated at registration. It is the secret that
-authenticates all public (no-login) URLs for that user. Rotating it
-invalidates both the RSS feed URL and the blog URL simultaneously.
+- `channel_ids` — authoritative subscription list.
+- `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Missing key or empty string means no filter (show all stories). Absent entirely on accounts that predate this feature — treated as no filter.
+- `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
 
 ### Token Model
 
@@ -446,22 +458,24 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 **Writing tests is an ongoing responsibility, not a one-time task.**
 
-Every time you add or change a function in `TubeNews.py` or `web/app.py`, ask yourself:
-- Does this change have a regression risk?
-- Is there existing test coverage for this behaviour?
-- If not, write tests **in the same commit** as the code change.
+- **Tests ship with the code change.** Any new or modified function must have corresponding tests in the same commit. Do not defer tests to a follow-up.
+- **Run the full suite before every commit.** `pytest tests/ -v` must pass before pushing. A commit that breaks existing tests must not be pushed.
+- **Bug fixes require a regression test.** Add a test that would have caught the original bug before closing the fix. If the same class of bug appears twice, the suite was insufficient — expand it.
 
-Test files:
-- `tests/test_tubenews.py` — covers `TubeNews.py` functions
-- `tests/test_web.py` — covers `web/app.py` helpers (URL generation, prefs, etc.)
+---
 
-When a bug is fixed, a regression test for that exact bug must be added before closing the fix. If you find yourself writing the same class of fix twice (e.g., URL generation producing absolute instead of relative links), that is a sign the test suite was insufficient — expand it.
+## Documentation Policy
 
-Run the full suite before every commit:
+**Documentation must be kept in sync with the code. Outdated docs are worse than no docs.**
 
-```bash
-pytest tests/ -v
-```
+- **Update docs in the same commit as the code change.** Adding a function means adding it to the Function Reference. Changing a file format means updating the schema example. Changing behaviour means updating the description.
+- **Files to maintain:**
+  - `CLAUDE.md` — developer reference (function signatures, data formats, design decisions, policies)
+  - `SERVING.md` — operator/deployment guide (URLs, config, infrastructure)
+  - `TODO.md` — known issues, deferred work, and completed items
+  - `README.md` — user-facing overview and quick-start
+- **Completed work belongs in `TODO.md`.** When a deferred item is implemented, move it to a Completed section rather than deleting it — this preserves the design rationale.
+- **Do not document hypothetical features.** Only document what actually exists in the codebase.
 
 ---
 

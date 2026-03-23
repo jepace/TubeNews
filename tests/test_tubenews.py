@@ -28,6 +28,7 @@ from TubeNews import (
     _resolve_early_config,
     _acquire_lock,
     _release_lock,
+    _story_matches_focus,
 )
 
 
@@ -1006,3 +1007,134 @@ def test_acquire_lock_succeeds_again_after_release(tmp_path, monkeypatch):
     _release_lock()
     assert _acquire_lock()
     _release_lock()
+
+
+# ---------------------------------------------------------------------------
+# _story_matches_focus
+# ---------------------------------------------------------------------------
+
+def test_focus_empty_always_matches():
+    """No focus set — every story should be shown regardless of topics."""
+    assert _story_matches_focus(["housing", "zoning"], "") is True
+
+def test_focus_none_always_matches():
+    assert _story_matches_focus(["budget"], None) is True
+
+def test_focus_whitespace_only_always_matches():
+    assert _story_matches_focus(["housing"], "   ") is True
+
+def test_empty_topics_always_matches():
+    """Old story with no topics must pass through unfiltered."""
+    assert _story_matches_focus([], "housing, zoning") is True
+
+def test_exact_keyword_match():
+    assert _story_matches_focus(["housing"], "housing, permits") is True
+
+def test_topic_substring_of_focus_keyword():
+    """'housing' is a substring of focus keyword 'affordable housing'."""
+    assert _story_matches_focus(["housing"], "affordable housing, permits") is True
+
+def test_focus_keyword_substring_of_topic():
+    """Focus 'permit' matches topic 'permits'."""
+    assert _story_matches_focus(["permits"], "permit, budget") is True
+
+def test_no_match_returns_false():
+    assert _story_matches_focus(["contracts", "hr"], "housing, zoning") is False
+
+def test_any_topic_match_is_sufficient():
+    """If at least one topic matches the focus, the story should be shown."""
+    assert _story_matches_focus(["contracts", "budget", "zoning"], "housing, zoning") is True
+
+def test_case_insensitive_match():
+    assert _story_matches_focus(["Housing"], "housing, permits") is True
+
+def test_multiple_focus_keywords_checked():
+    """All focus keywords are checked, not just the first."""
+    assert _story_matches_focus(["permits"], "housing, permits, zoning") is True
+
+
+# ---------------------------------------------------------------------------
+# parse_story_file — topics field
+# ---------------------------------------------------------------------------
+
+def test_parse_story_topics_present(tmp_path):
+    """Topics line is parsed into a list."""
+    story = tmp_path / "01_Test.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\nBody.\n\n---\n"
+        "**Segment Start:** 60s\n"
+        "**Topics:** housing, zoning, permits\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert result["topics"] == ["housing", "zoning", "permits"]
+
+def test_parse_story_topics_absent_returns_empty_list(tmp_path):
+    """Old story files without a Topics line return an empty list, not an error."""
+    story = tmp_path / "01_Old.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\nBody.\n\n---\n**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert result["topics"] == []
+
+def test_parse_story_topics_whitespace_stripped(tmp_path):
+    """Whitespace around topic keywords is stripped."""
+    story = tmp_path / "01_Test.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\nBody.\n\n---\n"
+        "**Segment Start:** 0s\n"
+        "**Topics:**  housing ,  zoning  \n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert result["topics"] == ["housing", "zoning"]
+
+
+# ---------------------------------------------------------------------------
+# write_story_files — topics written to file
+# ---------------------------------------------------------------------------
+
+def test_write_story_files_includes_topics_line(tmp_path):
+    """When a story has a topics list, **Topics:** must appear in the written file."""
+    stories = [{
+        "title": "Housing Plan Approved",
+        "dateline": "GILROY, Calif. — March 22, 2026",
+        "content": "The council approved the housing plan.",
+        "start_time_seconds": 120,
+        "topics": ["housing", "zoning"],
+    }]
+    write_story_files(stories, tmp_path, video_id="abc123")
+    written = list(tmp_path.glob("[0-9]*.md"))
+    assert len(written) == 1
+    text = written[0].read_text(encoding="utf-8")
+    assert "**Topics:** housing, zoning" in text
+
+def test_write_story_files_no_topics_line_when_absent(tmp_path):
+    """When topics is missing from the story dict, no **Topics:** line is written."""
+    stories = [{
+        "title": "Budget Update",
+        "dateline": "GILROY, Calif. — March 22, 2026",
+        "content": "Budget was discussed.",
+        "start_time_seconds": 0,
+    }]
+    write_story_files(stories, tmp_path)
+    written = list(tmp_path.glob("[0-9]*.md"))
+    assert len(written) == 1
+    text = written[0].read_text(encoding="utf-8")
+    assert "**Topics:**" not in text
+
+def test_write_story_files_empty_topics_no_line(tmp_path):
+    """An empty topics list must not produce a **Topics:** line."""
+    stories = [{
+        "title": "Parks Update",
+        "dateline": "GILROY, Calif. — March 22, 2026",
+        "content": "Parks discussed.",
+        "start_time_seconds": 0,
+        "topics": [],
+    }]
+    write_story_files(stories, tmp_path)
+    written = list(tmp_path.glob("[0-9]*.md"))
+    text = written[0].read_text(encoding="utf-8")
+    assert "**Topics:**" not in text
