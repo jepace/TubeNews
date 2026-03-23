@@ -221,44 +221,20 @@ Edit your crontab with `crontab -e`.
 
 ---
 
-## Keeping the Server Running: FreeBSD rc.d
+## Keeping the Server Running: System Service
 
-To have `serve.sh` start automatically at boot and restart on crash, create an
-rc.d service. As root:
+Use the ready-to-use service files in `contrib/` to run TubeNews as a
+managed system service that starts at boot and restarts on crash.
 
-```sh
-cat > /usr/local/etc/rc.d/tubenews << 'EOF'
-#!/bin/sh
-# PROVIDE: tubenews
-# REQUIRE: NETWORKING
-# KEYWORD: shutdown
+| OS | System | Files |
+|---|---|---|
+| FreeBSD | rc.d | `contrib/freebsd/tubenews` |
+| Linux | systemd | `contrib/linux/tubenews-web.service` |
+| macOS | launchd | `contrib/macos/com.tubenews.web.plist` |
 
-. /etc/rc.subr
-
-name="tubenews"
-rcvar="tubenews_enable"
-pidfile="/var/run/${name}.pid"
-command="/path/to/TubeNews/serve.sh"
-command_interpreter="/bin/sh"
-
-load_rc_config $name
-run_rc_command "$1"
-EOF
-
-chmod +x /usr/local/etc/rc.d/tubenews
-```
-
-Add to `/etc/rc.conf`:
-
-```
-tubenews_enable="YES"
-```
-
-Then start it:
-
-```bash
-service tubenews start
-```
+See `contrib/README.md` for step-by-step installation instructions for
+each platform. The Linux files also include a systemd timer
+(`tubenews-run.timer`) as an alternative to cron for the scraper.
 
 ---
 

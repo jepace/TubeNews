@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd periodic job — TubeNews scraper (every 30 minutes)
+
+  Install:
+    edit the /path/to/TubeNews placeholder below, then:
+    cp contrib/macos/com.tubenews.run.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tubenews.run.plist
+
+  Manage:
+    launchctl start com.tubenews.run      # trigger immediately
+    launchctl unload ~/Library/LaunchAgents/com.tubenews.run.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tubenews.run</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/path/to/TubeNews/TubeNews.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/TubeNews</string>
+
+    <!-- Run every 1800 seconds (30 minutes). Does not run at load. -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/tubenews-run.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/tubenews-run.log</string>
+</dict>
+</plist>
