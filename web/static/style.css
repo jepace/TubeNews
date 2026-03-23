@@ -95,7 +95,7 @@ header {
   font-size: 0.9rem;
   font-weight: 600;
 }
-.header-sub a { color: var(--fg); text-decoration: none; }
+.header-sub a { color: var(--text); text-decoration: none; }
 .header-sub a:hover { text-decoration: underline; }
 .header-sub .hs-ext { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
 
@@ -496,6 +496,7 @@ button[type="submit"]:hover,
   text-decoration: none;
   white-space: nowrap;
 }
+.btn-sm:visited { color: #fff; }
 .btn-sm:hover { background: var(--accent-hover); }
 
 .btn-danger {
@@ -620,12 +621,14 @@ button.btn-danger-sm:hover { background: #fee2e2; }
   cursor: pointer;
   text-decoration: none;
   line-height: 1.4;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .story-share button:hover,
 .story-share a:hover {
-  color: var(--fg);
-  border-color: var(--fg);
+  color: var(--text);
+  border-color: var(--text);
 }
 
 .blog-empty {

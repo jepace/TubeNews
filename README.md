@@ -15,7 +15,7 @@ TubeNews monitors YouTube channels for new videos, fetches transcripts via [Supa
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Install dependencies (global install — no venv needed)
 pip install -r requirements.txt
 
 # Configure
@@ -23,11 +23,11 @@ cp TubeNews.json.sample TubeNews.json
 # Edit TubeNews.json with your API keys and channel list
 
 # (Optional) On first run with existing channels — skip the backlog
-python helpers/catchup.py
+python3 helpers/catchup.py
 
 # Run
-python TubeNews.py
-python TubeNews.py --debug   # verbose output
+python3 TubeNews.py
+python3 TubeNews.py --debug   # verbose output
 ```
 
 ## Requirements
@@ -63,10 +63,10 @@ admin panel for managing users and channels.
 
 ```bash
 # Add a secret key to TubeNews.json first:
-python -c 'import secrets; print(secrets.token_hex(32))'
-# Then start the UI:
-python web/app.py
-# Open http://localhost:8000
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+# Then start the server:
+./serve.sh
+# Open http://your-server:8000
 ```
 
 See `SERVING.md` for production deployment (gunicorn, nginx, HTTPS, cron).

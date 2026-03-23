@@ -82,6 +82,7 @@ YouTube Channel Pages (HTML scrape)
 - **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), the session flag `ai_disabled` is set and all remaining videos skip the AI step.
 - **Shared story parser:** `parse_story_file()` is used by both `rebuild_feed()` and `rebuild_meta_feed()` to read the Markdown story format into a structured dict. Edit this function if the story file format changes.
 - **Per-user topic filtering:** Gemini assigns a `topics` list to each generated story (written as a `**Topics:**` line in the `.md` file). Users can set per-channel focus keywords in their profile; `_story_matches_focus()` filters stories at serve time in `_get_user_stories()` and `build_user_feed_xml()`. Stories without a topics line always pass through (backwards compatibility).
+- **Multiple focuses per user:** Users may enter up to 3 focus lines per channel subscription in the dashboard. At processing time, `_collect_channel_focuses()` reads all subscribers' `user.json` files to build the union of focuses for each channel (capped at `MAX_FOCUSES_PER_CHANNEL = 10`). Gemini is called once per unique focus. Stories from all focus passes are merged into the same meeting directory, deduplicated by title. `metadata.json` records `processed_focuses` so subsequent runs only call Gemini for newly added focuses.
 
 ---
 
@@ -93,7 +94,9 @@ YouTube Channel Pages (HTML scrape)
 |---|---|
 | `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore) |
 | `parse_story_file(story_path)` | Reads a `.md` story file; returns `{title, dateline, body_html, start_seconds, topics, content_hash}` |
-| `_story_matches_focus(story_topics, focus_str)` | Returns `True` if any story topic overlaps with the user's focus keywords (substring match). Always `True` when `focus_str` is empty or `story_topics` is empty (graceful degradation for old stories). |
+| `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* may be a single string (legacy) or a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty (graceful degradation for old stories). |
+| `_needs_processing(video_id, feed_dir, focuses)` | Returns `True` if a video needs (re)processing: no archive dir, no `metadata.json`, or `metadata.json` is missing one or more of *focuses* in its `processed_focuses` list. Old metadata without `processed_focuses` is treated as fully done. |
+| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `archive/users/*/user.json` and collects the union of all focus strings set by subscribers for *channel_id*, prepended by the feed-level *feed_focus*. Deduplicates and caps at `MAX_FOCUSES_PER_CHANNEL` (10). Returns `[""]` if nothing is configured (single no-filter call). |
 
 ### YouTube data-gathering
 
@@ -109,7 +112,7 @@ YouTube Channel Pages (HTML scrape)
 | Function | Description |
 |---|---|
 | `call_gemini_api(...)` | Posts to Gemini REST API; returns list of story dicts (each with `title`, `dateline`, `content`, `start_time_seconds`, `topics`), `False` on rate-limit, `None` on failure |
-| `write_story_files(stories, meeting_dir)` | Writes each story dict as a numbered `.md` file; includes `**Topics:**` line when topics are present |
+| `write_story_files(stories, meeting_dir, video_id="", *, clear_existing=True, start_index=1)` | Writes each story dict as a numbered `.md` file; includes `**Topics:**` line when topics are present. Use `clear_existing=False, start_index=N` to append new stories from additional focus passes without removing existing files. |
 
 ### RSS feed builders
 
@@ -125,8 +128,8 @@ YouTube Channel Pages (HTML scrape)
 
 | Function | Description |
 |---|---|
-| `process_video(video_id, ...)` | Fetch + analyse one video; returns `"content_written"`, `"ai_rate_limited"`, or `"skipped"` |
-| `process_feed(feed, ...)` | Processes all new videos for one channel; returns `(content_changed, ai_rate_limited)` |
+| `process_video(video_id, ..., focuses=None)` | Fetch + analyse one video; calls Gemini once per focus string in *focuses* (falls back to `feed["focus"]`). New focuses are appended to existing stories when a video already has partial `metadata.json`. Returns `("content_written", n)`, `("ai_rate_limited", 0)`, or `("skipped", 0)`. |
+| `process_feed(feed, ...)` | Collects focuses via `_collect_channel_focuses`, processes all videos needing work for any focus; returns `(content_changed, ai_rate_limited, stories_written)` |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
 ---
@@ -141,10 +144,10 @@ YouTube Channel Pages (HTML scrape)
 ### Install Dependencies
 
 ```bash
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+Packages install globally — no virtual environment is used.
 
 ### Configure
 
@@ -176,10 +179,13 @@ Edit `TubeNews.json`:
 
 ```bash
 # Normal run
-python TubeNews.py
+python3 TubeNews.py
 
 # Debug mode (verbose logging, shows API calls and raw responses)
-python TubeNews.py --debug
+python3 TubeNews.py --debug
+
+# Start the web server (gunicorn — never use python3 web/app.py in any environment)
+./serve.sh
 ```
 
 ### First Run on a Channel with Existing Videos
@@ -187,7 +193,7 @@ python TubeNews.py --debug
 Run `catchup.py` **before** the first `TubeNews.py` run to avoid processing the entire backlog:
 
 ```bash
-python helpers/catchup.py
+python3 helpers/catchup.py
 ```
 
 This marks all currently visible videos as `ignored_too_old`. The main script will then only pick up truly new uploads going forward.
@@ -233,11 +239,14 @@ Story body text in AP inverted pyramid style...
   "video_id": "dQw4w9WgXcQ",
   "video_title": "Regular Meeting March 14 2026",
   "status": "processed",
-  "processed_at": 1741910400
+  "processed_at": 1741910400,
+  "processed_focuses": ["housing, zoning, permits", "transportation, roads"]
 }
 ```
 
 `status` values: `"processed"` | `"ignored_too_old"` | `"no_stories"` (AI ran but returned no relevant stories)
+
+`processed_focuses` is a sorted list of all focus strings for which Gemini has been called on this video. Old `metadata.json` files that pre-date this field have no `processed_focuses` key and are treated as fully processed (not re-run).
 
 ---
 
@@ -342,7 +351,7 @@ archive/users/
   "password_hash": "scrypt:...",
   "channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "channel_focus": {
-    "UCxxxxxxx": "housing, zoning, permits"
+    "UCxxxxxxx": ["housing, zoning, permits", "transportation, roads, transit"]
   },
   "feed_token": "550e8400-e29b-41d4-a716-446655440000",
   "created_at": 1741910400,
@@ -351,7 +360,7 @@ archive/users/
 ```
 
 - `channel_ids` — authoritative subscription list.
-- `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Missing key or empty string means no filter (show all stories). Absent entirely on accounts that predate this feature — treated as no filter.
+- `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3); old installs may store a plain string — both are handled transparently. Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
 
 ### Token Model

@@ -1,10 +1,10 @@
 """TubeNews web UI — account management and feed subscription.
 
-Run in development:
-    python web/app.py
+Start the server (always use gunicorn — never python web/app.py):
+    ./serve.sh
 
-Run in production (behind nginx/Caddy with TLS):
-    gunicorn -w 2 'web.app:app'
+With HTTPS (behind nginx/Caddy):
+    TUBENEWS_HTTPS=true ./serve.sh
 
 The secret key is read from the "tubenews_key" field in TubeNews.json.
 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 import uuid
+
+import requests
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -197,6 +199,29 @@ def load_user(user_id: str) -> User | None:
 # ---------------------------------------------------------------------------
 
 
+def _web_ntfy(title: str, message: str, priority: str = "default") -> None:
+    """Send a web-event notification to ntfy.sh if ntfy_topic is configured.
+
+    Uses the same topic as the CLI run-summary notifications.  Failures are
+    silently swallowed — notifications are best-effort and must never break
+    a web request.
+    """
+    topic = _load_config().get("ntfy_topic")
+    if not topic:
+        return
+    import urllib.request as _ur
+    req = _ur.Request(
+        f"https://ntfy.sh/{topic}",
+        data=message.encode(),
+        method="POST",
+        headers={"Title": title, "Priority": priority},
+    )
+    try:
+        _ur.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
 def _is_running() -> bool:
     """Return True if a TubeNews.py process currently holds the lock file."""
     if not LOCK_FILE.exists():
@@ -285,6 +310,16 @@ def format_datetime(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+@app.template_filter("focuses_text")
+def focuses_text(val) -> str:
+    """Render a channel_focus value (str or list[str]) as newline-separated text."""
+    if not val:
+        return ""
+    if isinstance(val, list):
+        return "\n".join(val)
+    return str(val)
+
+
 def admin_required(f):
     """Decorator: 403 unless the logged-in user is an admin."""
     @wraps(f)
@@ -293,6 +328,17 @@ def admin_required(f):
             abort(403)
         return f(*args, **kwargs)
     return decorated
+
+
+def _safe_next(url: str | None) -> str:
+    """Return *url* only when it is a safe same-site relative path.
+
+    Blocks absolute URLs (http://evil.com) and protocol-relative URLs
+    (//evil.com) that would cause an open redirect after login.
+    """
+    if url and url.startswith("/") and not url.startswith("//"):
+        return url
+    return url_for("serve_blog")
 
 
 def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[dict]) -> dict | None:
@@ -505,6 +551,9 @@ def serve_archive(filename=""):
     """Serve static files from the archive directory (feeds, stories, etc.)."""
     if not filename:
         abort(404)
+    # Never expose user account data stored under archive/users/
+    if filename == "users" or filename.startswith("users/"):
+        abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None
     return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
 
@@ -517,7 +566,12 @@ def serve_transcript(channel_slug, meeting_id):
     segment, e.g. ``/transcript/my_channel/2026-03-14_abc123#t120``.
     """
     import re as _re
-    meeting_dir = STORAGE_ROOT / channel_slug / meeting_id
+    # Guard against path traversal: verify the resolved path stays inside STORAGE_ROOT
+    try:
+        meeting_dir = (STORAGE_ROOT / channel_slug / meeting_id).resolve()
+        meeting_dir.relative_to(STORAGE_ROOT.resolve())
+    except (ValueError, OSError):
+        abort(404)
     transcript_path = meeting_dir / "transcript.txt"
     if not transcript_path.exists():
         abort(404)
@@ -581,7 +635,7 @@ def login():
                 flash("This account has been locked. Contact an administrator.", "error")
             else:
                 login_user(user, remember=remember)
-                return redirect(request.args.get("next") or url_for("serve_blog"))
+                return redirect(_safe_next(request.args.get("next")))
         else:
             flash("Invalid email or password.", "error")
 
@@ -622,6 +676,7 @@ def register():
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
             login_user(User(user_dir, data))
+            _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
             flash("Account created. Choose your channels below.", "success")
             return redirect(url_for("dashboard"))
 
@@ -652,9 +707,10 @@ def dashboard():
         current_user._data["blog_name"] = blog_name
         channel_focus = {}
         for ch_id in new_ids:
-            val = request.form.get(f"focus_{ch_id}", "").strip()
-            if val:
-                channel_focus[ch_id] = val
+            raw = request.form.get(f"focus_{ch_id}", "")
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+            if lines:
+                channel_focus[ch_id] = lines
         current_user._data["channel_focus"] = channel_focus
         current_user._save()
         flash("Subscriptions updated.", "success")
@@ -819,9 +875,10 @@ def admin_user_subscriptions(uid: str):
     user.set_channel_ids(new_ids)
     channel_focus = {}
     for ch_id in new_ids:
-        val = request.form.get(f"focus_{ch_id}", "").strip()
-        if val:
-            channel_focus[ch_id] = val
+        raw = request.form.get(f"focus_{ch_id}", "")
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+        if lines:
+            channel_focus[ch_id] = lines
     user._data["channel_focus"] = channel_focus
     user._save()
     flash("Subscriptions updated.", "success")
@@ -928,10 +985,12 @@ def admin_user_delete(uid: str):
     if confirm != user.email:
         flash("Email confirmation did not match — account not deleted.", "error")
         return redirect(url_for("admin_user", uid=uid))
+    deleted_email = user.email
     for f in user._dir.iterdir():
         f.unlink()
     user._dir.rmdir()
-    flash(f"Account for {user.email} deleted.", "success")
+    _web_ntfy("TubeNews: user deleted", f"{current_user.email} deleted account for {deleted_email}.")
+    flash(f"Account for {deleted_email} deleted.", "success")
     return redirect(url_for("admin_users"))
 
 
@@ -1007,6 +1066,7 @@ def admin_run_now():
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    _web_ntfy("TubeNews: run started", f"Manual run triggered by {current_user.email}.")
     flash("TubeNews run started.", "success")
     return redirect(url_for("admin_runs") + "?starting=1")
 
@@ -1014,9 +1074,35 @@ def admin_run_now():
 @app.route("/admin/feeds")
 @login_required
 @admin_required
+def _get_supadata_balance() -> dict | None:
+    """Fetch credit usage from the Supadata /v1/me endpoint.
+
+    Returns a dict with ``plan``, ``usedCredits``, ``maxCredits`` on success,
+    or ``None`` if the key is not configured or the request fails.
+    """
+    key = _load_config().get("supadata_api_key", "")
+    if not key:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.supadata.ai/v1/me",
+            headers={"x-api-key": key},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/admin/feeds")
+@login_required
+@admin_required
 def admin_feeds():
     channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
-    return render_template("admin_feeds.html", channels=channels)
+    balance = _get_supadata_balance()
+    return render_template("admin_feeds.html", channels=channels, supadata=balance)
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])

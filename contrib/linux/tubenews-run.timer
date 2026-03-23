@@ -1,0 +1,20 @@
+# systemd timer — run TubeNews scraper every 30 minutes
+#
+# See tubenews-run.service for installation instructions.
+#
+# Check timer status:
+#   systemctl list-timers tubenews-run
+
+[Unit]
+Description=Run TubeNews scraper every 30 minutes
+
+[Timer]
+# Wait 5 minutes after boot before the first run (lets the network settle).
+OnBootSec=5min
+# Then run every 30 minutes after the last run completed.
+OnUnitActiveSec=30min
+# If a run was missed while the machine was off, catch up once on next boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

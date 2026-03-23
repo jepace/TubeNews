@@ -609,3 +609,219 @@ def test_feed_rename_blocked_when_target_dir_exists(admin_client, archive):
     assert (archive / new_slug).is_dir()
 
 
+
+
+# ---------------------------------------------------------------------------
+# Dashboard subscription save — focuses stored as list, capped at 3
+# ---------------------------------------------------------------------------
+
+def test_dashboard_saves_focuses_as_list(logged_in_client, archive):
+    """Focuses entered as newline-separated lines are saved as a list."""
+    import json as _json
+    import web.app as webapp
+
+    r = logged_in_client.post("/dashboard", data={
+        "channel_ids": ["UC_ALPHA_ID"],
+        "focus_UC_ALPHA_ID": "housing, zoning\ntransportation, roads",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    # Find the user in archive/users and check channel_focus
+    users_dir = webapp.STORAGE_ROOT / "users"
+    user_data = None
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = _json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                user_data = d
+                break
+    assert user_data is not None
+    focus_val = user_data["channel_focus"]["UC_ALPHA_ID"]
+    assert isinstance(focus_val, list)
+    assert "housing, zoning" in focus_val
+    assert "transportation, roads" in focus_val
+
+
+def test_dashboard_caps_focuses_at_three(logged_in_client, archive):
+    """A fourth focus line is silently dropped."""
+    import json as _json
+    import web.app as webapp
+
+    r = logged_in_client.post("/dashboard", data={
+        "channel_ids": ["UC_ALPHA_ID"],
+        "focus_UC_ALPHA_ID": "focus one\nfocus two\nfocus three\nfocus four",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    users_dir = webapp.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = _json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert len(d["channel_focus"]["UC_ALPHA_ID"]) == 3
+                return
+    pytest.fail("User not found")
+
+
+# ---------------------------------------------------------------------------
+# Security: serve_archive must not expose user data
+# ---------------------------------------------------------------------------
+
+def test_serve_archive_blocks_users_root(client, archive):
+    """/archive/users/ must return 404, not expose the directory."""
+    r = client.get("/archive/users")
+    assert r.status_code == 404
+
+
+def test_serve_archive_blocks_users_subpath(client, archive, registered_user):
+    """/archive/users/<uuid>/user.json must return 404."""
+    users_dir = webapp.STORAGE_ROOT / "users"
+    user_uuid = next(users_dir.iterdir()).name
+    r = client.get(f"/archive/users/{user_uuid}/user.json")
+    assert r.status_code == 404
+
+
+def test_serve_archive_allows_rss_feed(client, archive):
+    """/archive/rss.xml is still accessible (if the file exists)."""
+    (archive / "rss.xml").write_text("<rss/>")
+    r = client.get("/archive/rss.xml")
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Security: serve_transcript must block path traversal
+# ---------------------------------------------------------------------------
+
+def test_serve_transcript_blocks_dotdot_in_slug(client, archive):
+    """.. in channel_slug must not traverse above STORAGE_ROOT."""
+    r = client.get("/transcript/../something/meeting_id")
+    # Flask routes reject '..' segments in the URL; we get 404 either way
+    assert r.status_code in (400, 404)
+
+
+def test_serve_transcript_blocks_dotdot_in_meeting(client, archive):
+    """.. in meeting_id must not traverse above STORAGE_ROOT."""
+    # Create a sentinel transcript one level above the archive in tmp
+    sentinel = archive.parent / "transcript.txt"
+    sentinel.write_text("0s --> secret content\n")
+    try:
+        r = client.get(f"/transcript/alpha_city/..%2F..")
+        assert r.status_code in (400, 404)
+    finally:
+        sentinel.unlink(missing_ok=True)
+
+
+def test_serve_transcript_valid_route_still_works(client, archive):
+    """A legitimate transcript URL must continue to return 200."""
+    channel_dir = archive / "alpha_city"
+    meeting_dir = channel_dir / "2026-01-15_VID12345678"
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+    (meeting_dir / "transcript.txt").write_text("120s --> Hello world\n")
+    r = client.get("/transcript/alpha_city/2026-01-15_VID12345678")
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Security: login ?next= open-redirect prevention
+# ---------------------------------------------------------------------------
+
+def test_login_next_blocks_absolute_url(client, archive, registered_user):
+    """?next=https://evil.com must not redirect off-site after login."""
+    r = client.post(
+        "/login?next=https://evil.com",
+        data={"email": "test@example.com", "password": "testpassword123"},
+    )
+    assert r.status_code == 302
+    assert "evil.com" not in r.headers["Location"]
+
+
+def test_login_next_blocks_protocol_relative_url(client, archive, registered_user):
+    """?next=//evil.com must not redirect off-site after login."""
+    r = client.post(
+        "/login?next=//evil.com",
+        data={"email": "test@example.com", "password": "testpassword123"},
+    )
+    assert r.status_code == 302
+    assert "evil.com" not in r.headers["Location"]
+
+
+def test_login_next_allows_local_path(client, archive, registered_user):
+    """?next=/dashboard must redirect to that local path after login."""
+    r = client.post(
+        "/login?next=/dashboard",
+        data={"email": "test@example.com", "password": "testpassword123"},
+    )
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/dashboard")
+
+
+# ---------------------------------------------------------------------------
+# ntfy notifications
+# ---------------------------------------------------------------------------
+
+def test_register_sends_ntfy(client, archive, monkeypatch):
+    """Successful registration fires a ntfy notification."""
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    client.post("/register", data={
+        "name": "Alice",
+        "email": "alice@example.com",
+        "password": "securepassword1",
+        "confirm_password": "securepassword1",
+    })
+    assert len(sent) == 1
+    assert "new user" in sent[0][0].lower()
+    assert "alice@example.com" in sent[0][1]
+
+
+def test_register_no_ntfy_on_failure(client, archive, monkeypatch):
+    """A failed registration (bad password) must not fire a ntfy notification."""
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    client.post("/register", data={
+        "name": "Alice",
+        "email": "alice@example.com",
+        "password": "short",
+        "confirm_password": "short",
+    })
+    assert sent == []
+
+
+def test_run_now_sends_ntfy(archive, monkeypatch):
+    """Admin triggering a manual run fires a ntfy notification."""
+    import json as _json
+    from werkzeug.security import generate_password_hash as _gph
+
+    # Create an admin user
+    users_dir = archive / "users"
+    uid = str(uuid.uuid4())
+    (users_dir / uid).mkdir()
+    (users_dir / uid / "user.json").write_text(_json.dumps({
+        "name": "Admin",
+        "email": "admin@example.com",
+        "password_hash": _gph("adminpassword1"),
+        "channel_ids": [],
+        "feed_token": str(uuid.uuid4()),
+        "created_at": int(time.time()),
+    }))
+    import web.app as _wa
+    cfg_path = _wa.CONFIG_FILE
+    cfg = _json.loads(cfg_path.read_text())
+    cfg["admin_users"] = ["admin@example.com"]
+    cfg_path.write_text(_json.dumps(cfg))
+
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    monkeypatch.setattr(webapp, "_is_running", lambda: False)
+    monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **kw: None)
+
+    flask_app.config["TESTING"] = True
+    flask_app.config["WTF_CSRF_ENABLED"] = False
+    with flask_app.test_client() as c:
+        c.post("/login", data={"email": "admin@example.com", "password": "adminpassword1"})
+        c.post("/admin/run-now")
+
+    assert len(sent) == 1
+    assert "run started" in sent[0][0].lower()

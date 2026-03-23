@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd daemon — TubeNews web server
+
+  Install (runs at login, restarts on crash):
+    edit the /path/to/TubeNews placeholders below, then:
+    cp contrib/macos/com.tubenews.web.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tubenews.web.plist
+
+  To run system-wide at boot (requires root):
+    cp contrib/macos/com.tubenews.web.plist /Library/LaunchDaemons/
+    launchctl load /Library/LaunchDaemons/com.tubenews.web.plist
+
+  Manage:
+    launchctl start | stop com.tubenews.web
+    launchctl unload ~/Library/LaunchAgents/com.tubenews.web.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tubenews.web</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/path/to/TubeNews/serve.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/TubeNews</string>
+
+    <!-- Start at load and keep alive (restart on crash) -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Uncomment if behind an HTTPS reverse proxy: -->
+    <!--
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TUBENEWS_HTTPS</key>
+        <string>true</string>
+    </dict>
+    -->
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/tubenews-web.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/tubenews-web.log</string>
+</dict>
+</plist>

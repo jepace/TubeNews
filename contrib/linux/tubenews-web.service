@@ -1,0 +1,32 @@
+# systemd unit — TubeNews web server
+#
+# Install:
+#   edit WorkingDirectory and User below, then:
+#   cp contrib/linux/tubenews-web.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now tubenews-web
+#
+# Manage:
+#   systemctl start | stop | restart | status tubenews-web
+#   journalctl -u tubenews-web -f
+
+[Unit]
+Description=TubeNews Web Server
+After=network.target
+
+[Service]
+Type=simple
+# ── Edit these two lines ────────────────────────────────────────────────────
+WorkingDirectory=/path/to/TubeNews
+User=www-data
+# ────────────────────────────────────────────────────────────────────────────
+ExecStart=/usr/bin/env gunicorn -w 2 -b 0.0.0.0:8000 web.app:app
+Restart=on-failure
+RestartSec=5
+# Uncomment if TubeNews is behind an HTTPS reverse proxy:
+# Environment=TUBENEWS_HTTPS=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

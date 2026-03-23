@@ -40,10 +40,10 @@
            {% if story.channel_slug and story.meeting_id %}
            data-transcript="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}"
            {% endif %}>
-        <button class="share-copy-text" title="Copy article text">&#128203; Copy article</button>
-        <button class="share-copy-link" title="Copy link to this article">&#128279; Copy link</button>
+        <button type="button" class="share-copy-text" title="Copy article text">&#128203; Copy article</button>
+        <button type="button" class="share-copy-link" title="Copy link to this article">&#128279; Copy link</button>
         <a class="share-email" href="#" title="Share via email">&#9993; Email</a>
-        <button class="share-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
+        <button type="button" class="share-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
       </div>
     </article>
     {% endfor %}
@@ -100,9 +100,23 @@
     }
   }
 
+  var hasNativeShare = typeof navigator.share === 'function';
+
   document.querySelectorAll('.story-share').forEach(function (bar) {
     var title  = bar.dataset.title;
     var anchor = bar.dataset.anchor;
+
+    if (hasNativeShare) {
+      var nativeBtn = document.createElement('button');
+      nativeBtn.type = 'button';
+      nativeBtn.className = 'share-native';
+      nativeBtn.textContent = '\uD83D\uDCE4 Share';
+      nativeBtn.title = 'Share via system share sheet';
+      bar.insertBefore(nativeBtn, bar.firstChild);
+      nativeBtn.addEventListener('click', function () {
+        navigator.share({ title: title, url: articleLink(anchor) }).catch(function () {});
+      });
+    }
 
     bar.querySelector('.share-copy-text').addEventListener('click', function () {
       copyText(plainText(bar), this, 'Copied!');

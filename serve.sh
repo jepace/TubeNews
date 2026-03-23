@@ -1,0 +1,21 @@
+#!/bin/sh
+# Start the TubeNews web server with gunicorn.
+#
+# Usage:
+#   ./serve.sh              — listens on 0.0.0.0 at the port in TubeNews.json (default 8000)
+#   TUBENEWS_HTTPS=true ./serve.sh   — also marks session cookies Secure (use behind HTTPS)
+#
+# To keep it running after logout, start it under your preferred process manager,
+# e.g.:  nohup ./serve.sh &     or via a FreeBSD rc.d/daemon service entry.
+
+cd "$(dirname "$0")"
+
+PORT=$(python3 -c "
+import json, sys
+try:
+    print(json.load(open('TubeNews.json')).get('port', 8000))
+except Exception:
+    print(8000)
+" 2>/dev/null)
+
+exec gunicorn -w 2 -b "0.0.0.0:${PORT}" 'web.app:app'

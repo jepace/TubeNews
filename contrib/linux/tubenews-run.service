@@ -1,0 +1,25 @@
+# systemd one-shot unit — TubeNews scraper
+#
+# Pair with tubenews-run.timer. Install both together:
+#   edit WorkingDirectory and User below, then:
+#   cp contrib/linux/tubenews-run.service /etc/systemd/system/
+#   cp contrib/linux/tubenews-run.timer   /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now tubenews-run.timer
+#
+# Check logs:
+#   journalctl -u tubenews-run -f
+
+[Unit]
+Description=TubeNews scraper run
+After=network.target
+
+[Service]
+Type=oneshot
+# ── Edit these two lines ────────────────────────────────────────────────────
+WorkingDirectory=/path/to/TubeNews
+User=www-data
+# ────────────────────────────────────────────────────────────────────────────
+ExecStart=/usr/bin/python3 TubeNews.py
+StandardOutput=journal
+StandardError=journal

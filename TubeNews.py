@@ -196,11 +196,15 @@ def parse_story_file(story_path: Path) -> dict:
     }
 
 
-def _story_matches_focus(story_topics: list, focus_str: str) -> bool:
-    """Return True if a story should be shown for the given user focus string.
+def _story_matches_focus(story_topics: list, focuses) -> bool:
+    """Return True if a story should be shown for the given focus configuration.
+
+    *focuses* may be a single comma-separated string (legacy) or a list of
+    such strings (one per user-configured focus line).  A story passes if it
+    matches **any** of the focus strings.
 
     Matching rules:
-    - No focus set (empty string) → always True (show everything).
+    - No focus set (empty string / empty list) → always True (show everything).
     - Story has no topics (written before topic tagging was added) → always True
       (graceful degradation; don't hide old content).
     - Otherwise: any story topic that is a substring of a focus keyword, or vice
@@ -216,17 +220,23 @@ def _story_matches_focus(story_topics: list, focus_str: str) -> bool:
         True
         >>> _story_matches_focus(["budget"], "")
         True
+        >>> _story_matches_focus(["roads"], ["housing", "transportation, roads"])
+        True
     """
-    if not focus_str or not focus_str.strip():
+    if isinstance(focuses, str):
+        focuses = [focuses] if focuses.strip() else []
+    focuses = [f for f in (focuses or []) if f and f.strip()]
+    if not focuses:
         return True
     if not story_topics:
         return True
-    focus_words = [w.strip().lower() for w in focus_str.split(",") if w.strip()]
-    for topic in story_topics:
-        t = topic.lower()
-        for fw in focus_words:
-            if t in fw or fw in t:
-                return True
+    for focus_str in focuses:
+        focus_words = [w.strip().lower() for w in focus_str.split(",") if w.strip()]
+        for topic in story_topics:
+            t = topic.lower()
+            for fw in focus_words:
+                if t in fw or fw in t:
+                    return True
     return False
 
 
@@ -503,12 +513,22 @@ def call_gemini_api(
     return None
 
 
-def write_story_files(stories: list, meeting_dir: Path, video_id: str = "") -> None:
+def write_story_files(
+    stories: list,
+    meeting_dir: Path,
+    video_id: str = "",
+    *,
+    clear_existing: bool = True,
+    start_index: int = 1,
+) -> None:
     """Write each story dict as a numbered Markdown file inside *meeting_dir*.
 
-    File names are ``01_<slug>.md``, ``02_<slug>.md``, …  Any stale story
-    files from a previous (failed) run are deleted first to avoid mixing
-    results from different Gemini calls.
+    File names are ``01_<slug>.md``, ``02_<slug>.md``, …
+
+    By default (*clear_existing=True*) any stale story files from a previous
+    (failed) run are deleted first so results from different Gemini calls are
+    not mixed.  Pass ``clear_existing=False, start_index=N`` when appending
+    new stories from additional focus passes to an existing set.
 
     File format::
 
@@ -521,11 +541,11 @@ def write_story_files(stories: list, meeting_dir: Path, video_id: str = "") -> N
         ---
         **Segment Start:** 120s
     """
-    # Remove leftovers from any prior run so we start clean.
-    for old_file in meeting_dir.glob("[0-9]*.md"):
-        old_file.unlink()
+    if clear_existing:
+        for old_file in meeting_dir.glob("[0-9]*.md"):
+            old_file.unlink()
 
-    for index, story in enumerate(stories, start=1):
+    for index, story in enumerate(stories, start=start_index):
         safe_title = slugify(story["title"])[:40]
         file_path = meeting_dir / f"{index:02d}_{safe_title}.md"
         with open(file_path, "w", encoding="utf-8") as fh:
@@ -951,6 +971,76 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
 
 
 
+MAX_FOCUSES_PER_CHANNEL = 10
+
+
+def _needs_processing(video_id: str, feed_dir: Path) -> bool:
+    """Return True if *video_id* needs processing (no ``metadata.json`` exists for it).
+
+    A video needs processing when:
+
+    - Its archive directory does not exist yet (new video).
+    - The directory exists but has no ``metadata.json`` (transcript cached but
+      the AI step failed on a previous run — recovery path).
+
+    A video with any ``metadata.json`` (regardless of ``processed_focuses``) is
+    considered done and will not be reprocessed.  New focus strings only apply
+    to newly discovered videos going forward.
+    """
+    return not any(
+        d.name.endswith(video_id)
+        for d in feed_dir.iterdir()
+        if d.is_dir() and (d / "metadata.json").exists()
+    )
+
+
+def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
+    """Return the ordered list of unique focus strings to use when processing *channel_id*.
+
+    Starts with *feed_focus* from ``TubeNews.json`` (if non-empty), then appends
+    each unique focus found in any subscriber's ``user.json`` for this channel.
+    Duplicates are silently dropped; if the total exceeds
+    :data:`MAX_FOCUSES_PER_CHANNEL` the list is truncated with a warning.
+
+    Returns at least ``[""]`` so the caller always has at least one focus to
+    iterate (an empty string means "no focus filter" — same behaviour as today).
+    """
+    focuses: list[str] = []
+    if feed_focus and feed_focus.strip():
+        focuses.append(feed_focus.strip())
+
+    users_dir = STORAGE_ROOT / "users"
+    if users_dir.is_dir():
+        for uid_dir in sorted(users_dir.iterdir()):
+            if not uid_dir.is_dir():
+                continue
+            user_json = uid_dir / "user.json"
+            if not user_json.exists():
+                continue
+            try:
+                data = json.loads(user_json.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if channel_id not in data.get("channel_ids", []):
+                continue
+            raw = data.get("channel_focus", {}).get(channel_id, [])
+            if isinstance(raw, str):
+                raw = [raw] if raw.strip() else []
+            for f in raw:
+                f = f.strip()
+                if f and f not in focuses:
+                    focuses.append(f)
+
+    if len(focuses) > MAX_FOCUSES_PER_CHANNEL:
+        logger.warning(
+            f"Channel {channel_id}: {len(focuses)} focuses exceed cap "
+            f"({MAX_FOCUSES_PER_CHANNEL}); truncating"
+        )
+        focuses = focuses[:MAX_FOCUSES_PER_CHANNEL]
+
+    return focuses or [""]
+
+
 def process_video(
     video_id: str,
     video_title: str,
@@ -963,6 +1053,7 @@ def process_video(
     ai_disabled: bool,
     video_num: int = 0,
     total_videos: int = 0,
+    focuses: list[str] | None = None,
 ) -> str:
     """Fetch, analyse, and archive one video.
 
@@ -970,10 +1061,16 @@ def process_video(
     completed the fetch but failed during AI analysis) before hitting the
     Supadata API again.
 
+    *focuses* is the list of focus strings to use when calling Gemini (one
+    API call per focus).  If omitted, falls back to ``feed["focus"]``.  When
+    a video has already been processed for some focuses (recorded in
+    ``metadata.json`` as ``processed_focuses``), only the new focuses are
+    passed to Gemini; their stories are appended to the existing story files.
+
     Returns a ``(status, n_stories)`` tuple where *status* is one of:
 
         ``"content_written"``  – stories were generated and written to disk;
-                                 *n_stories* is the count written.
+                                 *n_stories* is the count of new stories added.
         ``"ai_rate_limited"``  – Gemini returned 429; caller should set
                                  ``ai_disabled = True`` for the session;
                                  *n_stories* is 0.
@@ -984,6 +1081,9 @@ def process_video(
                                  is written so the video is not resubmitted to
                                  the AI on future runs.
     """
+    if focuses is None:
+        focuses = [feed.get("focus", "")]
+
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
         (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(video_id)),
@@ -1021,38 +1121,48 @@ def process_video(
     if ai_disabled:
         return "skipped", 0
 
-    logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories")
-    stories = call_gemini_api(
-        transcript_text=transcript_text,
-        focus=feed["focus"],
-        video_title=video_title,
-        video_date=video_date,
-        gemini_api_key=config["gemini_api_key"],
-        model_name=config["gemini_model"],
-        feed_name=channel_name,
-    )
+    # Call Gemini once per focus, deduplicating stories by title across passes.
+    seen_titles: set[str] = set()
+    all_stories: list = []
+    for focus in focuses:
+        label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
+        logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
+        result = call_gemini_api(
+            transcript_text=transcript_text,
+            focus=focus,
+            video_title=video_title,
+            video_date=video_date,
+            gemini_api_key=config["gemini_api_key"],
+            model_name=config["gemini_model"],
+            feed_name=channel_name,
+        )
+        if result is False:
+            return "ai_rate_limited", 0
+        for story in (result or []):
+            title = story.get("title", "")
+            if title not in seen_titles:
+                seen_titles.add(title)
+                all_stories.append(story)
 
-    if stories is False:
-        return "ai_rate_limited", 0
-
-    if stories:
-        write_story_files(stories, meeting_dir, video_id)
+    if all_stories:
+        write_story_files(all_stories, meeting_dir, video_id)
         metadata = {
             "video_id": video_id,
             "video_title": video_title,
             "status": "processed",
             "processed_at": time.time(),
+            "processed_focuses": sorted(focuses),
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-        return "content_written", len(stories)
+        return "content_written", len(all_stories)
 
-    # Gemini returned an empty story list — write metadata so this video is
-    # not re-submitted to the AI on future runs.
+    # Gemini returned no stories for any focus.
     metadata = {
         "video_id": video_id,
         "video_title": video_title,
         "status": "no_stories",
         "processed_at": time.time(),
+        "processed_focuses": sorted(focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
     return "skipped", 0
@@ -1094,6 +1204,10 @@ def process_feed(
 
     feed_dir.mkdir(parents=True, exist_ok=True)
 
+    # Collect the union of all focus strings for this channel (feed config +
+    # all subscriber preferences), capped at MAX_FOCUSES_PER_CHANNEL.
+    focuses = _collect_channel_focuses(feed["channel_id"], feed.get("focus", ""))
+
     all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
     if not all_videos:
         return content_changed, ai_rate_limited, stories_written
@@ -1101,15 +1215,8 @@ def process_feed(
     all_ids = [v["id"] for v in all_videos]
     video_meta = {v["id"]: v for v in all_videos}
 
-    # Videos whose archive folder doesn't exist yet.
-    unprocessed = [
-        v for v in all_videos
-        if not any(
-            d.name.endswith(v["id"])
-            for d in feed_dir.iterdir()
-            if d.is_dir() and (d / "metadata.json").exists()
-        )
-    ]
+    # Videos without metadata.json — new or in recovery (transcript cached, AI failed).
+    unprocessed = [v for v in all_videos if _needs_processing(v["id"], feed_dir)]
 
     if unprocessed:
         logger.info(f"{channel_name}: TubeNews: Found {len(unprocessed)} new video(s)")
@@ -1174,6 +1281,7 @@ def process_feed(
             ai_disabled=ai_disabled,
             video_num=video_num,
             total_videos=total,
+            focuses=focuses,
         )
 
         if result == "content_written":
