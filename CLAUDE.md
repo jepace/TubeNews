@@ -278,17 +278,13 @@ Story body text in AP inverted pyramid style...
 pytest tests/ -v
 ```
 
-Test files and what they cover:
-
 | File | Covers |
 |---|---|
 | `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`), `_story_matches_focus`, `write_story_files`, the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_meta_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
 | `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger |
 
-All tests use `tmp_path` fixtures — no network calls and no real archive needed.
-
-To add a test for a new function, follow the patterns in `tests/test_tubenews.py`. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch` to avoid live API calls.
+All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
 
 ---
 
@@ -462,22 +458,24 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 **Writing tests is an ongoing responsibility, not a one-time task.**
 
-Every time you add or change a function in `TubeNews.py` or `web/app.py`, ask yourself:
-- Does this change have a regression risk?
-- Is there existing test coverage for this behaviour?
-- If not, write tests **in the same commit** as the code change.
+- **Tests ship with the code change.** Any new or modified function must have corresponding tests in the same commit. Do not defer tests to a follow-up.
+- **Run the full suite before every commit.** `pytest tests/ -v` must pass before pushing. A commit that breaks existing tests must not be pushed.
+- **Bug fixes require a regression test.** Add a test that would have caught the original bug before closing the fix. If the same class of bug appears twice, the suite was insufficient — expand it.
 
-Test files:
-- `tests/test_tubenews.py` — covers `TubeNews.py` functions
-- `tests/test_web.py` — covers `web/app.py` helpers (URL generation, prefs, etc.)
+---
 
-When a bug is fixed, a regression test for that exact bug must be added before closing the fix. If you find yourself writing the same class of fix twice (e.g., URL generation producing absolute instead of relative links), that is a sign the test suite was insufficient — expand it.
+## Documentation Policy
 
-Run the full suite before every commit:
+**Documentation must be kept in sync with the code. Outdated docs are worse than no docs.**
 
-```bash
-pytest tests/ -v
-```
+- **Update docs in the same commit as the code change.** Adding a function means adding it to the Function Reference. Changing a file format means updating the schema example. Changing behaviour means updating the description.
+- **Files to maintain:**
+  - `CLAUDE.md` — developer reference (function signatures, data formats, design decisions, policies)
+  - `SERVING.md` — operator/deployment guide (URLs, config, infrastructure)
+  - `TODO.md` — known issues, deferred work, and completed items
+  - `README.md` — user-facing overview and quick-start
+- **Completed work belongs in `TODO.md`.** When a deferred item is implemented, move it to a Completed section rather than deleting it — this preserves the design rationale.
+- **Do not document hypothetical features.** Only document what actually exists in the codebase.
 
 ---
 
