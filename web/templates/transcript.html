@@ -5,18 +5,25 @@
 <style>
   .transcript-banner {
     position: sticky;
-    top: 0;
+    top: 52px; /* sits flush below the sticky site header */
     z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 16px;
+    padding: 6px 16px;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     font-size: 0.85rem;
   }
+  .tb-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .tb-row + .tb-row { margin-top: 3px; }
   .transcript-banner .tb-brand { font-weight: 600; color: var(--fg); }
-  .transcript-banner .tb-label { color: var(--muted); margin-left: 0.6em; }
+  .transcript-banner .tb-label { color: var(--muted); margin-left: 0.5em; }
+  .transcript-banner .tb-title { font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .transcript-banner .tb-yt { color: var(--danger, #c0392b); text-decoration: none; white-space: nowrap; }
+  .transcript-banner .tb-yt:hover { text-decoration: underline; }
   .transcript-banner .tb-close {
     padding: 4px 14px;
     border: 1px solid var(--border);
@@ -47,11 +54,16 @@
 </style>
 
 <div class="transcript-banner">
-  <span>
-    <span class="tb-brand">TubeNews</span>
-    <span class="tb-label">— {{ channel_name }}</span>
-  </span>
-  <button class="tb-close" onclick="window.close()">Close transcript ✕</button>
+  <div class="tb-row">
+    <span><span class="tb-brand">TubeNews</span><span class="tb-label">— {{ channel_name }}</span></span>
+    <button class="tb-close" onclick="window.close()">Close transcript ✕</button>
+  </div>
+  <div class="tb-row">
+    <span class="tb-title">{{ video_title }}</span>
+    {% if video_id %}
+    <a class="tb-yt" href="https://youtu.be/{{ video_id }}" target="_blank" rel="noopener">&#9654; Watch on YouTube</a>
+    {% endif %}
+  </div>
 </div>
 
 <div class="transcript-page">
