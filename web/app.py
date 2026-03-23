@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
+from typing import TypedDict
 
 from flask import (
     Flask,
@@ -54,7 +55,17 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus, rebuild_feed, rebuild_aggregate_feed  # noqa: E402
+from TubeNews import (  # noqa: E402
+    STORAGE_ROOT,
+    FeedConfig,
+    ParsedStory,
+    parse_story_file,
+    build_user_feed_xml,
+    slugify,
+    _story_matches_focus,
+    rebuild_feed,
+    rebuild_aggregate_feed,
+)
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -154,6 +165,48 @@ class User(UserMixin):
         (self._dir / "user.json").write_text(json.dumps(self._data, indent=2))
 
 
+# ---------------------------------------------------------------------------
+# Data contracts (TypedDicts)
+# ---------------------------------------------------------------------------
+
+
+class ChannelInfo(TypedDict):
+    """Minimal channel descriptor returned by :func:`_channel_info_for_dir`."""
+    channel_id: str
+    channel_name: str
+
+
+class ChannelStat(TypedDict):
+    """Per-channel archive statistics returned by :func:`_archive_channel_stats`."""
+    channel_id: str
+    channel_name: str
+    processed: int
+    ignored: int
+    no_stories: int
+    story_count: int
+    last_processed: float
+
+
+class StoryDict(TypedDict):
+    """Fully-resolved story dict served to Flask templates and the blog/feed builders."""
+    title: str
+    dateline: str
+    body_html: str
+    start_seconds: int
+    video_id: str
+    video_title: str
+    channel_name: str
+    channel_slug: str
+    meeting_id: str
+    story_filename: str
+    processed_at: float
+
+
+# ---------------------------------------------------------------------------
+# User lookup helpers
+# ---------------------------------------------------------------------------
+
+
 def _find_user_by_email(email: str) -> User | None:
     if not USERS_ROOT.is_dir():
         return None
@@ -244,13 +297,13 @@ def _load_config() -> dict:
         return {}
 
 
-def _save_feeds(feeds: list[dict]) -> None:
+def _save_feeds(feeds: list[FeedConfig]) -> None:
     cfg = _load_config()
     cfg["feeds"] = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
 
-def _load_channels() -> list[dict]:
+def _load_channels() -> list[FeedConfig]:
     try:
         return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
     except Exception:
@@ -353,7 +406,7 @@ def _safe_next(url: str | None) -> str:
     return url_for("serve_blog")
 
 
-def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[dict]) -> dict | None:
+def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[FeedConfig]) -> ChannelInfo | None:
     """Return ``{channel_id, channel_name}`` for *channel_dir*.
 
     Reads ``channel.json`` when present; falls back to matching the directory
@@ -390,7 +443,7 @@ def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
     return None
 
 
-def _archive_channel_stats() -> list[dict]:
+def _archive_channel_stats() -> list[ChannelStat]:
     """Scan archive dirs and return per-channel processing stats."""
     stats = []
     if not STORAGE_ROOT.is_dir():
@@ -431,7 +484,7 @@ def _archive_channel_stats() -> list[dict]:
     return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
-def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
+def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
     All processed stories are returned with no time cutoff — this is a full
@@ -490,7 +543,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
     return None, []
 
 
-def _get_user_stories(user_data: dict) -> list[dict]:
+def _get_user_stories(user_data: dict) -> list[StoryDict]:
     """Return parsed stories for a user's subscribed channels, newest-first.
 
     Stories are filtered by the user's per-channel focus (``channel_focus`` in

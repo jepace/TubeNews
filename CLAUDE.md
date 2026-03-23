@@ -86,6 +86,29 @@ YouTube Channel Pages (HTML scrape)
 
 ---
 
+## Data Contracts (TypedDicts)
+
+Defined at the top of `TubeNews.py` (and importable into `web/app.py`):
+
+| TypedDict | Fields | Used by |
+|---|---|---|
+| `VideoInfo` | `id`, `title`, `date`, `is_live` (all `str`/`bool`) | `discover_videos()` return type |
+| `FeedConfig` | `channel_id`, `channel_name`, `focus` (all `str`) | Config array entries; `rebuild_feed`, `process_feed`, `process_video` parameters |
+| `GeminiStory` | `title`, `dateline`, `content` (`str`), `start_time_seconds` (`int`), `topics` (`list[str]`) | `call_gemini_api()` return type; `write_story_files()` input |
+| `ParsedStory` | `title`, `dateline`, `body_html` (`str`), `start_seconds` (`int`), `topics` (`list[str]`), `content_hash` (`str`) | `parse_story_file()` return type; imported by `web/app.py` |
+| `MetadataDict` | `video_id`, `video_title`, `status`, `processed_at`, `processed_focuses` (`total=False`) | Internal; represents `metadata.json` content |
+| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter |
+
+Defined in `web/app.py`:
+
+| TypedDict | Fields | Used by |
+|---|---|---|
+| `ChannelInfo` | `channel_id`, `channel_name` (both `str`) | `_channel_info_for_dir()` return type |
+| `ChannelStat` | `channel_id`, `channel_name`, `processed`, `ignored`, `no_stories`, `story_count` (`int`), `last_processed` (`float`) | `_archive_channel_stats()` return type |
+| `StoryDict` | `title`, `dateline`, `body_html`, `video_id`, `video_title`, `channel_name`, `channel_slug`, `meeting_id`, `story_filename` (`str`), `start_seconds` (`int`), `processed_at` (`float`) | `_get_user_stories()` and `_get_channel_stories()` return type; passed to Flask templates |
+
+---
+
 ## Function Reference
 
 ### Utility
@@ -93,7 +116,7 @@ YouTube Channel Pages (HTML scrape)
 | Function | Description |
 |---|---|
 | `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore) |
-| `parse_story_file(story_path)` | Reads a `.md` story file; returns `{title, dateline, body_html, start_seconds, topics, content_hash}` |
+| `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory` |
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* may be a single string (legacy) or a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty (graceful degradation for old stories). |
 | `_needs_processing(video_id, feed_dir, focuses)` | Returns `True` if a video needs (re)processing: no archive dir, no `metadata.json`, or `metadata.json` is missing one or more of *focuses* in its `processed_focuses` list. Old metadata without `processed_focuses` is treated as fully done. |
 | `_collect_channel_focuses(channel_id, feed_focus)` | Reads `archive/users/*/user.json` and collects the union of all focus strings set by subscribers for *channel_id*, prepended by the feed-level *feed_focus*. Deduplicates and caps at `MAX_FOCUSES_PER_CHANNEL` (10). Returns `[""]` if nothing is configured (single no-filter call). |
@@ -104,15 +127,15 @@ YouTube Channel Pages (HTML scrape)
 |---|---|
 | `_relative_date_to_iso(text)` | Converts a YouTube relative-date string (e.g. `"11 days ago"`) to `YYYY-MM-DD`; parses exact dates from completed-stream text |
 | `_parse_channel_page_metadata(html)` | Extracts `{videoId → {title, date, is_live}}` from the `ytInitialData` JSON blob embedded in a channel listing page |
-| `discover_videos(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns `list[{id, title, date, is_live}]` |
+| `discover_videos(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns `list[VideoInfo]` |
 | `fetch_transcript(video_id, supadata_client)` | Fetches timed transcript segments from Supadata; returns formatted string or None |
 
 ### AI story generation
 
 | Function | Description |
 |---|---|
-| `call_gemini_api(...)` | Posts to Gemini REST API; returns list of story dicts (each with `title`, `dateline`, `content`, `start_time_seconds`, `topics`), `False` on rate-limit, `None` on failure |
-| `write_story_files(stories, meeting_dir, video_id="", *, clear_existing=True, start_index=1)` | Writes each story dict as a numbered `.md` file; includes `**Topics:**` line when topics are present. Use `clear_existing=False, start_index=N` to append new stories from additional focus passes without removing existing files. |
+| `call_gemini_api(...)` | Posts to Gemini REST API; returns `list[GeminiStory]`, `False` on rate-limit, `None` on failure |
+| `write_story_files(stories, meeting_dir, video_id="", *, clear_existing=True, start_index=1)` | Writes each `GeminiStory` as a numbered `.md` file; includes `**Topics:**` line when topics are present. Use `clear_existing=False, start_index=N` to append new stories from additional focus passes without removing existing files. |
 
 ### RSS feed builders
 

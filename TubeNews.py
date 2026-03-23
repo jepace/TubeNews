@@ -31,6 +31,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import TypedDict
 
 # ---------------------------------------------------------------------------
 # Third-party imports
@@ -127,6 +128,65 @@ def setup_logging(debug_mode: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Data contracts (TypedDicts)
+# ---------------------------------------------------------------------------
+
+
+class VideoInfo(TypedDict):
+    """One discovered video entry from :func:`discover_videos`."""
+    id: str
+    title: str
+    date: str
+    is_live: bool
+
+
+class FeedConfig(TypedDict):
+    """Per-channel configuration block from ``TubeNews.json``."""
+    channel_id: str
+    channel_name: str
+    focus: str
+
+
+class GeminiStory(TypedDict):
+    """One story dict as returned by :func:`call_gemini_api`."""
+    title: str
+    dateline: str
+    content: str
+    start_time_seconds: int
+    topics: list[str]
+
+
+class ParsedStory(TypedDict):
+    """Structured fields extracted from a ``.md`` story file by :func:`parse_story_file`."""
+    title: str
+    dateline: str
+    body_html: str
+    start_seconds: int
+    topics: list[str]
+    content_hash: str
+
+
+class MetadataDict(TypedDict, total=False):
+    """Contents of a ``metadata.json`` archive file.
+
+    All fields are optional (``total=False``) because metadata files may be
+    written incrementally and old files pre-date several keys.
+    """
+    video_id: str
+    video_title: str
+    status: str
+    processed_at: float
+    processed_focuses: list[str]
+
+
+class FeedResult(TypedDict):
+    """Per-channel result dict collected by ``_main_body``."""
+    channel_id: str
+    channel_name: str
+    stories_written: int
+
+
+# ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
 
@@ -146,7 +206,7 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "_", text).strip("_")
 
 
-def parse_story_file(story_path: Path) -> dict:
+def parse_story_file(story_path: Path) -> ParsedStory:
     """Read a story Markdown file and return its structured fields.
 
     Story files are written by :func:`write_story_files` in a fixed format::
@@ -197,7 +257,7 @@ def parse_story_file(story_path: Path) -> dict:
     }
 
 
-def _story_matches_focus(story_topics: list, focuses) -> bool:
+def _story_matches_focus(story_topics: list[str], focuses: str | list[str]) -> bool:
     """Return True if a story should be shown for the given focus configuration.
 
     *focuses* may be a single comma-separated string (legacy) or a list of
@@ -334,7 +394,7 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
     return result
 
 
-def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
+def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
     """Scrape a channel's *videos* and *streams* tabs; return video metadata.
 
     Both tabs are fetched concurrently.  Results are merged in a fixed order
@@ -450,7 +510,7 @@ def call_gemini_api(
     gemini_api_key: str,
     model_name: str,
     feed_name: str = "",
-) -> list | bool | None:
+) -> list[GeminiStory] | bool | None:
     """Send a transcript to Google Gemini and parse the returned news stories.
 
     The prompt instructs Gemini to act as an investigative reporter and return
@@ -515,7 +575,7 @@ def call_gemini_api(
 
 
 def write_story_files(
-    stories: list,
+    stories: list[GeminiStory],
     meeting_dir: Path,
     video_id: str = "",
     *,
@@ -568,7 +628,7 @@ def write_story_files(
 # ---------------------------------------------------------------------------
 
 
-def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
+def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
     """Regenerate ``<feed_dir>/rss.xml`` from all processed meetings.
 
     Includes all stories, sorted newest-meeting first.
@@ -706,7 +766,7 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict | None = None) -> bytes:
+def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict[str, str | list[str]] | None = None) -> bytes:
     """Build and return RSS feed XML bytes for a user's subscribed channels.
 
     Contains all the feed-building logic.  Does *not* write anything to disk —
@@ -800,7 +860,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
     return feed.rss_str(pretty=True)
 
 
-def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
+def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
     """Write ``archive/users/<id>/rss.xml`` for a user's subscribed channels.
 
     Thin wrapper around :func:`build_user_feed_xml` that writes the result to
@@ -820,7 +880,7 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
     (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
-def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None:
+def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
     """Generate ``archive/users/<id>/index.html`` — a static blog page for a user.
 
     Pulls stories from the user's subscribed channels (same logic as
@@ -1056,7 +1116,7 @@ def process_video(
     video_title: str,
     video_date: str,
     is_live: bool,
-    feed: dict,
+    feed: FeedConfig,
     feed_dir: Path,
     supadata_client: Supadata,
     config: dict,
@@ -1179,7 +1239,7 @@ def process_video(
 
 
 def process_feed(
-    feed: dict,
+    feed: FeedConfig,
     supadata_client: Supadata,
     config: dict,
     ai_rate_limit_event: threading.Event | None = None,
@@ -1310,7 +1370,7 @@ def process_feed(
 # ---------------------------------------------------------------------------
 
 
-def _send_ntfy(topic: str, total_stories: int, feed_results: list[dict], started_at: float) -> None:
+def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], started_at: float) -> None:
     """POST a run-summary notification to ntfy.sh/<topic>."""
     import urllib.request as _urllib_request
 
@@ -1397,7 +1457,7 @@ def _main_body(args) -> None:
     ai_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()
 
-    def _run_feed(feed: dict) -> dict:
+    def _run_feed(feed: FeedConfig) -> FeedResult:
         try:
             content_changed, _, stories_written = process_feed(
                 feed, supadata_client, config, ai_rate_limit_event

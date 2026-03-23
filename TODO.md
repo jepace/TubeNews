@@ -127,22 +127,22 @@ run-log load) use `logger.warning(...)` instead.  Intentionally silent fallbacks
 (graceful degradation on missing config keys, ntfy notification failures) were
 left unchanged.
 
+### TypedDict data contracts introduced (March 2026)
+
+All bare `dict` and `list[dict]` type annotations on public function signatures
+have been replaced with named `TypedDict` classes.  Defined in `TubeNews.py`:
+`VideoInfo`, `FeedConfig`, `GeminiStory`, `ParsedStory`, `MetadataDict`,
+`FeedResult`.  Defined in `web/app.py`: `ChannelInfo`, `ChannelStat`,
+`StoryDict`.  `FeedConfig` and `ParsedStory` are imported into `web/app.py`
+from `TubeNews`.  See the "Data Contracts" section in `CLAUDE.md` for the full
+field listing.
+
 ---
 
 ## Known Issues / Future Hardening
 
 The following issues were identified in a QA sweep and deferred because they
 are low-risk in current usage or require larger refactoring to address cleanly.
-
-### Type hints use generic `dict` throughout
-
-Functions like `discover_videos()` return `list[dict]` but the actual structure
-is `list[{id, title, date, is_live}]`.  Similarly, `process_feed()`,
-`process_video()`, and the feed-config dicts are all typed as bare `dict`.
-
-**Future fix:** Define `TypedDict` classes (`VideoInfo`, `FeedConfig`,
-`StoryDict`, etc.) and use them in all annotations.  This makes the data
-contracts explicit and enables static type checking with mypy/pyright.
 
 ### `helpers/catchup.py` duplicates `slugify()`
 
