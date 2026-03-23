@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}{{ blog_name }}{% endblock %}
 
+{% block header_sub %}
+<div class="header-sub">
+  <span>{{ blog_name }}</span>
+  {% if channel_id %}
+  <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube channel</a>
+  {% endif %}
+</div>
+{% endblock %}
 
 {% block content %}
 <div class="blog-page">
