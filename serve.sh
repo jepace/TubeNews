@@ -18,4 +18,4 @@ except Exception:
     print(8000)
 " 2>/dev/null)
 
-exec gunicorn -w 2 -b "0.0.0.0:${PORT}" 'web.app:app'
+exec gunicorn -w 4 --timeout 30 -b "0.0.0.0:${PORT}" 'web.app:app'

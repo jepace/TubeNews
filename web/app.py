@@ -1075,9 +1075,6 @@ def admin_run_now():
     return redirect(url_for("admin_runs") + "?starting=1")
 
 
-@app.route("/admin/feeds")
-@login_required
-@admin_required
 def _get_supadata_balance() -> dict | None:
     """Fetch credit usage from the Supadata /v1/me endpoint.
 
