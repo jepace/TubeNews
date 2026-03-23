@@ -59,10 +59,10 @@
               </label>
             </div>
             <div class="channel-focus-row" {% if ch.channel_id not in subscribed %}style="display:none"{% endif %}>
-              <input type="text" name="focus_{{ ch.channel_id }}"
-                     value="{{ channel_focus.get(ch.channel_id, '') }}"
-                     placeholder="User's focus (optional — e.g. housing, zoning)"
-                     class="focus-input" autocomplete="off">
+              <textarea name="focus_{{ ch.channel_id }}" rows="3"
+                        class="focus-input" autocomplete="off"
+                        placeholder="One focus per line (max 3)&#10;e.g. housing, zoning"
+              >{{ channel_focus.get(ch.channel_id) | focuses_text }}</textarea>
             </div>
           </div>
         {% endfor %}

@@ -609,3 +609,57 @@ def test_feed_rename_blocked_when_target_dir_exists(admin_client, archive):
     assert (archive / new_slug).is_dir()
 
 
+
+
+# ---------------------------------------------------------------------------
+# Dashboard subscription save — focuses stored as list, capped at 3
+# ---------------------------------------------------------------------------
+
+def test_dashboard_saves_focuses_as_list(logged_in_client, archive):
+    """Focuses entered as newline-separated lines are saved as a list."""
+    import json as _json
+    import web.app as webapp
+
+    r = logged_in_client.post("/dashboard", data={
+        "channel_ids": ["UC_ALPHA_ID"],
+        "focus_UC_ALPHA_ID": "housing, zoning\ntransportation, roads",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    # Find the user in archive/users and check channel_focus
+    users_dir = webapp.STORAGE_ROOT / "users"
+    user_data = None
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = _json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                user_data = d
+                break
+    assert user_data is not None
+    focus_val = user_data["channel_focus"]["UC_ALPHA_ID"]
+    assert isinstance(focus_val, list)
+    assert "housing, zoning" in focus_val
+    assert "transportation, roads" in focus_val
+
+
+def test_dashboard_caps_focuses_at_three(logged_in_client, archive):
+    """A fourth focus line is silently dropped."""
+    import json as _json
+    import web.app as webapp
+
+    r = logged_in_client.post("/dashboard", data={
+        "channel_ids": ["UC_ALPHA_ID"],
+        "focus_UC_ALPHA_ID": "focus one\nfocus two\nfocus three\nfocus four",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    users_dir = webapp.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = _json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert len(d["channel_focus"]["UC_ALPHA_ID"]) == 3
+                return
+    pytest.fail("User not found")

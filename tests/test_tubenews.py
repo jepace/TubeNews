@@ -1138,3 +1138,201 @@ def test_write_story_files_empty_topics_no_line(tmp_path):
     written = list(tmp_path.glob("[0-9]*.md"))
     text = written[0].read_text(encoding="utf-8")
     assert "**Topics:**" not in text
+
+
+# ---------------------------------------------------------------------------
+# _story_matches_focus — list input (multiple focuses)
+# ---------------------------------------------------------------------------
+
+def test_focus_list_empty_list_always_matches():
+    """An empty focuses list means no filter — all stories pass."""
+    assert _story_matches_focus(["housing"], []) is True
+
+def test_focus_list_with_one_empty_string_always_matches():
+    assert _story_matches_focus(["housing"], [""]) is True
+
+def test_focus_list_matches_any_focus():
+    """Story passes if it matches ANY element of the focuses list."""
+    assert _story_matches_focus(["roads"], ["housing, zoning", "transportation, roads"]) is True
+
+def test_focus_list_no_match_in_any_focus():
+    assert _story_matches_focus(["contracts"], ["housing, zoning", "transportation"]) is False
+
+def test_focus_list_empty_topics_always_matches():
+    """Old stories with no topics pass through even with a multi-focus list."""
+    assert _story_matches_focus([], ["housing", "transportation"]) is True
+
+def test_focus_list_legacy_string_still_works():
+    """Existing callers that pass a plain string must still work."""
+    assert _story_matches_focus(["housing"], "housing, permits") is True
+
+
+# ---------------------------------------------------------------------------
+# write_story_files — append mode (clear_existing=False, start_index)
+# ---------------------------------------------------------------------------
+
+def test_write_story_files_append_does_not_clear_existing(tmp_path):
+    """clear_existing=False must leave pre-existing story files intact."""
+    # Write an existing story directly
+    (tmp_path / "01_Old_Story.md").write_text("# Old Story\n*Dateline*\n\nBody.\n")
+
+    new_stories = [{"title": "New Story", "dateline": "CITY — 2026", "content": "New.", "start_time_seconds": 0}]
+    write_story_files(new_stories, tmp_path, clear_existing=False, start_index=2)
+
+    assert (tmp_path / "01_Old_Story.md").exists(), "existing file must survive"
+    new_files = [f for f in tmp_path.glob("[0-9]*.md") if f.name != "01_Old_Story.md"]
+    assert len(new_files) == 1
+    assert new_files[0].name.startswith("02_")
+
+def test_write_story_files_clear_existing_removes_old(tmp_path):
+    """clear_existing=True (default) must delete stale story files."""
+    (tmp_path / "01_Stale.md").write_text("# Stale\n*Dateline*\n\nBody.\n")
+
+    new_stories = [{"title": "Fresh Story", "dateline": "CITY — 2026", "content": "Fresh.", "start_time_seconds": 0}]
+    write_story_files(new_stories, tmp_path)  # clear_existing=True by default
+
+    assert not (tmp_path / "01_Stale.md").exists()
+    assert len(list(tmp_path.glob("[0-9]*.md"))) == 1
+
+def test_write_story_files_start_index(tmp_path):
+    """start_index controls the numbering prefix of new files."""
+    stories = [{"title": "Story", "dateline": "CITY — 2026", "content": "Body.", "start_time_seconds": 0}]
+    write_story_files(stories, tmp_path, clear_existing=False, start_index=5)
+    files = list(tmp_path.glob("[0-9]*.md"))
+    assert len(files) == 1
+    assert files[0].name.startswith("05_")
+
+
+# ---------------------------------------------------------------------------
+# _needs_processing
+# ---------------------------------------------------------------------------
+
+from TubeNews import _needs_processing, STORAGE_ROOT
+
+
+def test_needs_processing_no_dir(tmp_path):
+    """No archive directory → needs processing."""
+    assert _needs_processing("VID123", tmp_path, ["housing"]) is True
+
+def test_needs_processing_no_metadata(tmp_path):
+    """Dir exists with transcript but no metadata → recovery path."""
+    d = tmp_path / "2026-01-01_VID123"
+    d.mkdir()
+    (d / "transcript.txt").write_text("transcript")
+    assert _needs_processing("VID123", tmp_path, ["housing"]) is True
+
+def test_needs_processing_ignored_too_old(tmp_path):
+    """ignored_too_old status → never reprocess."""
+    d = tmp_path / "2000-01-01_VID123"
+    d.mkdir()
+    (d / "metadata.json").write_text(json.dumps({"status": "ignored_too_old"}))
+    assert _needs_processing("VID123", tmp_path, ["housing"]) is False
+
+def test_needs_processing_old_metadata_no_processed_focuses(tmp_path):
+    """Old metadata without processed_focuses → treat as done (no reprocess)."""
+    d = tmp_path / "2026-01-01_VID123"
+    d.mkdir()
+    (d / "metadata.json").write_text(json.dumps({"status": "processed", "video_id": "VID123"}))
+    assert _needs_processing("VID123", tmp_path, ["housing"]) is False
+
+def test_needs_processing_all_focuses_done(tmp_path):
+    """All current focuses already in processed_focuses → skip."""
+    d = tmp_path / "2026-01-01_VID123"
+    d.mkdir()
+    (d / "metadata.json").write_text(json.dumps({
+        "status": "processed",
+        "processed_focuses": ["housing", "transit"],
+    }))
+    assert _needs_processing("VID123", tmp_path, ["housing", "transit"]) is False
+
+def test_needs_processing_new_focus_added(tmp_path):
+    """A new focus not in processed_focuses → needs processing."""
+    d = tmp_path / "2026-01-01_VID123"
+    d.mkdir()
+    (d / "metadata.json").write_text(json.dumps({
+        "status": "processed",
+        "processed_focuses": ["housing"],
+    }))
+    assert _needs_processing("VID123", tmp_path, ["housing", "transit"]) is True
+
+
+# ---------------------------------------------------------------------------
+# _collect_channel_focuses
+# ---------------------------------------------------------------------------
+
+from TubeNews import _collect_channel_focuses, MAX_FOCUSES_PER_CHANNEL
+import TubeNews as _tn
+
+
+def _make_user_dir(users_dir, channel_id, focuses, channel_ids=None):
+    import uuid as _uuid
+    uid = str(_uuid.uuid4())
+    d = users_dir / uid
+    d.mkdir(parents=True)
+    (d / "user.json").write_text(json.dumps({
+        "name": "Test",
+        "email": f"{uid[:8]}@example.com",
+        "channel_ids": channel_ids if channel_ids is not None else [channel_id],
+        "channel_focus": {channel_id: focuses},
+    }))
+    return d
+
+
+def test_collect_channel_focuses_feed_only(tmp_path, monkeypatch):
+    """Only feed_focus, no subscribers → returns [feed_focus]."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    result = _collect_channel_focuses("UCxxx", "housing, zoning")
+    assert result == ["housing, zoning"]
+
+def test_collect_channel_focuses_user_focus_added(tmp_path, monkeypatch):
+    """User focus for the channel is appended after feed_focus."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    _make_user_dir(users, "UCxxx", ["transit, roads"])
+    result = _collect_channel_focuses("UCxxx", "housing, zoning")
+    assert result == ["housing, zoning", "transit, roads"]
+
+def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypatch):
+    """A user not subscribed to the channel must not contribute focuses."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    _make_user_dir(users, "UCxxx", ["transit"], channel_ids=["UCother"])
+    result = _collect_channel_focuses("UCxxx", "housing")
+    assert result == ["housing"]
+
+def test_collect_channel_focuses_deduplication(tmp_path, monkeypatch):
+    """Duplicate focuses across users are dropped."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    _make_user_dir(users, "UCxxx", ["housing, zoning"])
+    _make_user_dir(users, "UCxxx", ["housing, zoning"])  # same focus, second user
+    result = _collect_channel_focuses("UCxxx", "housing, zoning")
+    assert result.count("housing, zoning") == 1
+
+def test_collect_channel_focuses_cap(tmp_path, monkeypatch):
+    """Total focuses are capped at MAX_FOCUSES_PER_CHANNEL."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    for i in range(MAX_FOCUSES_PER_CHANNEL + 3):
+        _make_user_dir(users, "UCxxx", [f"focus_{i}"])
+    result = _collect_channel_focuses("UCxxx", "")
+    assert len(result) <= MAX_FOCUSES_PER_CHANNEL
+
+def test_collect_channel_focuses_fallback_empty(tmp_path, monkeypatch):
+    """No config and no subscribers → [\"\""]."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    result = _collect_channel_focuses("UCxxx", "")
+    assert result == [""]
+
+def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
+    """Old user.json with string channel_focus is handled gracefully."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    _make_user_dir(users, "UCxxx", "housing, zoning")  # string, not list
+    result = _collect_channel_focuses("UCxxx", "")
+    assert "housing, zoning" in result

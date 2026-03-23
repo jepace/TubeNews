@@ -285,6 +285,16 @@ def format_datetime(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+@app.template_filter("focuses_text")
+def focuses_text(val) -> str:
+    """Render a channel_focus value (str or list[str]) as newline-separated text."""
+    if not val:
+        return ""
+    if isinstance(val, list):
+        return "\n".join(val)
+    return str(val)
+
+
 def admin_required(f):
     """Decorator: 403 unless the logged-in user is an admin."""
     @wraps(f)
@@ -652,9 +662,10 @@ def dashboard():
         current_user._data["blog_name"] = blog_name
         channel_focus = {}
         for ch_id in new_ids:
-            val = request.form.get(f"focus_{ch_id}", "").strip()
-            if val:
-                channel_focus[ch_id] = val
+            raw = request.form.get(f"focus_{ch_id}", "")
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+            if lines:
+                channel_focus[ch_id] = lines
         current_user._data["channel_focus"] = channel_focus
         current_user._save()
         flash("Subscriptions updated.", "success")
@@ -819,9 +830,10 @@ def admin_user_subscriptions(uid: str):
     user.set_channel_ids(new_ids)
     channel_focus = {}
     for ch_id in new_ids:
-        val = request.form.get(f"focus_{ch_id}", "").strip()
-        if val:
-            channel_focus[ch_id] = val
+        raw = request.form.get(f"focus_{ch_id}", "")
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+        if lines:
+            channel_focus[ch_id] = lines
     user._data["channel_focus"] = channel_focus
     user._save()
     flash("Subscriptions updated.", "success")
