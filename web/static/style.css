@@ -56,6 +56,9 @@ body {
   background: var(--bg);
 }
 
+a { color: var(--accent); }
+a:visited { color: var(--accent); }
+
 /* Header */
 header {
   position: sticky;
