@@ -158,7 +158,7 @@ server {
     server_name feeds.example.com;
 
     location / {
-        proxy_pass http://127.0.0.1:5000;
+        proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -220,32 +220,50 @@ export TUBENEWS_HTTPS=true   # if behind HTTPS nginx
 gunicorn -w 2 'web.app:app'
 ```
 
-gunicorn listens on port 8000 by default; adjust your nginx `proxy_pass`
-accordingly, or pass `-b 127.0.0.1:5000` to keep port 5000.
+gunicorn listens on port 8000 by default, matching the nginx `proxy_pass`
+above. Pass `-b 127.0.0.1:PORT` to use a different port and update nginx
+accordingly.
 
 ---
 
 ## User Feeds and Blog Pages
 
-Each registered user gets a personal RSS feed and blog page generated
-automatically when TubeNews runs:
-
-```
-archive/users/<user_slug>/rss.xml      ← RSS feed for their subscribed channels
-archive/users/<user_slug>/index.html   ← readable blog page
-```
-
-Use the token-based URLs shown on the dashboard — they work without knowing the
-user's slug and are safe to share:
+Each registered user gets a personal RSS feed and blog page served at
+token-based URLs shown on the dashboard:
 
 | URL | What it serves |
 |---|---|
 | `/feed/<token>.xml` | Personal RSS feed — add to any feed reader |
 | `/blog/<token>.html` | Personal blog page — shareable, no login required |
 
-Both URLs use the same token. The token is shown on the dashboard and can be
-reset by an admin if needed.
+Both URLs use the same token and are safe to share. The token is shown on the
+dashboard and can be reset by an admin if needed (resetting invalidates the
+old URLs immediately).
 
-The blog page is generated on demand when the logged-in user visits `/blog` or
-saves their subscriptions. The public `/blog/<token>.html` URL serves the
-pre-built file, so it is fast and does not require a login.
+**Both are generated dynamically on every request** — the web app reads the
+live archive each time and returns fresh content. No static files are
+pre-built; there is nothing to invalidate or manually rebuild after a new
+TubeNews run.
+
+---
+
+## Per-Channel Focus Filtering
+
+By default a user's feed and blog show all stories from their subscribed
+channels. Each user can optionally narrow what they see on a per-channel basis:
+
+1. Go to `/dashboard`
+2. For each subscribed channel, type focus keywords into the **Your focus**
+   field (e.g. `housing, zoning, permits`)
+3. Click **Subscribe** to save
+
+Stories whose AI-assigned topics overlap with the user's focus keywords are
+shown; the rest are filtered out. Two people subscribing to the same channel
+can have completely different feeds.
+
+**Notes:**
+- Leaving the focus field blank shows all stories from that channel (the default).
+- Stories written before topic tagging was introduced always appear regardless
+  of focus — there is no need to re-process old content.
+- Topic matching is substring-tolerant: focus keyword `housing` matches a story
+  tagged `affordable housing`.
