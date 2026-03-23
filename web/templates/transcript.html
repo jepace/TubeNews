@@ -3,9 +3,33 @@
 
 {% block content %}
 <style>
+  .transcript-banner {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+  }
+  .transcript-banner .tb-brand { font-weight: 600; color: var(--fg); }
+  .transcript-banner .tb-label { color: var(--muted); margin-left: 0.6em; }
+  .transcript-banner .tb-close {
+    padding: 4px 14px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .transcript-banner .tb-close:hover { background: var(--accent-bg, #f0f0f0); }
   .transcript-page { max-width: 780px; margin: 0 auto; padding: 24px 16px 48px; }
   .transcript-page h1 { font-size: 1.3em; margin-bottom: 4px; }
-  .transcript-page .back { font-size: 0.85em; margin-bottom: 20px; display: block; }
   table.transcript { border-collapse: collapse; width: 100%; font-size: 0.93em; }
   table.transcript td { padding: 5px 8px; vertical-align: top; line-height: 1.55; }
   table.transcript td.ts { white-space: nowrap; color: #888; width: 5em; }
@@ -18,6 +42,14 @@
   html.dark table.transcript tr:target td,
   html.dark table.transcript tr:nth-child(even):target td { background: #3b3200; }
 </style>
+
+<div class="transcript-banner">
+  <span>
+    <span class="tb-brand">TubeNews</span>
+    <span class="tb-label">— {{ meeting_label }}</span>
+  </span>
+  <button class="tb-close" onclick="window.close()">Close transcript ✕</button>
+</div>
 
 <div class="transcript-page">
   <h1>Transcript</h1>
