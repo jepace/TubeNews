@@ -398,6 +398,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_load_channels()` | Returns the `feeds` list from config |
 | `_base_url()` | Returns `base_url` from config (empty string if not set) |
 | `_feed_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
+| `_find_archive_dir_for_channel(channel_id)` | Scans `archive/*/channel.json` and returns the `Path` whose `channel_id` matches; used by `admin_feed_edit` to locate the archive dir regardless of historical directory naming |
 | `_blog_url(token)` | Builds the full `/blog/<token>.html` URL using `base_url` or `url_for` |
 | `_find_user_by_email(email)` | Scans `archive/users/` for a matching email |
 | `_find_user_by_id(uid)` | Loads a user by their UUID directory name |
@@ -439,7 +440,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/admin/user/<uid>/delete` | `admin_user_delete` | Delete account (requires email confirmation) |
 | GET | `/admin/feeds` | `admin_feeds` | Feed (channel) list |
 | GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config |
-| GET/POST | `/admin/feeds/<idx>/edit` | `admin_feed_edit` | Edit a channel in config |
+| GET/POST | `/admin/feeds/<channel_id>/edit` | `admin_feed_edit` | Edit a channel in config; renames the archive directory when `channel_name` changes so the back catalog is preserved |
 | POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config |
 
 ### Sticky Sub-Header Row

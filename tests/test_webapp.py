@@ -533,3 +533,79 @@ def test_run_now_does_not_launch_when_locked(admin_client, archive, monkeypatch)
     monkeypatch.setattr(subprocess, "Popen", mock_popen)
     admin_client.post("/admin/run-now")
     mock_popen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# admin_feed_edit — archive directory rename on channel name change
+# ---------------------------------------------------------------------------
+# The archive fixture creates alpha_city/ with channel.json {"channel_id":
+# "UC_ALPHA_ID", ...}.  The code finds the old dir by scanning channel.json
+# files (not by re-slugifying the current config name), so the dir is always
+# found regardless of historical naming.
+
+def test_feed_rename_moves_archive_dir(admin_client, archive):
+    """Renaming a channel must rename the archive directory so the back catalog is preserved."""
+    from TubeNews import slugify as _slugify
+    old_dir = archive / "alpha_city"   # created by fixture
+    assert old_dir.is_dir()
+    new_name = "Alpha City Government"
+    new_slug = _slugify(new_name)      # "Alpha_City_Government"
+
+    admin_client.post("/admin/feeds/UC_ALPHA_ID/edit", data={
+        "channel_id": "UC_ALPHA_ID",
+        "channel_name": new_name,
+        "focus": "housing",
+    })
+
+    assert (archive / new_slug).is_dir(), "new slug dir must exist"
+    assert not old_dir.exists(), "old dir must be gone"
+
+
+def test_feed_rename_updates_channel_json(admin_client, archive):
+    """channel.json inside the renamed directory must reflect the new name."""
+    import json as _json
+    from TubeNews import slugify as _slugify
+    new_name = "Alpha City Government"
+    new_slug = _slugify(new_name)
+
+    admin_client.post("/admin/feeds/UC_ALPHA_ID/edit", data={
+        "channel_id": "UC_ALPHA_ID",
+        "channel_name": new_name,
+        "focus": "housing",
+    })
+
+    channel_json = archive / new_slug / "channel.json"
+    assert channel_json.exists()
+    data = _json.loads(channel_json.read_text())
+    assert data["channel_name"] == new_name
+    assert data["channel_id"] == "UC_ALPHA_ID"
+
+
+def test_feed_rename_same_name_does_not_rename_dir(admin_client, archive):
+    """Saving with the exact same channel_name must succeed without error."""
+    r = admin_client.post("/admin/feeds/UC_ALPHA_ID/edit", data={
+        "channel_id": "UC_ALPHA_ID",
+        "channel_name": "Alpha City Council",   # same as config; slug differs from archive dir
+        "focus": "housing",                      # but found via channel.json channel_id
+    }, follow_redirects=False)
+    assert r.status_code == 302   # redirect on success, no crash
+
+
+def test_feed_rename_blocked_when_target_dir_exists(admin_client, archive):
+    """Edit must flash an error and leave both dirs intact if new slug already exists."""
+    from TubeNews import slugify as _slugify
+    new_name = "Alpha City Government"
+    new_slug = _slugify(new_name)
+    (archive / new_slug).mkdir()   # pre-create collision
+
+    r = admin_client.post("/admin/feeds/UC_ALPHA_ID/edit", data={
+        "channel_id": "UC_ALPHA_ID",
+        "channel_name": new_name,
+        "focus": "housing",
+    }, follow_redirects=True)
+
+    assert b"already exists" in r.data
+    assert (archive / "alpha_city").is_dir(), "original dir must survive collision"
+    assert (archive / new_slug).is_dir()
+
+
