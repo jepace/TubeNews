@@ -843,6 +843,11 @@ def admin_user(uid: str):
     if not user:
         abort(404)
     channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
+    # Clear the unseen-channel nav badge when an admin views their own profile,
+    # since the subscriptions section shows all configured channels.
+    if user.get_id() == current_user.get_id():
+        user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
+        user._save()
     return render_template(
         "admin_user.html",
         u=user,
