@@ -1107,6 +1107,54 @@ def admin_feeds():
     return render_template("admin_feeds.html", channels=channels, supadata=balance)
 
 
+@app.route("/admin/blog")
+@login_required
+@admin_required
+def admin_all_stories():
+    """Browse all stories from all channels — the blog counterpart to archive/rss.xml."""
+    stories = []
+    channels_cfg = _load_channels()
+    if STORAGE_ROOT.is_dir():
+        for channel_dir in STORAGE_ROOT.iterdir():
+            if not channel_dir.is_dir() or channel_dir.name == "users":
+                continue
+            channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+            if not channel_info:
+                continue
+            channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+            for meeting_dir in channel_dir.iterdir():
+                if not meeting_dir.is_dir():
+                    continue
+                meta_path = meeting_dir / "metadata.json"
+                if not meta_path.exists():
+                    continue
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    if meta.get("status") != "processed":
+                        continue
+                    for story_file in meeting_dir.glob("[0-9]*.md"):
+                        s = parse_story_file(story_file)
+                        vid = meta["video_id"]
+                        vt = meta.get("video_title", "")
+                        stories.append({
+                            "title": s["title"],
+                            "dateline": s["dateline"],
+                            "body_html": s["body_html"],
+                            "start_seconds": s["start_seconds"],
+                            "video_id": vid,
+                            "video_title": vt if vt != vid else "",
+                            "channel_name": channel_name,
+                            "channel_slug": channel_dir.name,
+                            "meeting_id": meeting_dir.name,
+                            "processed_at": meta.get("processed_at", 0),
+                        })
+                except Exception:
+                    continue
+    stories.sort(key=lambda s: s["processed_at"], reverse=True)
+    return render_template("blog.html", stories=stories, blog_name="All Channels",
+                           feed_path="/archive/rss.xml")
+
+
 @app.route("/admin/feeds/add", methods=["GET", "POST"])
 @login_required
 @admin_required

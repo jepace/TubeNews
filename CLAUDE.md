@@ -453,6 +453,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config |
 | GET/POST | `/admin/feeds/<channel_id>/edit` | `admin_feed_edit` | Edit a channel in config; renames the archive directory when `channel_name` changes so the back catalog is preserved |
 | POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config |
+| GET | `/admin/blog` | `admin_all_stories` | Blog view of all stories from all channels — the HTML counterpart to `archive/rss.xml`; links to that aggregate feed in the sub-header |
 
 ### Sticky Sub-Header Row
 

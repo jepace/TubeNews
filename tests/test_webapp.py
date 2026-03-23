@@ -289,6 +289,45 @@ def test_channel_blog_includes_youtube_channel_link(logged_in_client):
     assert b"youtube.com/channel/UC_ALPHA_ID" in r.data
 
 
+def test_channel_blog_includes_rss_feed_link(logged_in_client):
+    """The channel browse page must include an RSS feed link to the per-channel rss.xml."""
+    r = logged_in_client.get("/channel/UC_ALPHA_ID")
+    assert b"rss.xml" in r.data
+
+
+# ---------------------------------------------------------------------------
+# Admin all-stories blog (/admin/blog)
+# ---------------------------------------------------------------------------
+
+def test_admin_blog_requires_login(client, archive):
+    r = client.get("/admin/blog")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_admin_blog_requires_admin(logged_in_client, archive):
+    r = logged_in_client.get("/admin/blog")
+    assert r.status_code == 403
+
+
+def test_admin_blog_returns_200(admin_client, archive):
+    r = admin_client.get("/admin/blog")
+    assert r.status_code == 200
+
+
+def test_admin_blog_shows_all_channel_stories(admin_client, archive):
+    """All-stories view must include stories from every channel."""
+    r = admin_client.get("/admin/blog")
+    assert b"Alpha Council Approves Budget" in r.data
+    assert b"Beta Council Discusses Zoning" in r.data
+
+
+def test_admin_blog_links_to_aggregate_feed(admin_client, archive):
+    """All-stories view must link to the aggregate RSS feed."""
+    r = admin_client.get("/admin/blog")
+    assert b"/archive/rss.xml" in r.data
+
+
 # ---------------------------------------------------------------------------
 # Login / auth
 # ---------------------------------------------------------------------------
