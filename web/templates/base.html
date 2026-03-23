@@ -26,7 +26,7 @@
             <path fill="#f26522" d="M1 1a12 12 0 0 1 12 12h-2A10 10 0 0 0 1 3V1z"/>
           </svg>
         </a>
-        <a href="{{ url_for('dashboard') }}">Settings</a>
+        <a href="{{ url_for('dashboard') }}">Settings{% if unseen_channel_count %} <span class="nav-badge">{{ unseen_channel_count }}</span>{% endif %}</a>
         {% if current_user.is_admin %}
           <a href="{{ url_for('admin_user', uid=current_user.get_id()) }}" class="nav-user">{{ current_user.name }}</a>
         {% endif %}

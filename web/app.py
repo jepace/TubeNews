@@ -287,12 +287,21 @@ def _prefs_to_classes(prefs: dict) -> str:
 
 @app.context_processor
 def inject_body_classes():
-    """Make body_classes available in every template for the logged-in user."""
+    """Make body_classes and unseen_channel_count available in every template."""
     if current_user.is_authenticated:
         classes = _prefs_to_classes(current_user._data.get("preferences", {}))
+        # Only compute unseen count when seen_channel_ids has been initialised;
+        # absent key means existing user pre-deploy — show nothing to avoid noise.
+        if "seen_channel_ids" in current_user._data:
+            all_ids = {ch["channel_id"] for ch in _load_channels()}
+            seen_ids = set(current_user._data["seen_channel_ids"])
+            unseen_count = len(all_ids - seen_ids)
+        else:
+            unseen_count = 0
     else:
         classes = ""
-    return {"body_classes": classes}
+        unseen_count = 0
+    return {"body_classes": classes, "unseen_channel_count": unseen_count}
 
 
 @app.template_filter("format_ts")
@@ -713,9 +722,14 @@ def dashboard():
             if lines:
                 channel_focus[ch_id] = lines
         current_user._data["channel_focus"] = channel_focus
+        current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
         current_user._save()
         flash("Subscriptions updated.", "success")
         return redirect(url_for("dashboard"))
+
+    # GET: mark all channels as seen so the nav badge clears on this page load.
+    current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
+    current_user._save()
 
     prefs = current_user._data.get("preferences", {})
     return render_template(
@@ -1219,7 +1233,7 @@ def admin_feed_add():
             if any(ch["channel_id"] == channel_id for ch in channels):
                 flash("A feed with that channel ID already exists.", "error")
             else:
-                channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus})
+                channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus, "added_at": int(time.time())})
                 _save_feeds(channels)
                 flash(f"Feed '{channel_name}' added.", "success")
                 return redirect(url_for("admin_feeds"))
