@@ -107,6 +107,19 @@ check `feeds.json` into version control (no secrets) while keeping
 
 ---
 
+## Completed Items
+
+### Per-user per-channel focus filtering (March 2026)
+
+Users can now set a personal focus per channel subscription (e.g. "housing,
+zoning") stored in `channel_focus` in their `user.json`.  Gemini tags each
+story with a `topics` list; `_story_matches_focus()` filters stories at serve
+time in both `_get_user_stories()` and `build_user_feed_xml()`.  Old stories
+(written before topic tagging was added) always pass through unfiltered.
+No API cost increase — one Gemini call per video regardless of subscriber count.
+
+---
+
 ## Known Issues / Future Hardening
 
 The following issues were identified in a QA sweep and deferred because they
@@ -151,11 +164,14 @@ zeros after formatting (e.g. `dt.strftime("%B %d, %Y").replace(" 0", " ")`).
 
 ### Web UI has no automated tests
 
-All Flask routes, the `User` model, and helper functions in `web/app.py` are
-currently untested.  The core pipeline in `TubeNews.py` has good unit-test
-coverage; the web UI relies entirely on manual verification.
+~~All Flask routes, the `User` model, and helper functions in `web/app.py` are
+currently untested.~~  A `tests/test_web.py` and `tests/test_webapp.py` now
+cover URL generation, subscription saves, admin guards, public token routes,
+and lock-file detection.  Good baseline coverage exists.
 
-**Future fix:** Add a `tests/test_web.py` using Flask's test client
-(`app.test_client()`) with a monkeypatched `STORAGE_ROOT`.  Priority targets:
-login/register rate limiting, subscription save + feed rebuild, admin
-guard decorator, and the public feed/blog token routes.
+**Remaining gaps:**
+- Login/register rate-limiting behaviour is not exercised by the test suite.
+- The admin feed-management routes (`/admin/feeds/*`) are untested.
+- `_get_user_stories()` focus filtering is covered indirectly through
+  `build_user_feed_xml` tests but has no dedicated integration-level tests
+  against the Flask routes.
