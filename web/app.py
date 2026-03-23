@@ -1,10 +1,10 @@
 """TubeNews web UI — account management and feed subscription.
 
-Run in development:
-    python web/app.py
+Start the server (always use gunicorn — never python web/app.py):
+    ./serve.sh
 
-Run in production (behind nginx/Caddy with TLS):
-    gunicorn -w 2 'web.app:app'
+With HTTPS (behind nginx/Caddy):
+    TUBENEWS_HTTPS=true ./serve.sh
 
 The secret key is read from the "tubenews_key" field in TubeNews.json.
 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'

@@ -8,26 +8,29 @@ There are two ways to serve TubeNews:
 
 | Approach | Good for |
 |---|---|
-| **Flask web UI** (recommended) | User accounts, subscriptions, admin panel, and feeds — all in one process |
+| **gunicorn** (recommended) | User accounts, subscriptions, admin panel, and feeds — all in one process |
 | **Static file server** (nginx/Apache) | Feeds only, no UI |
 
 ---
 
-## Option A: Flask Web UI (Recommended)
+## Option A: gunicorn Web UI (Recommended)
 
-The `web/app.py` Flask app serves both the web interface and the archive files,
-so you only need one process.
+The `web/app.py` Flask app serves both the web interface and the archive files.
+`serve.sh` wraps gunicorn with the right settings and reads the port from
+`TubeNews.json` automatically.
 
-### 1. Install web dependencies
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
+All packages install globally — no virtual environment needed.
+
 ### 2. Generate a secret key
 
 ```bash
-python -c 'import secrets; print(secrets.token_hex(32))'
+python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
 Copy the output into `TubeNews.json` as `tubenews_key`:
@@ -53,18 +56,27 @@ Add your email to `TubeNews.json`:
 }
 ```
 
-### 4. Start the app
+### 4. Start the server
 
 ```bash
-python web/app.py
+./serve.sh
 ```
 
-Open `http://your-server:8000` in a browser (default port; change with `"port"` in `TubeNews.json`). Register an account — your email
-matches `admin_users` so you will have admin access automatically.
+Open `http://your-server:8000` in a browser (default port; change with `"port"`
+in `TubeNews.json`). Register an account — your email matches `admin_users` so
+you will have admin access automatically.
+
+To keep it running after logout:
+
+```bash
+nohup ./serve.sh > /var/log/tubenews-web.log 2>&1 &
+```
+
+For a proper service that survives reboots, see the FreeBSD rc.d section below.
 
 ### 5. Set base_url
 
-Set `base_url` in `TubeNews.json` to the public root of your Flask app
+Set `base_url` in `TubeNews.json` to the public root of your server
 (no trailing slash):
 
 ```json
@@ -138,11 +150,11 @@ server {
 
 ## Adding HTTPS with Certbot
 
-Certbot handles certificates; nginx handles TLS; Flask (or your static server)
-handles the actual content. The traffic flow is:
+Certbot handles certificates; nginx handles TLS; gunicorn handles the actual
+content. The traffic flow is:
 
 ```
-Browser → nginx :443 (HTTPS) → Flask :5000 (localhost)
+Browser → nginx :443 (HTTPS) → gunicorn :8000 (localhost)
 ```
 
 ### 1. Point your domain at the server
@@ -184,12 +196,11 @@ Add to `TubeNews.json`:
 }
 ```
 
-And set the environment variable before starting Flask so session cookies are
-marked `Secure`:
+And set the environment variable before starting the server so session cookies
+are marked `Secure`:
 
 ```bash
-export TUBENEWS_HTTPS=true
-python web/app.py
+TUBENEWS_HTTPS=true ./serve.sh
 ```
 
 ---
@@ -200,7 +211,7 @@ Add a crontab entry to run TubeNews automatically. Every 30 minutes is
 reasonable; YouTube channels typically publish a few videos per week.
 
 ```cron
-*/30 * * * * cd /path/to/TubeNews && /path/to/TubeNews/venv/bin/python TubeNews.py >> /var/log/tubenews.log 2>&1
+*/30 * * * * cd /path/to/TubeNews && python3 TubeNews.py >> /var/log/tubenews.log 2>&1
 ```
 
 Edit your crontab with `crontab -e`.
@@ -210,19 +221,44 @@ Edit your crontab with `crontab -e`.
 
 ---
 
-## Running Flask in Production (gunicorn)
+## Keeping the Server Running: FreeBSD rc.d
 
-For a production server, use gunicorn instead of the built-in Flask dev server:
+To have `serve.sh` start automatically at boot and restart on crash, create an
+rc.d service. As root:
 
-```bash
-pip install gunicorn
-export TUBENEWS_HTTPS=true   # if behind HTTPS nginx
-gunicorn -w 2 'web.app:app'
+```sh
+cat > /usr/local/etc/rc.d/tubenews << 'EOF'
+#!/bin/sh
+# PROVIDE: tubenews
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="tubenews"
+rcvar="tubenews_enable"
+pidfile="/var/run/${name}.pid"
+command="/path/to/TubeNews/serve.sh"
+command_interpreter="/bin/sh"
+
+load_rc_config $name
+run_rc_command "$1"
+EOF
+
+chmod +x /usr/local/etc/rc.d/tubenews
 ```
 
-gunicorn listens on port 8000 by default, matching the nginx `proxy_pass`
-above. Pass `-b 127.0.0.1:PORT` to use a different port and update nginx
-accordingly.
+Add to `/etc/rc.conf`:
+
+```
+tubenews_enable="YES"
+```
+
+Then start it:
+
+```bash
+service tubenews start
+```
 
 ---
 

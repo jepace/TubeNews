@@ -144,10 +144,10 @@ YouTube Channel Pages (HTML scrape)
 ### Install Dependencies
 
 ```bash
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+Packages install globally — no virtual environment is used.
 
 ### Configure
 
@@ -179,10 +179,13 @@ Edit `TubeNews.json`:
 
 ```bash
 # Normal run
-python TubeNews.py
+python3 TubeNews.py
 
 # Debug mode (verbose logging, shows API calls and raw responses)
-python TubeNews.py --debug
+python3 TubeNews.py --debug
+
+# Start the web server (gunicorn — never use python3 web/app.py in any environment)
+./serve.sh
 ```
 
 ### First Run on a Channel with Existing Videos
@@ -190,7 +193,7 @@ python TubeNews.py --debug
 Run `catchup.py` **before** the first `TubeNews.py` run to avoid processing the entire backlog:
 
 ```bash
-python helpers/catchup.py
+python3 helpers/catchup.py
 ```
 
 This marks all currently visible videos as `ignored_too_old`. The main script will then only pick up truly new uploads going forward.
