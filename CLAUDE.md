@@ -357,13 +357,15 @@ archive/users/
   },
   "feed_token": "550e8400-e29b-41d4-a716-446655440000",
   "created_at": 1741910400,
-  "locked": false
+  "locked": false,
+  "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"]
 }
 ```
 
 - `channel_ids` — authoritative subscription list.
 - `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3); old installs may store a plain string — both are handled transparently. Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
+- `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 
 ### Token Model
 

@@ -777,6 +777,116 @@ def test_dashboard_caps_focuses_at_three(logged_in_client, archive):
 
 
 # ---------------------------------------------------------------------------
+# Unseen-channel nav badge
+# ---------------------------------------------------------------------------
+
+def test_dashboard_get_initialises_seen_channel_ids(logged_in_client, archive):
+    """GET /dashboard writes seen_channel_ids covering all configured channels."""
+    import json as _json
+    import web.app as webapp
+
+    logged_in_client.get("/dashboard")
+
+    users_dir = webapp.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "test@example.com":
+            assert set(d["seen_channel_ids"]) == {"UC_ALPHA_ID", "UC_BETA__ID"}
+            return
+    pytest.fail("User not found")
+
+
+def test_dashboard_post_sets_seen_channel_ids(logged_in_client, archive):
+    """POST /dashboard includes seen_channel_ids in the save."""
+    import json as _json
+    import web.app as webapp
+
+    logged_in_client.post("/dashboard", data={"channel_ids": ["UC_ALPHA_ID"]},
+                          follow_redirects=True)
+
+    users_dir = webapp.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "test@example.com":
+            assert set(d["seen_channel_ids"]) == {"UC_ALPHA_ID", "UC_BETA__ID"}
+            return
+    pytest.fail("User not found")
+
+
+def test_nav_badge_shown_when_unseen_channel_exists(client, archive):
+    """Nav badge appears when a channel is not in user's seen_channel_ids."""
+    import json as _json
+    import web.app as webapp
+
+    # Create user subscribed to Alpha who has only "seen" Alpha (Beta is new to them)
+    users_dir = webapp.STORAGE_ROOT / "users"
+    _make_user(
+        users_dir, name="Partial User", email="partial@example.com",
+        channel_ids=["UC_ALPHA_ID"], token="partial-token-xyz",
+    )
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "partial@example.com":
+            d["seen_channel_ids"] = ["UC_ALPHA_ID"]
+            uj.write_text(_json.dumps(d))
+            break
+
+    client.post("/login", data={"email": "partial@example.com", "password": "testpassword123"})
+    # /blog renders for this user (they have a subscription); badge should appear
+    r = client.get("/blog")
+    assert b'nav-badge' in r.data
+    assert b'>1<' in r.data
+
+
+def test_nav_badge_hidden_when_seen_channel_ids_absent(logged_in_client, archive):
+    """No badge when seen_channel_ids key is absent (existing-user migration path)."""
+    r = logged_in_client.get("/blog")
+    assert b'nav-badge' not in r.data
+
+
+def test_nav_badge_hidden_after_dashboard_visit(client, archive):
+    """Badge disappears once the user visits /dashboard (marks all as seen)."""
+    import json as _json
+    import web.app as webapp
+
+    # Set up user with only Alpha seen
+    users_dir = webapp.STORAGE_ROOT / "users"
+    _make_user(users_dir, name="Watcher", email="watcher@example.com",
+               channel_ids=["UC_ALPHA_ID"], token="watcher-token")
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "watcher@example.com":
+            d["seen_channel_ids"] = ["UC_ALPHA_ID"]
+            uj.write_text(_json.dumps(d))
+            break
+
+    client.post("/login", data={"email": "watcher@example.com", "password": "testpassword123"})
+
+    # Badge present before visiting dashboard (/blog renders since user has a subscription)
+    r = client.get("/blog")
+    assert b'nav-badge' in r.data
+
+    # Visit dashboard — clears the badge
+    client.get("/dashboard")
+
+    # Badge gone on subsequent page load
+    r = client.get("/blog")
+    assert b'nav-badge' not in r.data
+
+
+# ---------------------------------------------------------------------------
 # Security: serve_archive must not expose user data
 # ---------------------------------------------------------------------------
 
