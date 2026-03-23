@@ -282,6 +282,13 @@ def test_channel_blog_unknown_channel_returns_404(logged_in_client):
     assert r.status_code == 404
 
 
+def test_channel_blog_includes_youtube_channel_link(logged_in_client):
+    """The channel browse page must include a YouTube channel link containing the channel_id."""
+    r = logged_in_client.get("/channel/UC_ALPHA_ID")
+    assert b"UC_ALPHA_ID" in r.data
+    assert b"youtube.com/channel/UC_ALPHA_ID" in r.data
+
+
 # ---------------------------------------------------------------------------
 # Login / auth
 # ---------------------------------------------------------------------------
@@ -442,6 +449,37 @@ def test_admin_runs_shows_running_banner_when_locked(admin_client, archive):
     r = admin_client.get("/admin/runs")
     assert b"Running" in r.data
     assert b"Run Now" not in r.data
+
+
+def test_admin_runs_channel_health_links_to_browse(admin_client, archive):
+    """Channel names in the Channel Health table must link to /channel/<channel_id>."""
+    r = admin_client.get("/admin/runs")
+    assert r.status_code == 200
+    assert b"/channel/UC_ALPHA_ID" in r.data
+    assert b"/channel/UC_BETA__ID" in r.data
+
+
+def test_admin_runs_run_history_links_to_browse(admin_client, archive):
+    """Channel names in a run record's Channels column must link to /channel/<channel_id>."""
+    import json as _json
+    run_log = [{
+        "started_at": 1741910400.0,
+        "finished_at": 1741910460.0,
+        "total_stories": 2,
+        "ai_rate_limited": False,
+        "feeds": [
+            {"channel_id": "UC_ALPHA_ID", "channel_name": "Alpha City Council", "stories_written": 2},
+            {"channel_id": "UC_BETA__ID", "channel_name": "Beta City Council",  "stories_written": 0},
+        ],
+    }]
+    (archive / "run_log.json").write_text(_json.dumps(run_log))
+    r = admin_client.get("/admin/runs")
+    assert r.status_code == 200
+    # Both channels should appear as links in the expandable run detail
+    assert b"/channel/UC_ALPHA_ID" in r.data
+    assert b"/channel/UC_BETA__ID" in r.data
+    # Active channel should appear in the summary Channels column too
+    assert b"Alpha City Council" in r.data
 
 
 # ---------------------------------------------------------------------------

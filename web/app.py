@@ -727,7 +727,8 @@ def channel_blog(channel_id: str):
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
-    return render_template("blog.html", stories=stories, blog_name=display_name, feed_path=None)
+    return render_template("blog.html", stories=stories, blog_name=display_name,
+                           feed_path=None, channel_id=channel_id)
 
 
 # ---------------------------------------------------------------------------

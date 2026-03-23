@@ -77,6 +77,25 @@ header {
   text-decoration: none;
 }
 
+/* Optional sticky sub-header row (populated per-page via Jinja block) */
+.header-sub {
+  position: sticky;
+  top: 52px;
+  z-index: 190;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 1.5rem;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.header-sub a { color: var(--fg); text-decoration: none; }
+.header-sub a:hover { text-decoration: underline; }
+.header-sub .hs-ext { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+
 nav {
   display: flex;
   align-items: center;

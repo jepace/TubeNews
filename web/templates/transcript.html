@@ -61,7 +61,7 @@
   <div class="tb-row">
     <span class="tb-title">{{ video_title }}</span>
     {% if video_id %}
-    <a class="tb-yt" href="https://youtu.be/{{ video_id }}" target="_blank" rel="noopener">&#9654; Watch on YouTube</a>
+    <a class="tb-yt" id="tb-yt-link" href="https://youtu.be/{{ video_id }}" target="_blank" rel="noopener">&#9654; Watch on YouTube</a>
     {% endif %}
   </div>
 </div>
@@ -89,4 +89,33 @@
   <p>No transcript segments found.</p>
   {% endif %}
 </div>
+
+{% if video_id %}
+<script>
+(function() {
+  var link = document.getElementById('tb-yt-link');
+  if (!link) return;
+  var base = 'https://youtu.be/{{ video_id }}';
+  var rows = Array.from(document.querySelectorAll('table.transcript tr[id]'));
+  if (!rows.length) return;
+  var banner = document.querySelector('.transcript-banner');
+
+  function update() {
+    var cutoff = 52 + (banner ? banner.offsetHeight : 0) + 4;
+    var best = rows[0];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getBoundingClientRect().top <= cutoff) best = rows[i];
+      else break;
+    }
+    var t = parseInt(best.id.slice(1), 10) || 0;
+    link.href = base + (t > 0 ? '?t=' + t : '');
+    var m = Math.floor(t / 60), s = t % 60;
+    link.title = 'Watch from ' + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  window.addEventListener('scroll', update, {passive: true});
+  update();
+})();
+</script>
+{% endif %}
 {% endblock %}

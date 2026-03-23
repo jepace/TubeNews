@@ -282,7 +282,7 @@ pytest tests/ -v
 |---|---|
 | `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`), `_story_matches_focus`, `write_story_files`, the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_meta_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
-| `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger |
+| `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 
 All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
 
@@ -423,6 +423,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
 | GET | `/logout` | `logout` | Clears session |
 | GET | `/blog` | `serve_blog` | Regenerates and serves the logged-in user's blog |
+| GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
 
 **Admin required (`admin_users` in config):**
 
@@ -440,6 +441,15 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config |
 | GET/POST | `/admin/feeds/<idx>/edit` | `admin_feed_edit` | Edit a channel in config |
 | POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config |
+
+### Sticky Sub-Header Row
+
+`base.html` exposes a `header_sub` Jinja block. When a child template overrides the block with content, a 36 px sticky band (`position: sticky; top: 52px; z-index: 190`) appears immediately below the main navigation header and stays visible while scrolling. When the block is left empty (the default), nothing is rendered and no space is reserved.
+
+**Current uses:**
+- `blog.html` always renders a sub-header containing the feed/page name. When the template receives a `channel_id` variable (set only by `channel_blog()`), a "▶ YouTube channel" link is added.
+
+**Sizing note:** The sub-header's `top: 52px` assumes the main header is exactly 52 px tall (set by `header { height: 52px }` in `style.css`). The transcript banner uses the same `top: 52px` on a page that has no sub-header, so there is no conflict. If the main header height ever changes, update both `top` values together.
 
 ### Security Notes
 

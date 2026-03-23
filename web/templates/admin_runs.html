@@ -36,7 +36,7 @@
   </div>
 
   {% if runs %}
-  <table class="user-table">
+  <table class="user-table" id="runs-table">
     <thead>
       <tr>
         <th>Started</th>
@@ -48,7 +48,8 @@
     </thead>
     <tbody>
       {% for run in runs %}
-      <tr>
+      {% set rid = loop.index %}
+      <tr class="run-row" data-detail="run-detail-{{ rid }}" style="cursor:pointer;" title="Click to expand">
         <td class="mono">{{ run.started_at | int | format_datetime }}</td>
         <td class="muted">{{ ((run.finished_at - run.started_at) | int) }}s</td>
         <td>{{ run.total_stories }}</td>
@@ -63,11 +64,35 @@
           {% set active = run.feeds | selectattr("stories_written", "gt", 0) | list %}
           {% if active %}
             {% for f in active %}
-              <span title="{{ f.channel_name }}">{{ f.channel_name }} (+{{ f.stories_written }})</span>{% if not loop.last %}, {% endif %}
+              <a href="{{ url_for('channel_blog', channel_id=f.channel_id) }}">{{ f.channel_name }}</a> (+{{ f.stories_written }}){% if not loop.last %}, {% endif %}
             {% endfor %}
           {% else %}
             <span class="muted">No new stories</span>
           {% endif %}
+        </td>
+      </tr>
+      <tr class="run-detail" id="run-detail-{{ rid }}" style="display:none;">
+        <td colspan="5" style="padding:0 1rem 0.75rem 2.5rem; background:var(--bg);">
+          <table style="font-size:0.85rem; border-collapse:collapse; width:100%;">
+            <thead>
+              <tr>
+                <th style="text-align:left; padding:4px 8px; color:var(--muted); font-weight:500;">Channel</th>
+                <th style="text-align:right; padding:4px 8px; color:var(--muted); font-weight:500;">Stories written</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for f in run.feeds %}
+              <tr>
+                <td style="padding:3px 8px;">
+                  <a href="{{ url_for('channel_blog', channel_id=f.channel_id) }}">{{ f.channel_name }}</a>
+                </td>
+                <td style="padding:3px 8px; text-align:right; {% if f.stories_written == 0 %}color:var(--muted);{% endif %}">
+                  {{ f.stories_written if f.stories_written else '—' }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </td>
       </tr>
       {% endfor %}
@@ -92,7 +117,7 @@
     <tbody>
       {% for ch in channel_stats %}
       <tr>
-        <td>{{ ch.channel_name }}</td>
+        <td><a href="{{ url_for('channel_blog', channel_id=ch.channel_id) }}">{{ ch.channel_name }}</a></td>
         <td>{{ ch.processed }}</td>
         <td>{{ ch.story_count }}</td>
         <td class="muted">{{ ch.last_processed | format_datetime }}</td>
@@ -104,4 +129,16 @@
     <p class="muted">No archive data found.</p>
   {% endif %}
 </div>
+
+<script>
+(function() {
+  document.querySelectorAll('.run-row').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var detail = document.getElementById(row.dataset.detail);
+      if (!detail) return;
+      detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    });
+  });
+})();
+</script>
 {% endblock %}
