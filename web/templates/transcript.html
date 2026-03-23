@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Transcript — {{ meeting_label }}{% endblock %}
+{% block title %}Transcript — {{ video_title }}{% endblock %}
 
 {% block content %}
 <style>
@@ -29,7 +29,10 @@
   }
   .transcript-banner .tb-close:hover { background: var(--accent-bg, #f0f0f0); }
   .transcript-page { max-width: 780px; margin: 0 auto; padding: 24px 16px 48px; }
-  .transcript-page h1 { font-size: 1.3em; margin-bottom: 4px; }
+  .transcript-page h1 { font-size: 1.3em; margin-bottom: 6px; }
+  .transcript-meta { font-size: 0.85rem; color: #888; margin-bottom: 20px; }
+  .transcript-yt { color: var(--danger, #c0392b); text-decoration: none; }
+  .transcript-yt:hover { text-decoration: underline; }
   table.transcript { border-collapse: collapse; width: 100%; font-size: 0.93em; }
   table.transcript td { padding: 5px 8px; vertical-align: top; line-height: 1.55; }
   table.transcript td.ts { white-space: nowrap; color: #888; width: 5em; }
@@ -46,15 +49,19 @@
 <div class="transcript-banner">
   <span>
     <span class="tb-brand">TubeNews</span>
-    <span class="tb-label">— {{ meeting_label }}</span>
+    <span class="tb-label">— {{ channel_name }}</span>
   </span>
   <button class="tb-close" onclick="window.close()">Close transcript ✕</button>
 </div>
 
 <div class="transcript-page">
-  <h1>Transcript</h1>
-  <em>{{ meeting_label }}</em>
-  <br><br>
+  <h1>{{ video_title }}</h1>
+  <p class="transcript-meta">
+    <span class="transcript-channel">{{ channel_name }}</span>
+    {% if video_id %}
+    &mdash; <a href="https://youtu.be/{{ video_id }}" target="_blank" rel="noopener" class="transcript-yt">&#9654; Watch on YouTube</a>
+    {% endif %}
+  </p>
   {% if segments %}
   <table class="transcript">
     {% for seg in segments %}

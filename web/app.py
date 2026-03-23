@@ -500,7 +500,8 @@ def serve_transcript(channel_slug, meeting_id):
     segment, e.g. ``/transcript/my_channel/2026-03-14_abc123#t120``.
     """
     import re as _re
-    transcript_path = STORAGE_ROOT / channel_slug / meeting_id / "transcript.txt"
+    meeting_dir = STORAGE_ROOT / channel_slug / meeting_id
+    transcript_path = meeting_dir / "transcript.txt"
     if not transcript_path.exists():
         abort(404)
 
@@ -511,14 +512,37 @@ def serve_transcript(channel_slug, meeting_id):
         if m:
             segments.append({"seconds": int(m.group(1)), "text": m.group(2)})
 
-    # Derive a human-readable title from the meeting directory name
-    meeting_label = meeting_id.replace("_", " — ", 1)
+    # Read video title and ID from metadata.json
+    video_title = None
+    video_id = None
+    meta_path = meeting_dir / "metadata.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            video_title = meta.get("video_title") or None
+            video_id = meta.get("video_id") or None
+        except Exception:
+            pass
+    # Fall back to extracting video_id from the directory name
+    if not video_id and "_" in meeting_id:
+        video_id = meeting_id.split("_", 1)[1]
+
+    # Read channel name from channel.json written by rebuild_feed
+    channel_name = None
+    channel_json = STORAGE_ROOT / channel_slug / "channel.json"
+    if channel_json.exists():
+        try:
+            channel_name = json.loads(channel_json.read_text()).get("channel_name")
+        except Exception:
+            pass
 
     return render_template(
         "transcript.html",
         channel_slug=channel_slug,
         meeting_id=meeting_id,
-        meeting_label=meeting_label,
+        channel_name=channel_name or channel_slug.replace("_", " "),
+        video_title=video_title or meeting_id,
+        video_id=video_id,
         segments=segments,
     )
 
