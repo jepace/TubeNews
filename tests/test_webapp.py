@@ -289,6 +289,117 @@ def test_channel_blog_includes_youtube_channel_link(logged_in_client):
     assert b"youtube.com/channel/UC_ALPHA_ID" in r.data
 
 
+def test_channel_blog_includes_rss_feed_link(logged_in_client):
+    """The channel browse page must include an RSS feed link to the per-channel rss.xml."""
+    r = logged_in_client.get("/channel/UC_ALPHA_ID")
+    assert b"rss.xml" in r.data
+
+
+# ---------------------------------------------------------------------------
+# Admin all-stories blog (/admin/blog)
+# ---------------------------------------------------------------------------
+
+def test_admin_blog_requires_login(client, archive):
+    r = client.get("/admin/blog")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_admin_blog_requires_admin(logged_in_client, archive):
+    r = logged_in_client.get("/admin/blog")
+    assert r.status_code == 403
+
+
+def test_admin_blog_returns_200(admin_client, archive):
+    r = admin_client.get("/admin/blog")
+    assert r.status_code == 200
+
+
+def test_admin_blog_shows_all_channel_stories(admin_client, archive):
+    """All-stories view must include stories from every channel."""
+    r = admin_client.get("/admin/blog")
+    assert b"Alpha Council Approves Budget" in r.data
+    assert b"Beta Council Discusses Zoning" in r.data
+
+
+def test_admin_blog_links_to_aggregate_feed(admin_client, archive):
+    """All-stories view must link to the aggregate RSS feed."""
+    r = admin_client.get("/admin/blog")
+    assert b"/archive/rss.xml" in r.data
+
+
+# ---------------------------------------------------------------------------
+# Admin story delete (/admin/story/delete)
+# ---------------------------------------------------------------------------
+
+_DELETE_FORM = {
+    "channel_slug": "alpha_city",
+    "meeting_id":   "2026-01-15_VID12345678",
+    "filename":     "01_Story.md",
+}
+
+
+def test_admin_story_delete_requires_login(client, archive):
+    r = client.post("/admin/story/delete", data=_DELETE_FORM)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_admin_story_delete_requires_admin(logged_in_client, archive):
+    r = logged_in_client.post("/admin/story/delete", data=_DELETE_FORM)
+    assert r.status_code == 403
+
+
+def test_admin_story_delete_removes_file(admin_client, archive, monkeypatch):
+    monkeypatch.setattr(webapp, "rebuild_feed",           lambda *a, **kw: None)
+    monkeypatch.setattr(webapp, "rebuild_aggregate_feed", lambda *a, **kw: None)
+    story_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    assert story_path.exists()
+    r = admin_client.post("/admin/story/delete", data=_DELETE_FORM, follow_redirects=False)
+    assert r.status_code == 302
+    assert not story_path.exists()
+
+
+def test_admin_story_delete_404_for_missing_file(admin_client, archive, monkeypatch):
+    monkeypatch.setattr(webapp, "rebuild_feed",           lambda *a, **kw: None)
+    monkeypatch.setattr(webapp, "rebuild_aggregate_feed", lambda *a, **kw: None)
+    r = admin_client.post("/admin/story/delete", data={
+        **_DELETE_FORM, "filename": "99_Does_Not_Exist.md",
+    })
+    assert r.status_code == 404
+
+
+def test_admin_story_delete_rejects_non_md(admin_client, archive):
+    r = admin_client.post("/admin/story/delete", data={
+        **_DELETE_FORM, "filename": "metadata.json",
+    })
+    assert r.status_code == 400
+
+
+def test_admin_story_delete_rejects_non_numbered_filename(admin_client, archive):
+    r = admin_client.post("/admin/story/delete", data={
+        **_DELETE_FORM, "filename": "story.md",
+    })
+    assert r.status_code == 400
+
+
+def test_admin_story_delete_rejects_path_traversal(admin_client, archive):
+    r = admin_client.post("/admin/story/delete", data={
+        **_DELETE_FORM, "channel_slug": "../etc", "meeting_id": "passwd",
+    })
+    assert r.status_code == 400
+
+
+def test_admin_blog_shows_delete_button_for_admin(admin_client, archive):
+    r = admin_client.get("/admin/blog")
+    assert b"admin/story/delete" in r.data
+
+
+def test_blog_hides_delete_button_for_regular_user(logged_in_client, archive):
+    r = logged_in_client.get("/blog")
+    assert b"admin/story/delete" not in r.data
+
+
 # ---------------------------------------------------------------------------
 # Login / auth
 # ---------------------------------------------------------------------------

@@ -631,6 +631,10 @@ button.btn-danger-sm:hover { background: #fee2e2; }
   border-color: var(--text);
 }
 
+.share-delete-form { display: contents; }
+.share-delete { color: #dc2626; border-color: #fca5a5; margin-left: auto; }
+.share-delete:hover { color: #fff !important; background: #dc2626; border-color: #dc2626 !important; }
+
 .blog-empty {
   color: var(--muted);
   margin-top: 2rem;

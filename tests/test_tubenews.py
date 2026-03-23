@@ -18,7 +18,7 @@ from TubeNews import (
     parse_story_file,
     process_feed,
     rebuild_feed,
-    rebuild_meta_feed,
+    rebuild_aggregate_feed,
     rebuild_user_feed,
     rebuild_user_blog,
     build_user_feed_xml,
@@ -127,7 +127,7 @@ def test_parse_story_file_content_hash_stable(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Fixtures shared by rebuild_feed and rebuild_meta_feed tests
+# Fixtures shared by rebuild_feed and rebuild_aggregate_feed tests
 # ---------------------------------------------------------------------------
 
 def _write_story(meeting_dir: Path, filename: str, title: str, dateline: str,
@@ -221,7 +221,7 @@ def test_rebuild_feed_includes_timestamp(channel_feed, feed_cfg):
 
 
 # ---------------------------------------------------------------------------
-# rebuild_meta_feed
+# rebuild_aggregate_feed
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -242,23 +242,23 @@ def multi_channel_archive(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_rebuild_meta_feed_creates_rss(multi_channel_archive):
-    rebuild_meta_feed()
+def test_rebuild_aggregate_feed_creates_rss(multi_channel_archive):
+    rebuild_aggregate_feed()
     assert (multi_channel_archive / "rss.xml").exists()
 
-def test_rebuild_meta_feed_includes_all_channels(multi_channel_archive):
-    rebuild_meta_feed()
+def test_rebuild_aggregate_feed_includes_all_channels(multi_channel_archive):
+    rebuild_aggregate_feed()
     content = (multi_channel_archive / "rss.xml").read_text()
     assert "alpha channel" in content.lower()
     assert "beta channel" in content.lower()
 
-def test_rebuild_meta_feed_base_url(multi_channel_archive):
-    rebuild_meta_feed(base_url="https://example.com/rss.xml")
+def test_rebuild_aggregate_feed_base_url(multi_channel_archive):
+    rebuild_aggregate_feed(base_url="https://example.com/rss.xml")
     content = (multi_channel_archive / "rss.xml").read_text()
     assert "example.com" in content
 
-def test_rebuild_meta_feed_no_base_url_omits_self_link(multi_channel_archive):
-    rebuild_meta_feed(base_url="")
+def test_rebuild_aggregate_feed_no_base_url_omits_self_link(multi_channel_archive):
+    rebuild_aggregate_feed(base_url="")
     content = (multi_channel_archive / "rss.xml").read_text()
     assert "localhost" not in content
 

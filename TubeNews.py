@@ -8,7 +8,7 @@ Workflow for each configured channel (feed):
      scrape basic metadata (title, upload date) from the YouTube watch page.
   4. Send the transcript to Google Gemini so it can extract focused news
      stories and write each story as a Markdown file.
-  5. Rebuild the per-channel RSS feed and the site-wide meta-feed.
+  5. Rebuild the per-channel RSS feed and the site-wide aggregate feed.
 
 Run:
     python TubeNews.py [--debug]
@@ -630,7 +630,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
     )
 
 
-def rebuild_meta_feed(base_url: str = "") -> None:
+def rebuild_aggregate_feed(base_url: str = "") -> None:
     """Aggregate stories from all channel folders into ``archive/rss.xml``.
 
     Collects all stories across every channel sub-directory,
@@ -641,7 +641,7 @@ def rebuild_meta_feed(base_url: str = "") -> None:
         base_url: Public URL of this feed (used as the RSS ``<self>`` link).
                   Omit or pass an empty string to leave the self-link out.
     """
-    logger.info("TubeNews: Rebuilding meta-feed (archive/rss.xml)")
+    logger.info("TubeNews: Rebuilding aggregate feed (archive/rss.xml)")
 
     feed = FeedGenerator()
     feed.id("tubenews_meta_rss")
@@ -711,7 +711,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
 
     Reads ``channel.json`` from each channel directory (written by :func:`rebuild_feed`)
     to determine which archive folders correspond to the user's ``channel_ids``.  Stories
-    are sorted newest-first, matching :func:`rebuild_meta_feed` behaviour.
+    are sorted newest-first, matching :func:`rebuild_aggregate_feed` behaviour.
 
     Args:
         user:          User config dict from ``archive/users/<id>/user.json``.
@@ -1419,7 +1419,7 @@ def _main_body(args) -> None:
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
         try:
-            rebuild_meta_feed(base_url=config.get("base_url", ""))
+            rebuild_aggregate_feed(base_url=config.get("base_url", ""))
         except Exception:
             logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
 

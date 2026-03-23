@@ -54,7 +54,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus  # noqa: E402
+from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus, rebuild_feed, rebuild_aggregate_feed  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -466,6 +466,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
                     "channel_name": entry["channel_name"],
                     "channel_slug": entry.get("channel_slug", ""),
                     "meeting_id": entry.get("meeting_id", ""),
+                    "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
                 })
             except Exception:
@@ -526,6 +527,7 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                 "channel_name": entry["channel_name"],
                 "channel_slug": entry.get("channel_slug", ""),
                 "meeting_id": entry.get("meeting_id", ""),
+                "story_filename": entry["file"].name,
                 "processed_at": entry["meta"].get("processed_at", 0),
             })
         except Exception:
@@ -800,8 +802,10 @@ def channel_blog(channel_id: str):
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
+    archive_dir = _find_archive_dir_for_channel(channel_id)
+    feed_path = f"/archive/{archive_dir.name}/rss.xml" if archive_dir else None
     return render_template("blog.html", stories=stories, blog_name=display_name,
-                           feed_path=None, channel_id=channel_id)
+                           feed_path=feed_path, channel_id=channel_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1100,60 @@ def _get_supadata_balance() -> dict | None:
     return None
 
 
+@app.route("/admin/story/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_story_delete():
+    """Delete a single story .md file and rebuild the affected feeds."""
+    channel_slug = request.form.get("channel_slug", "").strip()
+    meeting_id   = request.form.get("meeting_id",   "").strip()
+    filename     = request.form.get("filename",      "").strip()
+
+    if not channel_slug or not meeting_id or not filename:
+        abort(400)
+    if not filename.endswith(".md") or not filename[0].isdigit():
+        abort(400)
+
+    # Path traversal guard — resolved path must stay inside STORAGE_ROOT.
+    try:
+        story_path = (STORAGE_ROOT / channel_slug / meeting_id / filename).resolve()
+        story_path.relative_to(STORAGE_ROOT.resolve())
+    except ValueError:
+        abort(400)
+
+    if not story_path.exists():
+        abort(404)
+
+    try:
+        story_title = parse_story_file(story_path).get("title", filename)
+    except Exception:
+        story_title = filename
+
+    story_path.unlink()
+
+    # Rebuild the per-channel feed and the aggregate feed.
+    channel_dir  = STORAGE_ROOT / channel_slug
+    channels_cfg = _load_channels()
+    channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+    if channel_info:
+        feed_cfg = next(
+            (ch for ch in channels_cfg if ch["channel_id"] == channel_info.get("channel_id")),
+            None,
+        )
+        if feed_cfg:
+            try:
+                rebuild_feed(channel_dir, feed_cfg)
+            except Exception:
+                pass
+    try:
+        rebuild_aggregate_feed(base_url=_base_url())
+    except Exception:
+        pass
+
+    flash(f'Story deleted: \u201c{story_title}\u201d', "info")
+    return redirect(request.referrer or url_for("admin_all_stories"))
+
+
 @app.route("/admin/feeds")
 @login_required
 @admin_required
@@ -1103,6 +1161,55 @@ def admin_feeds():
     channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
     balance = _get_supadata_balance()
     return render_template("admin_feeds.html", channels=channels, supadata=balance)
+
+
+@app.route("/admin/blog")
+@login_required
+@admin_required
+def admin_all_stories():
+    """Browse all stories from all channels — the blog counterpart to archive/rss.xml."""
+    stories = []
+    channels_cfg = _load_channels()
+    if STORAGE_ROOT.is_dir():
+        for channel_dir in STORAGE_ROOT.iterdir():
+            if not channel_dir.is_dir() or channel_dir.name == "users":
+                continue
+            channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+            if not channel_info:
+                continue
+            channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+            for meeting_dir in channel_dir.iterdir():
+                if not meeting_dir.is_dir():
+                    continue
+                meta_path = meeting_dir / "metadata.json"
+                if not meta_path.exists():
+                    continue
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    if meta.get("status") != "processed":
+                        continue
+                    for story_file in meeting_dir.glob("[0-9]*.md"):
+                        s = parse_story_file(story_file)
+                        vid = meta["video_id"]
+                        vt = meta.get("video_title", "")
+                        stories.append({
+                            "title": s["title"],
+                            "dateline": s["dateline"],
+                            "body_html": s["body_html"],
+                            "start_seconds": s["start_seconds"],
+                            "video_id": vid,
+                            "video_title": vt if vt != vid else "",
+                            "channel_name": channel_name,
+                            "channel_slug": channel_dir.name,
+                            "meeting_id": meeting_dir.name,
+                            "story_filename": story_file.name,
+                            "processed_at": meta.get("processed_at", 0),
+                        })
+                except Exception:
+                    continue
+    stories.sort(key=lambda s: s["processed_at"], reverse=True)
+    return render_template("blog.html", stories=stories, blog_name="All Channels",
+                           feed_path="/archive/rss.xml")
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])

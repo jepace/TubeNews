@@ -2,7 +2,7 @@
 
 Automated local news extraction from YouTube government meeting videos.
 
-TubeNews monitors YouTube channels for new videos, fetches transcripts via [Supadata](https://supadata.ai), analyzes them with Google Gemini AI using a journalistic prompt, and publishes per-channel RSS feeds plus an aggregated regional meta-feed.
+TubeNews monitors YouTube channels for new videos, fetches transcripts via [Supadata](https://supadata.ai), analyzes them with Google Gemini AI using a journalistic prompt, and publishes per-channel RSS feeds plus an aggregated regional aggregate feed.
 
 ## What It Does
 

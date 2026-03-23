@@ -9,6 +9,7 @@
 
   <div style="margin-bottom: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
     <a href="{{ url_for('admin_feed_add') }}" class="btn-sm">+ Add feed</a>
+    <a href="{{ url_for('admin_all_stories') }}" class="btn-sm">Browse all stories</a>
     {% if supadata %}
       {% set remaining = supadata.maxCredits - supadata.usedCredits %}
       {% set pct = (supadata.usedCredits / supadata.maxCredits * 100) | round(1) if supadata.maxCredits else 0 %}

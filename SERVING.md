@@ -93,7 +93,7 @@ Set `base_url` in `TubeNews.json` to the public root of your server
 | `/` | Login / dashboard |
 | `/dashboard` | Subscribe to channels, copy your feed and blog URLs |
 | `/admin` | Manage users and channels |
-| `/archive/rss.xml` | Regional meta-feed |
+| `/archive/rss.xml` | Regional aggregate feed |
 | `/archive/<channel>/rss.xml` | Per-channel feed |
 | `/feed/<token>.xml` | Your personal RSS feed (token shown on dashboard) |
 | `/blog/<token>.html` | Your personal blog page (shareable, no login required) |
