@@ -800,8 +800,10 @@ def channel_blog(channel_id: str):
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
+    archive_dir = _find_archive_dir_for_channel(channel_id)
+    feed_path = f"/archive/{archive_dir.name}/rss.xml" if archive_dir else None
     return render_template("blog.html", stories=stories, blog_name=display_name,
-                           feed_path=None, channel_id=channel_id)
+                           feed_path=feed_path, channel_id=channel_id)
 
 
 # ---------------------------------------------------------------------------
