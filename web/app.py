@@ -307,6 +307,17 @@ def admin_required(f):
     return decorated
 
 
+def _safe_next(url: str | None) -> str:
+    """Return *url* only when it is a safe same-site relative path.
+
+    Blocks absolute URLs (http://evil.com) and protocol-relative URLs
+    (//evil.com) that would cause an open redirect after login.
+    """
+    if url and url.startswith("/") and not url.startswith("//"):
+        return url
+    return url_for("serve_blog")
+
+
 def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[dict]) -> dict | None:
     """Return ``{channel_id, channel_name}`` for *channel_dir*.
 
@@ -517,6 +528,9 @@ def serve_archive(filename=""):
     """Serve static files from the archive directory (feeds, stories, etc.)."""
     if not filename:
         abort(404)
+    # Never expose user account data stored under archive/users/
+    if filename == "users" or filename.startswith("users/"):
+        abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None
     return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
 
@@ -529,7 +543,12 @@ def serve_transcript(channel_slug, meeting_id):
     segment, e.g. ``/transcript/my_channel/2026-03-14_abc123#t120``.
     """
     import re as _re
-    meeting_dir = STORAGE_ROOT / channel_slug / meeting_id
+    # Guard against path traversal: verify the resolved path stays inside STORAGE_ROOT
+    try:
+        meeting_dir = (STORAGE_ROOT / channel_slug / meeting_id).resolve()
+        meeting_dir.relative_to(STORAGE_ROOT.resolve())
+    except (ValueError, OSError):
+        abort(404)
     transcript_path = meeting_dir / "transcript.txt"
     if not transcript_path.exists():
         abort(404)
@@ -593,7 +612,7 @@ def login():
                 flash("This account has been locked. Contact an administrator.", "error")
             else:
                 login_user(user, remember=remember)
-                return redirect(request.args.get("next") or url_for("serve_blog"))
+                return redirect(_safe_next(request.args.get("next")))
         else:
             flash("Invalid email or password.", "error")
 

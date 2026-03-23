@@ -663,3 +663,95 @@ def test_dashboard_caps_focuses_at_three(logged_in_client, archive):
                 assert len(d["channel_focus"]["UC_ALPHA_ID"]) == 3
                 return
     pytest.fail("User not found")
+
+
+# ---------------------------------------------------------------------------
+# Security: serve_archive must not expose user data
+# ---------------------------------------------------------------------------
+
+def test_serve_archive_blocks_users_root(client, archive):
+    """/archive/users/ must return 404, not expose the directory."""
+    r = client.get("/archive/users")
+    assert r.status_code == 404
+
+
+def test_serve_archive_blocks_users_subpath(client, archive, registered_user):
+    """/archive/users/<uuid>/user.json must return 404."""
+    users_dir = webapp.STORAGE_ROOT / "users"
+    user_uuid = next(users_dir.iterdir()).name
+    r = client.get(f"/archive/users/{user_uuid}/user.json")
+    assert r.status_code == 404
+
+
+def test_serve_archive_allows_rss_feed(client, archive):
+    """/archive/rss.xml is still accessible (if the file exists)."""
+    (archive / "rss.xml").write_text("<rss/>")
+    r = client.get("/archive/rss.xml")
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Security: serve_transcript must block path traversal
+# ---------------------------------------------------------------------------
+
+def test_serve_transcript_blocks_dotdot_in_slug(client, archive):
+    """.. in channel_slug must not traverse above STORAGE_ROOT."""
+    r = client.get("/transcript/../something/meeting_id")
+    # Flask routes reject '..' segments in the URL; we get 404 either way
+    assert r.status_code in (400, 404)
+
+
+def test_serve_transcript_blocks_dotdot_in_meeting(client, archive):
+    """.. in meeting_id must not traverse above STORAGE_ROOT."""
+    # Create a sentinel transcript one level above the archive in tmp
+    sentinel = archive.parent / "transcript.txt"
+    sentinel.write_text("0s --> secret content\n")
+    try:
+        r = client.get(f"/transcript/alpha_city/..%2F..")
+        assert r.status_code in (400, 404)
+    finally:
+        sentinel.unlink(missing_ok=True)
+
+
+def test_serve_transcript_valid_route_still_works(client, archive):
+    """A legitimate transcript URL must continue to return 200."""
+    channel_dir = archive / "alpha_city"
+    meeting_dir = channel_dir / "2026-01-15_VID12345678"
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+    (meeting_dir / "transcript.txt").write_text("120s --> Hello world\n")
+    r = client.get("/transcript/alpha_city/2026-01-15_VID12345678")
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Security: login ?next= open-redirect prevention
+# ---------------------------------------------------------------------------
+
+def test_login_next_blocks_absolute_url(client, archive, registered_user):
+    """?next=https://evil.com must not redirect off-site after login."""
+    r = client.post(
+        "/login?next=https://evil.com",
+        data={"email": "test@example.com", "password": "testpassword123"},
+    )
+    assert r.status_code == 302
+    assert "evil.com" not in r.headers["Location"]
+
+
+def test_login_next_blocks_protocol_relative_url(client, archive, registered_user):
+    """?next=//evil.com must not redirect off-site after login."""
+    r = client.post(
+        "/login?next=//evil.com",
+        data={"email": "test@example.com", "password": "testpassword123"},
+    )
+    assert r.status_code == 302
+    assert "evil.com" not in r.headers["Location"]
+
+
+def test_login_next_allows_local_path(client, archive, registered_user):
+    """?next=/dashboard must redirect to that local path after login."""
+    r = client.post(
+        "/login?next=/dashboard",
+        data={"email": "test@example.com", "password": "testpassword123"},
+    )
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/dashboard")
