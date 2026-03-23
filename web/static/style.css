@@ -603,6 +603,7 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 
 .story-share {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
   margin-top: 0.75rem;
@@ -627,13 +628,14 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 
 .story-share button:hover,
 .story-share a:hover {
-  color: var(--text);
+  color: var(--bg);
+  background: var(--text);
   border-color: var(--text);
 }
 
 .share-delete-form { display: contents; }
-.share-delete { color: #dc2626; border-color: #fca5a5; margin-left: auto; }
-.share-delete:hover { color: #fff !important; background: #dc2626; border-color: #dc2626 !important; }
+.share-delete { color: #dc2626; border-color: #fca5a5; }
+.share-delete:hover { color: #fff !important; background: #dc2626 !important; border-color: #dc2626 !important; }
 
 .blog-empty {
   color: var(--muted);
