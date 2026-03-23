@@ -113,12 +113,6 @@ nav a {
 
 nav a:hover { text-decoration: underline; }
 
-.nav-user {
-  font-size: 0.9rem;
-  color: var(--muted);
-  text-decoration: none;
-}
-.nav-user:hover { color: var(--text); text-decoration: underline; }
 
 .nav-rss { display: flex; align-items: center; line-height: 0; }
 .nav-rss:hover { opacity: 0.75; }
@@ -650,7 +644,6 @@ button.btn-danger-sm:hover { background: #fee2e2; }
   border-color: var(--text);
 }
 
-.share-delete-form { display: inline-flex; align-items: stretch; padding: 0; margin: 0; border: none; }
 .share-delete { color: #dc2626; border-color: #fca5a5; }
 .share-delete:hover { color: #fff !important; background: #dc2626 !important; border-color: #dc2626 !important; }
 
