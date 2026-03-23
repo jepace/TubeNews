@@ -615,7 +615,6 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 .story-share {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
   flex-wrap: wrap;
   margin-top: 0.75rem;
   padding-top: 0.5rem;
@@ -633,8 +632,12 @@ button.btn-danger-sm:hover { background: #fee2e2; }
   cursor: pointer;
   text-decoration: none;
   line-height: 1.4;
+  white-space: nowrap;
+  flex-shrink: 0;
   appearance: none;
   -webkit-appearance: none;
+  /* margins instead of gap — gap in flex wasn't supported before iOS Safari 14.5 */
+  margin: 0.2rem 0.4rem 0 0;
 }
 
 .story-share button:hover,
