@@ -71,7 +71,8 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]
         # request_timeout — seconds before giving up on YouTube / Supadata calls.
         request_timeout = int(cfg.get("request_timeout", 15))
 
-    except Exception:
+    except Exception as exc:
+        logging.warning(f"Failed to load config; using defaults: {exc}")
         storage_root = base_dir / "archive"
         request_timeout = 15
 
@@ -668,7 +669,8 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
                         "meta": metadata,
                         "channel_name": channel_dir.name.replace("_", " "),
                     })
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
@@ -697,7 +699,8 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
                     entry["meta"].get("processed_at", time.time())
                 ).astimezone()
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
 
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
@@ -739,7 +742,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
             continue
         try:
             channel_info = json.loads(channel_json.read_text())
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {channel_json}: {exc}")
             continue
         channel_id = channel_info.get("channel_id")
         if channel_id not in subscribed:
@@ -756,7 +760,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     all_stories.append({"file": story_file, "meta": metadata,
                                         "channel_name": channel_name, "channel_id": channel_id})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
@@ -788,7 +793,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
                     entry["meta"].get("processed_at", time.time())
                 ).astimezone()
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
 
     return feed.rss_str(pretty=True)
@@ -840,7 +846,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
             continue
         try:
             channel_info = json.loads(channel_json.read_text())
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {channel_json}: {exc}")
             continue
         if channel_info.get("channel_id") not in subscribed:
             continue
@@ -856,7 +863,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name,
                                         "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
@@ -883,7 +891,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
     for entry in all_stories:
         try:
             story = parse_story_file(entry["file"])
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
         yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
         video_title = entry["meta"].get("video_title", "")
@@ -1019,7 +1028,8 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
                 continue
             try:
                 data = json.loads(user_json.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {uid_dir.name}: {exc}")
                 continue
             if channel_id not in data.get("channel_ids", []):
                 continue
@@ -1439,7 +1449,8 @@ def _main_body(args) -> None:
     run_log_path = STORAGE_ROOT / "run_log.json"
     try:
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Failed to load run log; starting fresh: {exc}")
         runs = []
     runs.append({
         "started_at": started_at,

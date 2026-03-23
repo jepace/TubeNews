@@ -11,6 +11,7 @@ Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -65,6 +66,7 @@ TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 try:
     _cfg = json.loads(CONFIG_FILE.read_text())
@@ -161,7 +163,8 @@ def _find_user_by_email(email: str) -> User | None:
             data = json.loads(user_json.read_text())
             if data.get("email", "").lower() == needle:
                 return User(user_json.parent, data)
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     return None
 
@@ -183,7 +186,8 @@ def _all_users() -> list[User]:
     for user_json in sorted(USERS_ROOT.glob("*/user.json")):
         try:
             users.append(User(user_json.parent, json.loads(user_json.read_text())))
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     return sorted(users, key=lambda u: u.name.lower())
 
@@ -381,8 +385,8 @@ def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
             try:
                 if json.loads(cj.read_text()).get("channel_id") == channel_id:
                     return d
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Skipping {d}: {exc}")
     return None
 
 
@@ -412,7 +416,8 @@ def _archive_channel_stats() -> list[dict]:
                     ignored += 1
                 elif status == "no_stories":
                     no_stories += 1
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meta_file}: {exc}")
                 continue
         stats.append({
             "channel_id": info.get("channel_id", ""),
@@ -455,7 +460,8 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
         raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
         stories = []
@@ -477,7 +483,8 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
                     "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
                 })
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {entry['file']}: {exc}")
                 continue
         return channel_name, stories
     return None, []
@@ -513,7 +520,8 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
                                 "channel_id": channel_id,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
     raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
     stories = []
@@ -538,7 +546,8 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                 "story_filename": entry["file"].name,
                 "processed_at": entry["meta"].get("processed_at", 0),
             })
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
     return stories
 
@@ -764,7 +773,8 @@ def serve_feed(token: str):
                 uid = user_json.parent.name
                 xml_bytes = build_user_feed_xml(data, base_url=_base_url(), user_id=uid)
                 return Response(xml_bytes, mimetype="application/rss+xml")
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     abort(404)
 
@@ -785,7 +795,8 @@ def serve_blog_public(token: str):
                 return render_template("blog.html", stories=stories, blog_name=blog_name,
                                        feed_path=f"/feed/{token}.xml",
                                        body_classes=_prefs_to_classes(data.get("preferences", {})))
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     abort(404)
 
@@ -1214,7 +1225,8 @@ def admin_all_stories():
                             "story_filename": story_file.name,
                             "processed_at": meta.get("processed_at", 0),
                         })
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Skipping {meeting_dir}: {exc}")
                     continue
     stories.sort(key=lambda s: s["processed_at"], reverse=True)
     return render_template("blog.html", stories=stories, blog_name="All Channels",

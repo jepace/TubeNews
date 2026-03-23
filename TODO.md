@@ -118,22 +118,21 @@ time in both `_get_user_stories()` and `build_user_feed_xml()`.  Old stories
 (written before topic tagging was added) always pass through unfiltered.
 No API cost increase — one Gemini call per video regardless of subscriber count.
 
+### Silent `except Exception:` blocks now log skips (March 2026)
+
+All bare `except Exception: continue` / `pass` blocks in file-scanning loops
+across `TubeNews.py` and `web/app.py` now capture the exception as `exc` and
+emit `logger.debug(f"Skipping {path}: {exc}")`.  One-off failures (config load,
+run-log load) use `logger.warning(...)` instead.  Intentionally silent fallbacks
+(graceful degradation on missing config keys, ntfy notification failures) were
+left unchanged.
+
 ---
 
 ## Known Issues / Future Hardening
 
 The following issues were identified in a QA sweep and deferred because they
 are low-risk in current usage or require larger refactoring to address cleanly.
-
-### Bare `except Exception:` blocks hide errors
-
-Several inner loops in `rebuild_aggregate_feed`, `rebuild_user_feed`, and
-`rebuild_user_blog` use `except Exception: continue` to skip corrupt story or
-metadata files.  The skip behaviour is correct, but the absence of logging
-makes it impossible to know which files were skipped or why.
-
-**Future fix:** Add `logger.debug(f"Skipping {path}: {exc}")` in each of these
-handlers so silent skips are at least visible in debug mode.
 
 ### Type hints use generic `dict` throughout
 
