@@ -19,7 +19,7 @@
         {% endif %}
         <a href="{{ url_for('serve_blog') }}">Blog</a>
         {% block nav_extra %}{% endblock %}
-        <a href="{{ url_for('dashboard') }}">{{ current_user.name }}{% if unseen_channel_count %} <span class="nav-badge">{{ unseen_channel_count }}</span>{% endif %}</a>
+        <a href="{{ url_for('admin_user', uid=current_user.get_id()) if current_user.is_admin else url_for('dashboard') }}">{{ current_user.name }}{% if unseen_channel_count %} <span class="nav-badge">{{ unseen_channel_count }}</span>{% endif %}</a>
         <a href="{{ url_for('logout') }}">Log out</a>
         <a href="/feed/{{ current_user.feed_token }}.xml" class="nav-rss" title="Subscribe via RSS">
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
