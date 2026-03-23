@@ -54,7 +54,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus  # noqa: E402
+from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus, rebuild_feed, rebuild_aggregate_feed  # noqa: E402
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -466,6 +466,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
                     "channel_name": entry["channel_name"],
                     "channel_slug": entry.get("channel_slug", ""),
                     "meeting_id": entry.get("meeting_id", ""),
+                    "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
                 })
             except Exception:
@@ -526,6 +527,7 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                 "channel_name": entry["channel_name"],
                 "channel_slug": entry.get("channel_slug", ""),
                 "meeting_id": entry.get("meeting_id", ""),
+                "story_filename": entry["file"].name,
                 "processed_at": entry["meta"].get("processed_at", 0),
             })
         except Exception:
@@ -1098,6 +1100,60 @@ def _get_supadata_balance() -> dict | None:
     return None
 
 
+@app.route("/admin/story/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_story_delete():
+    """Delete a single story .md file and rebuild the affected feeds."""
+    channel_slug = request.form.get("channel_slug", "").strip()
+    meeting_id   = request.form.get("meeting_id",   "").strip()
+    filename     = request.form.get("filename",      "").strip()
+
+    if not channel_slug or not meeting_id or not filename:
+        abort(400)
+    if not filename.endswith(".md") or not filename[0].isdigit():
+        abort(400)
+
+    # Path traversal guard — resolved path must stay inside STORAGE_ROOT.
+    try:
+        story_path = (STORAGE_ROOT / channel_slug / meeting_id / filename).resolve()
+        story_path.relative_to(STORAGE_ROOT.resolve())
+    except ValueError:
+        abort(400)
+
+    if not story_path.exists():
+        abort(404)
+
+    try:
+        story_title = parse_story_file(story_path).get("title", filename)
+    except Exception:
+        story_title = filename
+
+    story_path.unlink()
+
+    # Rebuild the per-channel feed and the aggregate feed.
+    channel_dir  = STORAGE_ROOT / channel_slug
+    channels_cfg = _load_channels()
+    channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+    if channel_info:
+        feed_cfg = next(
+            (ch for ch in channels_cfg if ch["channel_id"] == channel_info.get("channel_id")),
+            None,
+        )
+        if feed_cfg:
+            try:
+                rebuild_feed(channel_dir, feed_cfg)
+            except Exception:
+                pass
+    try:
+        rebuild_aggregate_feed(base_url=_base_url())
+    except Exception:
+        pass
+
+    flash(f'Story deleted: \u201c{story_title}\u201d', "info")
+    return redirect(request.referrer or url_for("admin_all_stories"))
+
+
 @app.route("/admin/feeds")
 @login_required
 @admin_required
@@ -1146,6 +1202,7 @@ def admin_all_stories():
                             "channel_name": channel_name,
                             "channel_slug": channel_dir.name,
                             "meeting_id": meeting_dir.name,
+                            "story_filename": story_file.name,
                             "processed_at": meta.get("processed_at", 0),
                         })
                 except Exception:
