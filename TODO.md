@@ -24,14 +24,14 @@ would run roughly 5× faster in theory.
 
 ### Race conditions to address before parallelizing
 
-**`archive/rss.xml` — the meta-feed (line ~809)**
-`rebuild_meta_feed()` is called inside the per-feed loop as soon as a channel
+**`archive/rss.xml` — the aggregate feed (line ~809)**
+`rebuild_aggregate_feed()` is called inside the per-feed loop as soon as a channel
 produces content. It reads *all* channel directories, then overwrites the
 single shared `archive/rss.xml`. Two threads finishing simultaneously would
 both invoke it concurrently, potentially interleaving reads with a partial
 write or clobbering each other's output.
 Fix: collect a `content_changed` flag per thread, then call
-`rebuild_meta_feed()` exactly once after all channel threads have joined.
+`rebuild_aggregate_feed()` exactly once after all channel threads have joined.
 
 **`ai_disabled` / `ai_rate_limited` flags (lines ~711, ~769, ~800–806)**
 These are plain `bool` variables. In a threaded scenario the check-then-act
@@ -65,7 +65,7 @@ per-video lock (keyed on video ID) or an atomic `mkdir` check would fix this.
 - **Videos within a single feed:** `ai_rate_limited` is a local variable
   propagated serially through the `process_feed` loop. Parallelizing
   intra-feed videos requires restructuring this state.
-- **`rebuild_meta_feed()`:** Its read-all-channels + write-one-file pattern
+- **`rebuild_aggregate_feed()`:** Its read-all-channels + write-one-file pattern
   makes it inherently a serial barrier operation; it should always run after
   all other work completes.
 
@@ -127,7 +127,7 @@ are low-risk in current usage or require larger refactoring to address cleanly.
 
 ### Bare `except Exception:` blocks hide errors
 
-Several inner loops in `rebuild_meta_feed`, `rebuild_user_feed`, and
+Several inner loops in `rebuild_aggregate_feed`, `rebuild_user_feed`, and
 `rebuild_user_blog` use `except Exception: continue` to skip corrupt story or
 metadata files.  The skip behaviour is correct, but the absence of logging
 makes it impossible to know which files were skipped or why.

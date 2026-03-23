@@ -8,7 +8,7 @@
 2. Fetches transcripts via the Supadata API
 3. Sends transcripts to Google Gemini AI with a journalistic prompt
 4. Saves AI-generated news stories as Markdown files
-5. Publishes per-channel RSS feeds and an aggregated regional meta-feed
+5. Publishes per-channel RSS feeds and an aggregated regional aggregate feed
 
 **Target use case:** Helping citizens stay informed about local government decisions without watching hours of footage.
 
@@ -70,7 +70,7 @@ YouTube Channel Pages (HTML scrape)
    rebuild_feed()      ──► archive/<channel>/rss.xml
          │
          ▼
-   rebuild_meta_feed() ──► archive/rss.xml  (all channels combined)
+   rebuild_aggregate_feed() ──► archive/rss.xml  (all channels combined)
 ```
 
 ### Key Design Decisions
@@ -80,7 +80,7 @@ YouTube Channel Pages (HTML scrape)
 - **Auto-catchup for new feeds:** When a channel is added for the first time, only the most recent video is processed; the rest are marked `ignored_too_old`.
 - **Transcript caching:** If `transcript.txt` already exists in a video directory, Supadata is not called again — AI runs on the cached transcript instead. This allows re-running AI analysis without consuming API quota.
 - **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), the session flag `ai_disabled` is set and all remaining videos skip the AI step.
-- **Shared story parser:** `parse_story_file()` is used by both `rebuild_feed()` and `rebuild_meta_feed()` to read the Markdown story format into a structured dict. Edit this function if the story file format changes.
+- **Shared story parser:** `parse_story_file()` is used by both `rebuild_feed()` and `rebuild_aggregate_feed()` to read the Markdown story format into a structured dict. Edit this function if the story file format changes.
 - **Per-user topic filtering:** Gemini assigns a `topics` list to each generated story (written as a `**Topics:**` line in the `.md` file). Users can set per-channel focus keywords in their profile; `_story_matches_focus()` filters stories at serve time in `_get_user_stories()` and `build_user_feed_xml()`. Stories without a topics line always pass through (backwards compatibility).
 - **Multiple focuses per user:** Users may enter up to 3 focus lines per channel subscription in the dashboard. At processing time, `_collect_channel_focuses()` reads all subscribers' `user.json` files to build the union of focuses for each channel (capped at `MAX_FOCUSES_PER_CHANNEL = 10`). Gemini is called once per unique focus. Stories from all focus passes are merged into the same meeting directory, deduplicated by title. `metadata.json` records `processed_focuses` so subsequent runs only call Gemini for newly added focuses.
 
@@ -116,10 +116,12 @@ YouTube Channel Pages (HTML scrape)
 
 ### RSS feed builders
 
+**Naming convention:** `build_*` functions return content (bytes or HTML) and never touch disk — the web app calls these directly to serve feeds and blog pages dynamically. `rebuild_*` functions write to disk and are called by the CLI/scraper to produce static files. `rebuild_user_feed` is a thin wrapper: it calls `build_user_feed_xml` and writes the result to disk.
+
 | Function | Description |
 |---|---|
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
-| `rebuild_meta_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
+| `rebuild_aggregate_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
 | `build_user_feed_xml(user, base_url)` | Builds and returns RSS feed XML bytes for a user's subscribed channels; does **not** write to disk |
 | `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `archive/users/<slug>/rss.xml` to disk |
 | `rebuild_user_blog(user, base_url)` | Generates `archive/users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
@@ -213,7 +215,7 @@ archive/
 │   ├── 2000-01-01_XXXXXXXXXXX/ # ignored_too_old stubs use 2000 date prefix
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
-└── rss.xml                     # Regional meta-feed (all channels)
+└── rss.xml                     # Regional aggregate feed (all channels)
 ```
 
 ### Story Markdown Format
@@ -263,7 +265,7 @@ Story body text in AP inverted pyramid style...
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `archive_dir` | No | Path to the archive directory (default: `archive/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point the archive at your web server's document root |
 | `request_timeout` | No | Seconds before giving up on YouTube scrape and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
-| `base_url` | No | Public URL of `archive/rss.xml`, used as the meta-feed self-link |
+| `base_url` | No | Public URL of `archive/rss.xml`, used as the aggregate feed self-link |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
@@ -289,7 +291,7 @@ pytest tests/ -v
 
 | File | Covers |
 |---|---|
-| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`), `_story_matches_focus`, `write_story_files`, the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_meta_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`), `_story_matches_focus`, `write_story_files`, the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
 | `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 
