@@ -315,6 +315,23 @@ def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[dict]) -> dict |
     return None
 
 
+def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
+    """Return the archive directory whose channel.json matches *channel_id*, or None."""
+    if not STORAGE_ROOT.is_dir():
+        return None
+    for d in STORAGE_ROOT.iterdir():
+        if not d.is_dir() or d.name == "users":
+            continue
+        cj = d / "channel.json"
+        if cj.exists():
+            try:
+                if json.loads(cj.read_text()).get("channel_id") == channel_id:
+                    return d
+            except Exception:
+                pass
+    return None
+
+
 def _archive_channel_stats() -> list[dict]:
     """Scan archive dirs and return per-channel processing stats."""
     stats = []
@@ -1047,10 +1064,38 @@ def admin_feed_edit(channel_id: str):
             if any(ch["channel_id"] == new_channel_id and i != idx for i, ch in enumerate(channels)):
                 flash("Another feed already uses that channel ID.", "error")
             else:
-                channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
-                _save_feeds(channels)
-                flash(f"Feed '{channel_name}' updated.", "success")
-                return redirect(url_for("admin_feeds"))
+                new_slug = slugify(channel_name)
+                rename_error = None
+                old_dir = _find_archive_dir_for_channel(channel_id)
+                if old_dir is not None and old_dir.name != new_slug:
+                    new_dir = STORAGE_ROOT / new_slug
+                    if old_dir.exists():
+                        if new_dir.exists():
+                            rename_error = (
+                                f"Archive directory '{new_slug}' already exists — "
+                                "rename the existing directory manually before saving."
+                            )
+                        else:
+                            try:
+                                old_dir.rename(new_dir)
+                            except OSError as exc:
+                                rename_error = f"Could not rename archive directory: {exc}"
+                if rename_error:
+                    flash(rename_error, "error")
+                else:
+                    # Update channel.json in the (possibly renamed) archive dir
+                    archive_dir = STORAGE_ROOT / new_slug
+                    if archive_dir.is_dir():
+                        try:
+                            (archive_dir / "channel.json").write_text(
+                                json.dumps({"channel_id": new_channel_id, "channel_name": channel_name})
+                            )
+                        except OSError:
+                            pass  # non-fatal; next rebuild_feed will overwrite it
+                    channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
+                    _save_feeds(channels)
+                    flash(f"Feed '{channel_name}' updated.", "success")
+                    return redirect(url_for("admin_feeds"))
         feed = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
         channel_id = new_channel_id
     return render_template("admin_feed.html", feed=feed, channel_id=channel_id)
