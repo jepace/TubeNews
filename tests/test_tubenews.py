@@ -1316,3 +1316,202 @@ def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
     _make_user_dir(users, "UCxxx", "housing, zoning")  # string, not list
     result = _collect_channel_focuses("UCxxx", "")
     assert "housing, zoning" in result
+
+
+# ---------------------------------------------------------------------------
+# process_feed() — end-to-end with mocked external APIs
+# ---------------------------------------------------------------------------
+
+def test_process_feed_processes_new_video(tmp_path, monkeypatch):
+    """process_feed must fetch a transcript, call Gemini, and write story files."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "VID_NEW_AAAA", "title": "Council Meeting", "date": yesterday, "is_live": False},
+    ])
+    monkeypatch.setattr(TubeNews, "fetch_transcript",
+                        lambda *a, **kw: "0:00 --> The council discussed housing.")
+    monkeypatch.setattr(TubeNews, "call_gemini_api", lambda *a, **kw: [
+        {"title": "Housing Plan Approved", "dateline": "CITY — Mar 20, 2026",
+         "content": "Body text.", "start_time_seconds": 0, "topics": ["housing"]},
+    ])
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "housing"}
+    content_changed, ai_rate_limited, stories_written = process_feed(
+        feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"}, None
+    )
+
+    assert stories_written == 1
+    assert content_changed
+    assert not ai_rate_limited
+
+    # Story file must exist on disk
+    story_files = list((tmp_path / "Test_Channel").glob("*/[0-9]*.md"))
+    assert len(story_files) == 1
+    assert "Housing Plan Approved" in story_files[0].read_text()
+
+    # metadata.json must record the video as processed
+    meta_files = list((tmp_path / "Test_Channel").glob("*/metadata.json"))
+    assert len(meta_files) == 1
+    meta = json.loads(meta_files[0].read_text())
+    assert meta["status"] == "processed"
+    assert meta["video_id"] == "VID_NEW_AAAA"
+
+
+def test_process_feed_skips_video_with_no_transcript(tmp_path, monkeypatch):
+    """When fetch_transcript returns None, the video must be skipped and no stories written."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "VID_NO_TRANS", "title": "Council Meeting", "date": yesterday, "is_live": False},
+    ])
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: None)
+    gemini_called = []
+    monkeypatch.setattr(TubeNews, "call_gemini_api",
+                        lambda *a, **kw: gemini_called.append(1) or [])
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    _, _, stories_written = process_feed(
+        feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"}, None
+    )
+
+    assert stories_written == 0
+    assert gemini_called == [], "Gemini must not be called when transcript is unavailable"
+
+
+def test_process_feed_propagates_ai_rate_limit(tmp_path, monkeypatch):
+    """When Gemini returns False (429), process_feed must set ai_rate_limited=True."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "VID_RATE_LIM", "title": "Council Meeting", "date": yesterday, "is_live": False},
+    ])
+    monkeypatch.setattr(TubeNews, "fetch_transcript",
+                        lambda *a, **kw: "0:00 --> Transcript text.")
+    monkeypatch.setattr(TubeNews, "call_gemini_api", lambda *a, **kw: False)  # 429
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    _, ai_rate_limited, stories_written = process_feed(
+        feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"}, None
+    )
+
+    assert ai_rate_limited
+    assert stories_written == 0
+
+
+def test_process_feed_gemini_no_stories_writes_no_stories_metadata(tmp_path, monkeypatch):
+    """When Gemini returns an empty list, metadata must be written with status 'no_stories'."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "VID_NO_STORY", "title": "Council Meeting", "date": yesterday, "is_live": False},
+    ])
+    monkeypatch.setattr(TubeNews, "fetch_transcript",
+                        lambda *a, **kw: "0:00 --> Transcript text.")
+    monkeypatch.setattr(TubeNews, "call_gemini_api", lambda *a, **kw: [])  # no stories
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    _, _, stories_written = process_feed(
+        feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"}, None
+    )
+
+    assert stories_written == 0
+    meta_files = list((tmp_path / "Test_Channel").glob("*/metadata.json"))
+    assert len(meta_files) == 1
+    assert json.loads(meta_files[0].read_text())["status"] == "no_stories"
+
+
+# ---------------------------------------------------------------------------
+# Corrupt-file resilience
+# ---------------------------------------------------------------------------
+
+def test_rebuild_feed_skips_corrupt_story_file(tmp_path):
+    """rebuild_feed must produce a valid feed even when a story .md file is corrupt."""
+    feed_dir = tmp_path / "Test_Channel"
+    meeting_dir = _make_meeting(feed_dir, "2026-03-01", "VID_GOOD_001", "Good Meeting")
+    _write_story(meeting_dir, "01_Good_Story.md", "Good Story", "CITY — Mar 1, 2026", "Body.", 60)
+
+    # Second meeting with a corrupt story file (binary garbage)
+    meeting_dir2 = _make_meeting(feed_dir, "2026-03-02", "VID_CORRUPT_002", "Bad Meeting")
+    (meeting_dir2 / "01_Corrupt.md").write_bytes(b"\xff\xfe corrupt \x00\x01")
+
+    feed_cfg = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    rebuild_feed(feed_dir, feed_cfg)  # must not raise
+
+    rss = (feed_dir / "rss.xml").read_text()
+    assert "Good Story" in rss
+
+
+def test_rebuild_aggregate_feed_skips_corrupt_metadata(tmp_path, monkeypatch):
+    """rebuild_aggregate_feed must skip directories with corrupt metadata.json."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    # Good channel
+    good_dir = _make_meeting(tmp_path / "good_channel", "2026-03-01", "VID_GOOD", "Good Meeting")
+    _write_story(good_dir, "01_Story.md", "Good Story", "CITY — Mar 1, 2026", "Body.", 60)
+
+    # Channel with corrupt metadata.json
+    bad_meeting = tmp_path / "bad_channel" / "2026-03-01_VID_BAD"
+    bad_meeting.mkdir(parents=True)
+    (bad_meeting / "metadata.json").write_bytes(b"}{not valid json}")
+
+    rebuild_aggregate_feed()  # must not raise
+    rss = (tmp_path / "rss.xml").read_text()
+    assert "Good Story" in rss
+
+
+def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
+    """build_user_feed_xml must skip channels whose channel.json is unreadable."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    # Good channel
+    good_dir = _setup_channel(tmp_path, "good_channel", "UC_GOOD_ID", "Good Channel")
+
+    # Channel with corrupt channel.json (build_user_feed_xml reads it to match subscriptions)
+    bad_dir = tmp_path / "bad_channel"
+    bad_dir.mkdir()
+    (bad_dir / "channel.json").write_bytes(b"}{not valid json}")
+    meeting = bad_dir / "2026-03-01_VID_BAD"
+    meeting.mkdir()
+    (meeting / "metadata.json").write_text(json.dumps({
+        "video_id": "VID_BAD", "video_title": "Bad", "status": "processed",
+        "processed_at": int(time.time()),
+    }))
+    _write_story(meeting, "01_Bad.md", "Bad Story", "CITY — Mar 1, 2026", "Body.", 60)
+
+    user = {"name": "Alice", "channel_ids": ["UC_GOOD_ID"]}
+    result = build_user_feed_xml(user)  # must not raise
+    assert b"Good Channel" in result
+    assert b"Bad Story" not in result
+
+
+def test_rebuild_user_blog_skips_corrupt_story_file(tmp_path, monkeypatch):
+    """rebuild_user_blog must produce a page even when a story .md file is corrupt."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    channel_dir = _setup_channel(tmp_path, "alpha_city", "UC_ALPHA_ID", "Alpha City Council")
+
+    # Add a corrupt story alongside the good one
+    good_meeting = next(channel_dir.glob("*/"))
+    (good_meeting / "02_Corrupt.md").write_bytes(b"\xff\xfe garbage \x00")
+
+    user = {"name": "Alice", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-xyz"}
+    rebuild_user_blog(user)  # must not raise
+
+    html = (tmp_path / "users" / "Alice" / "index.html").read_text()
+    assert "Story 1 from Alpha City Council" in html

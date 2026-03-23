@@ -667,26 +667,30 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
             continue
 
         for story_file in sorted(meeting_dir.glob("[0-9]*.md")):
-            story = parse_story_file(story_file)
-            feed_entry = feed.add_entry()
-            feed_entry.id(story["content_hash"])
-            feed_entry.title(f"{story['title']} | {metadata.get('video_title', 'Video')}")
-            feed_entry.link(
-                href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
-            )
-            yt_url = f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
-            video_title = metadata.get("video_title", "")
-            feed_entry.content(
-                f"<h2>{story['title']}</h2>"
-                f"<p><strong>{story['dateline']}</strong></p>"
-                f"<p><em>{video_title}</em> &mdash; "
-                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
-                f"<br>{story['body_html']}",
-                type="html",
-            )
-            feed_entry.published(
-                datetime.fromtimestamp(metadata["processed_at"]).astimezone()
-            )
+            try:
+                story = parse_story_file(story_file)
+                feed_entry = feed.add_entry()
+                feed_entry.id(story["content_hash"])
+                feed_entry.title(f"{story['title']} | {metadata.get('video_title', 'Video')}")
+                feed_entry.link(
+                    href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
+                )
+                yt_url = f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
+                video_title = metadata.get("video_title", "")
+                feed_entry.content(
+                    f"<h2>{story['title']}</h2>"
+                    f"<p><strong>{story['dateline']}</strong></p>"
+                    f"<p><em>{video_title}</em> &mdash; "
+                    f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
+                    f"<br>{story['body_html']}",
+                    type="html",
+                )
+                feed_entry.published(
+                    datetime.fromtimestamp(metadata["processed_at"]).astimezone()
+                )
+            except Exception as exc:
+                logger.debug(f"Skipping {story_file}: {exc}")
+                continue
 
     feed.rss_file(feed_dir / "rss.xml", pretty=True)
     (feed_dir / "channel.json").write_text(
