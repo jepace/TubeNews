@@ -974,42 +974,24 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
 MAX_FOCUSES_PER_CHANNEL = 10
 
 
-def _needs_processing(video_id: str, feed_dir: Path, focuses: list[str]) -> bool:
-    """Return True if *video_id* requires (re)processing for any of *focuses*.
+def _needs_processing(video_id: str, feed_dir: Path) -> bool:
+    """Return True if *video_id* needs processing (no ``metadata.json`` exists for it).
 
     A video needs processing when:
 
     - Its archive directory does not exist yet (new video).
     - The directory exists but has no ``metadata.json`` (transcript cached but
-      AI step failed — recovery path).
-    - ``metadata.json`` exists and contains a ``processed_focuses`` list that
-      is missing one or more of the current *focuses*.
+      the AI step failed on a previous run — recovery path).
 
-    Old ``metadata.json`` files that pre-date focus tracking (no
-    ``processed_focuses`` key) are treated as fully processed so that existing
-    archives are not unexpectedly re-run when the feature is first deployed.
+    A video with any ``metadata.json`` (regardless of ``processed_focuses``) is
+    considered done and will not be reprocessed.  New focus strings only apply
+    to newly discovered videos going forward.
     """
-    existing = next(
-        (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(video_id)),
-        None,
+    return not any(
+        d.name.endswith(video_id)
+        for d in feed_dir.iterdir()
+        if d.is_dir() and (d / "metadata.json").exists()
     )
-    if not existing:
-        return True
-    meta_file = existing / "metadata.json"
-    if not meta_file.exists():
-        return True  # transcript cached but AI failed previously
-    try:
-        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-    except Exception:
-        return True
-    if meta.get("status") == "ignored_too_old":
-        return False
-    processed_focuses = meta.get("processed_focuses")
-    if processed_focuses is None:
-        # Pre-feature metadata — leave it alone
-        return False
-    done = set(processed_focuses)
-    return any(f not in done for f in focuses)
 
 
 def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
@@ -1139,39 +1121,10 @@ def process_video(
     if ai_disabled:
         return "skipped", 0
 
-    # Determine which focuses still need a Gemini call.  When metadata.json
-    # already exists (incremental run for new focuses), only the missing ones
-    # are processed and their stories appended.  When metadata.json is absent
-    # (new video or recovery path) all focuses run and any stale partial
-    # story files are cleared first.
-    meta_file = meeting_dir / "metadata.json"
-    if meta_file.exists():
-        try:
-            existing_meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except Exception:
-            existing_meta = {}
-        already_done: set[str] = set(existing_meta.get("processed_focuses") or [])
-        new_focuses = [f for f in focuses if f not in already_done]
-        existing_story_count = len(list(meeting_dir.glob("[0-9]*.md")))
-        seen_titles: set[str] = set()
-        for sf in meeting_dir.glob("[0-9]*.md"):
-            parsed = parse_story_file(sf)
-            if parsed:
-                seen_titles.add(parsed["title"])
-        clear_stories = False
-    else:
-        already_done = set()
-        new_focuses = focuses
-        existing_story_count = 0
-        seen_titles = set()
-        clear_stories = True  # remove any partial files from a previous failed run
-
-    if not new_focuses:
-        return "skipped", 0
-
-    # Call Gemini once per new focus, collecting deduplicated stories.
-    new_stories: list = []
-    for focus in new_focuses:
+    # Call Gemini once per focus, deduplicating stories by title across passes.
+    seen_titles: set[str] = set()
+    all_stories: list = []
+    for focus in focuses:
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
         result = call_gemini_api(
@@ -1189,29 +1142,29 @@ def process_video(
             title = story.get("title", "")
             if title not in seen_titles:
                 seen_titles.add(title)
-                new_stories.append(story)
+                all_stories.append(story)
 
-    if new_stories:
-        write_story_files(
-            new_stories, meeting_dir, video_id,
-            clear_existing=clear_stories,
-            start_index=existing_story_count + 1,
-        )
+    if all_stories:
+        write_story_files(all_stories, meeting_dir, video_id)
+        metadata = {
+            "video_id": video_id,
+            "video_title": video_title,
+            "status": "processed",
+            "processed_at": time.time(),
+            "processed_focuses": sorted(focuses),
+        }
+        (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
+        return "content_written", len(all_stories)
 
-    total_story_count = existing_story_count + len(new_stories)
-    all_processed_focuses = sorted(already_done | set(new_focuses))
-    status = "processed" if total_story_count > 0 else "no_stories"
+    # Gemini returned no stories for any focus.
     metadata = {
         "video_id": video_id,
         "video_title": video_title,
-        "status": status,
+        "status": "no_stories",
         "processed_at": time.time(),
-        "processed_focuses": all_processed_focuses,
+        "processed_focuses": sorted(focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-
-    if new_stories:
-        return "content_written", len(new_stories)
     return "skipped", 0
 
 
@@ -1262,9 +1215,8 @@ def process_feed(
     all_ids = [v["id"] for v in all_videos]
     video_meta = {v["id"]: v for v in all_videos}
 
-    # Videos that need processing: new ones (no metadata.json) plus any that
-    # have been processed before but are missing one or more current focuses.
-    unprocessed = [v for v in all_videos if _needs_processing(v["id"], feed_dir, focuses)]
+    # Videos without metadata.json — new or in recovery (transcript cached, AI failed).
+    unprocessed = [v for v in all_videos if _needs_processing(v["id"], feed_dir)]
 
     if unprocessed:
         logger.info(f"{channel_name}: TubeNews: Found {len(unprocessed)} new video(s)")

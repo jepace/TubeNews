@@ -496,6 +496,7 @@ button[type="submit"]:hover,
   text-decoration: none;
   white-space: nowrap;
 }
+.btn-sm:visited { color: #fff; }
 .btn-sm:hover { background: var(--accent-hover); }
 
 .btn-danger {

@@ -1212,48 +1212,28 @@ from TubeNews import _needs_processing, STORAGE_ROOT
 
 def test_needs_processing_no_dir(tmp_path):
     """No archive directory → needs processing."""
-    assert _needs_processing("VID123", tmp_path, ["housing"]) is True
+    assert _needs_processing("VID123", tmp_path) is True
 
 def test_needs_processing_no_metadata(tmp_path):
     """Dir exists with transcript but no metadata → recovery path."""
     d = tmp_path / "2026-01-01_VID123"
     d.mkdir()
     (d / "transcript.txt").write_text("transcript")
-    assert _needs_processing("VID123", tmp_path, ["housing"]) is True
+    assert _needs_processing("VID123", tmp_path) is True
 
 def test_needs_processing_ignored_too_old(tmp_path):
     """ignored_too_old status → never reprocess."""
     d = tmp_path / "2000-01-01_VID123"
     d.mkdir()
     (d / "metadata.json").write_text(json.dumps({"status": "ignored_too_old"}))
-    assert _needs_processing("VID123", tmp_path, ["housing"]) is False
+    assert _needs_processing("VID123", tmp_path) is False
 
-def test_needs_processing_old_metadata_no_processed_focuses(tmp_path):
-    """Old metadata without processed_focuses → treat as done (no reprocess)."""
+def test_needs_processing_metadata_exists(tmp_path):
+    """Any metadata.json present → skip (the past is past)."""
     d = tmp_path / "2026-01-01_VID123"
     d.mkdir()
     (d / "metadata.json").write_text(json.dumps({"status": "processed", "video_id": "VID123"}))
-    assert _needs_processing("VID123", tmp_path, ["housing"]) is False
-
-def test_needs_processing_all_focuses_done(tmp_path):
-    """All current focuses already in processed_focuses → skip."""
-    d = tmp_path / "2026-01-01_VID123"
-    d.mkdir()
-    (d / "metadata.json").write_text(json.dumps({
-        "status": "processed",
-        "processed_focuses": ["housing", "transit"],
-    }))
-    assert _needs_processing("VID123", tmp_path, ["housing", "transit"]) is False
-
-def test_needs_processing_new_focus_added(tmp_path):
-    """A new focus not in processed_focuses → needs processing."""
-    d = tmp_path / "2026-01-01_VID123"
-    d.mkdir()
-    (d / "metadata.json").write_text(json.dumps({
-        "status": "processed",
-        "processed_focuses": ["housing"],
-    }))
-    assert _needs_processing("VID123", tmp_path, ["housing", "transit"]) is True
+    assert _needs_processing("VID123", tmp_path) is False
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,17 @@
     <h1>Feeds <span class="badge">{{ channels|length }}</span></h1>
   </div>
 
-  <div style="margin-bottom: 1.25rem;">
+  <div style="margin-bottom: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
     <a href="{{ url_for('admin_feed_add') }}" class="btn-sm">+ Add feed</a>
+    {% if supadata %}
+      {% set remaining = supadata.maxCredits - supadata.usedCredits %}
+      {% set pct = (supadata.usedCredits / supadata.maxCredits * 100) | round(1) if supadata.maxCredits else 0 %}
+      <span class="muted" style="font-size: 0.85rem;">
+        Supadata ({{ supadata.plan }}):
+        <strong>{{ remaining | int }}</strong> credits remaining
+        ({{ supadata.usedCredits | int }} / {{ supadata.maxCredits | int }} used — {{ pct }}%)
+      </span>
+    {% endif %}
   </div>
 
   {% if channels %}

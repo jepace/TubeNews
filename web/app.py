@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 import uuid
+
+import requests
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -1026,9 +1028,35 @@ def admin_run_now():
 @app.route("/admin/feeds")
 @login_required
 @admin_required
+def _get_supadata_balance() -> dict | None:
+    """Fetch credit usage from the Supadata /v1/me endpoint.
+
+    Returns a dict with ``plan``, ``usedCredits``, ``maxCredits`` on success,
+    or ``None`` if the key is not configured or the request fails.
+    """
+    key = _load_config().get("supadata_api_key", "")
+    if not key:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.supadata.ai/v1/me",
+            headers={"x-api-key": key},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/admin/feeds")
+@login_required
+@admin_required
 def admin_feeds():
     channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
-    return render_template("admin_feeds.html", channels=channels)
+    balance = _get_supadata_balance()
+    return render_template("admin_feeds.html", channels=channels, supadata=balance)
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])
