@@ -1457,6 +1457,32 @@ def _main_body(args) -> None:
     if ntfy_topic and total_stories > 0:
         _send_ntfy(ntfy_topic, total_stories, feed_results, started_at)
 
+    _cache_supadata_balance(config)
+
+
+def _cache_supadata_balance(config: dict) -> None:
+    """Fetch Supadata credit usage and cache it to ``archive/supadata_balance.json``.
+
+    Called once at the end of each ``main()`` run so the web UI can read the
+    cached result instantly instead of making a live API call on every page load.
+    Silently skips if the API key is absent or the request fails.
+    """
+    key = config.get("supadata_api_key", "")
+    if not key:
+        return
+    try:
+        resp = requests.get(
+            "https://api.supadata.ai/v1/me",
+            headers={"x-api-key": key},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            (STORAGE_ROOT / "supadata_balance.json").write_text(
+                json.dumps(resp.json())
+            )
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     main()

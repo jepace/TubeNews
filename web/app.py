@@ -17,7 +17,6 @@ import sys
 import time
 import uuid
 
-import requests
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -1076,25 +1075,19 @@ def admin_run_now():
 
 
 def _get_supadata_balance() -> dict | None:
-    """Fetch credit usage from the Supadata /v1/me endpoint.
+    """Read cached Supadata credit usage from ``archive/supadata_balance.json``.
 
-    Returns a dict with ``plan``, ``usedCredits``, ``maxCredits`` on success,
-    or ``None`` if the key is not configured or the request fails.
+    The file is written by ``TubeNews._cache_supadata_balance()`` at the end of
+    each scraper run, so the web UI never blocks on a live API call.
+    Returns ``None`` if the file does not exist or cannot be parsed.
     """
-    key = _load_config().get("supadata_api_key", "")
-    if not key:
+    balance_path = STORAGE_ROOT / "supadata_balance.json"
+    if not balance_path.exists():
         return None
     try:
-        resp = requests.get(
-            "https://api.supadata.ai/v1/me",
-            headers={"x-api-key": key},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            return resp.json()
+        return json.loads(balance_path.read_text())
     except Exception:
-        pass
-    return None
+        return None
 
 
 @app.route("/admin/story/delete", methods=["POST"])
