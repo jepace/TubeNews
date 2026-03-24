@@ -148,12 +148,11 @@ nav a:hover { text-decoration: underline; }
 
   #main-nav.nav-open { display: flex; }
 
-  #main-nav .nav-rss { padding: 0.1rem 0; }
 }
 
 
-.nav-rss { display: flex; align-items: center; line-height: 0; }
-.nav-rss:hover { opacity: 0.75; }
+.nav-profile { display: inline-flex; align-items: center; gap: 0.35rem; }
+.nav-profile-icon { opacity: 0.6; flex-shrink: 0; }
 
 .nav-badge {
   display: inline-flex;
@@ -313,25 +312,6 @@ button[type="submit"]:hover,
 
 .form-footer a { color: var(--accent); }
 
-/* Dashboard */
-.dashboard h1 {
-  font-size: 1.4rem;
-  margin-bottom: 1.5rem;
-}
-
-.dashboard section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.dashboard h2 {
-  font-size: 1rem;
-  font-weight: 600;
-  margin-bottom: 1rem;
-}
 
 .feed-url-row {
   display: flex;

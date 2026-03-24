@@ -1,15 +1,128 @@
 {% extends "base.html" %}
-{% block title %}Account Settings — TubeNews{% endblock %}
+{% block title %}{{ current_user.name }} — TubeNews{% endblock %}
 
 {% block content %}
 <div class="admin">
-  <h1>Account Settings</h1>
+  <h1>{{ current_user.name }}</h1>
 
-  <!-- ── Account info ──────────────────────────────────────────── -->
+  <!-- ── Sharing URLs ───────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Sharing URLs</h2>
+    {% if current_user.channel_ids %}
+      <p>RSS feed — add to your RSS reader:</p>
+      <div class="feed-url-row">
+        <input type="text" id="feed-url" class="feed-url-input" value="{{ feed_url }}" readonly>
+        <button type="button" onclick="copyUrl('feed-url', this)" class="btn-copy">Copy</button>
+      </div>
+      {% if blog_url %}
+        <p style="margin-top:1rem">Blog — share a readable view in the browser:</p>
+        <div class="feed-url-row">
+          <input type="text" id="blog-url" class="feed-url-input" value="{{ blog_url }}" readonly>
+          <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
+        </div>
+      {% endif %}
+    {% else %}
+      <p class="muted">Subscribe to at least one channel below to generate your sharing URLs.</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('account_rotate_token') }}"
+          class="inline-form" onsubmit="return confirm('Rotate the feed token? Your current RSS and blog URLs will stop working.')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-danger-sm" style="margin-top:0.75rem;">Rotate token</button>
+    </form>
+  </section>
+
+  <!-- ── Channels ───────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Channels</h2>
+    {% if channels %}
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <div class="select-all-row">
+          <button type="button" class="btn-select-all" id="btn-select-all">Select all</button>
+          <button type="button" class="btn-select-all" id="btn-unselect-all">Unselect all</button>
+        </div>
+
+        <div class="channel-list" id="channel-list">
+          {% for ch in channels %}
+            <div class="channel-row">
+              <div class="channel-row-top">
+                <label class="checkbox-label">
+                  <input type="checkbox" name="channel_ids" value="{{ ch.channel_id }}"
+                         {% if ch.channel_id in subscribed %}checked{% endif %}
+                         class="channel-checkbox">
+                  {{ ch.channel_name }}
+                </label>
+                <a href="{{ url_for('channel_blog', channel_id=ch.channel_id) }}" class="channel-browse" title="Browse stories">Browse</a>
+              </div>
+              <div class="channel-focus-row" {% if ch.channel_id not in subscribed %}style="display:none"{% endif %}>
+                <textarea name="focus_{{ ch.channel_id }}" rows="3"
+                          class="focus-input" autocomplete="off"
+                          placeholder="One focus per line (max 3 — processed separately by AI)&#10;e.g. housing, zoning, permits&#10;e.g. transportation, roads, transit"
+                >{{ channel_focus.get(ch.channel_id) | focuses_text }}</textarea>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+
+        <div class="form-row" style="margin-top:1rem;">
+          <label for="blog_name">Blog name <span class="hint">(optional — shown as the page title)</span></label>
+          <input type="text" id="blog_name" name="blog_name"
+                 value="{{ current_user._data.get('blog_name', '') }}"
+                 placeholder="TubeNews — {{ current_user.name }}">
+        </div>
+
+        <button type="submit" class="btn-save">Subscribe</button>
+      </form>
+    {% else %}
+      <p class="muted">No channels are configured in TubeNews.json yet.</p>
+    {% endif %}
+  </section>
+
+  <!-- ── Display ────────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Display</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="prefs">
+
+      <div class="form-row">
+        <label>Text size</label>
+        <div class="radio-group">
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="normal"
+                   {% if prefs.get('font_size', 'normal') == 'normal' %}checked{% endif %}>
+            Normal
+          </label>
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="large"
+                   {% if prefs.get('font_size') == 'large' %}checked{% endif %}>
+            Large
+          </label>
+          <label class="checkbox-label">
+            <input type="radio" name="font_size" value="larger"
+                   {% if prefs.get('font_size') == 'larger' %}checked{% endif %}>
+            Largest
+          </label>
+        </div>
+      </div>
+
+      <label class="checkbox-label" style="margin-top:0.5rem;">
+        <input type="checkbox" name="dark_mode"
+               {% if prefs.get('dark_mode') %}checked{% endif %}>
+        Dark mode
+      </label>
+
+      <button type="submit" class="btn-save">Save display preferences</button>
+    </form>
+  </section>
+
+  <!-- ── Account info ──────────────────────────────────────── -->
   <section class="admin-section">
     <h2>Account info</h2>
-    <form method="post" action="{{ url_for('account') }}">
+    <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="info">
       <div class="form-row">
         <label for="name">Display name</label>
         <input type="text" id="name" name="name" value="{{ current_user.name }}" required>
@@ -18,15 +131,11 @@
         <label for="email">Email</label>
         <input type="email" id="email" name="email" value="{{ current_user.email }}" required>
       </div>
-      <div class="form-row">
-        <label for="current_password_info">Current password <span class="hint">(required to save changes)</span></label>
-        <input type="password" id="current_password_info" name="current_password" required autocomplete="current-password">
-      </div>
       <button type="submit">Save info</button>
     </form>
   </section>
 
-  <!-- ── Change password ───────────────────────────────────────── -->
+  <!-- ── Change password ───────────────────────────────────── -->
   <section class="admin-section">
     <h2>Change password</h2>
     <form method="post" action="{{ url_for('account_password') }}">
@@ -43,26 +152,13 @@
     </form>
   </section>
 
-  <!-- ── RSS feed & blog URLs ──────────────────────────────────── -->
+  <!-- ── Log out ───────────────────────────────────────────── -->
   <section class="admin-section">
-    <h2>RSS feed URL</h2>
-    <div class="feed-url-row">
-      <input type="text" class="feed-url-input" id="feed-url" value="{{ feed_url }}" readonly>
-      <button type="button" onclick="copyUrl('feed-url', this)" class="btn-copy">Copy</button>
-    </div>
-    <h2 style="margin-top:1rem;">Blog URL</h2>
-    <div class="feed-url-row">
-      <input type="text" class="feed-url-input" id="blog-url" value="{{ blog_url }}" readonly>
-      <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
-    </div>
-    <form method="post" action="{{ url_for('account_rotate_token') }}"
-          class="inline-form" onsubmit="return confirm('Rotate the feed token? Your current RSS and blog URLs will stop working.')">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn-danger-sm" style="margin-top:0.75rem;">Rotate token</button>
-    </form>
+    <h2>Log out</h2>
+    <a href="{{ url_for('logout') }}" class="btn-danger-sm">Log out of TubeNews</a>
   </section>
 
-  <!-- ── Delete account ────────────────────────────────────────── -->
+  <!-- ── Delete account ────────────────────────────────────── -->
   <section class="admin-section danger-zone">
     <h2>Delete account</h2>
     <p class="muted">Permanently removes your account and all generated feed files.
@@ -84,6 +180,24 @@
 </div>
 
 <script>
+  const checkboxes = document.querySelectorAll('.channel-checkbox');
+
+  function updateFocusVisibility(cb) {
+    const focusRow = cb.closest('.channel-row').querySelector('.channel-focus-row');
+    if (focusRow) focusRow.style.display = cb.checked ? '' : 'none';
+  }
+
+  checkboxes.forEach(cb => {
+    cb.addEventListener('change', () => updateFocusVisibility(cb));
+  });
+
+  document.getElementById('btn-select-all')?.addEventListener('click', () => {
+    checkboxes.forEach(cb => { cb.checked = true; updateFocusVisibility(cb); });
+  });
+  document.getElementById('btn-unselect-all')?.addEventListener('click', () => {
+    checkboxes.forEach(cb => { cb.checked = false; updateFocusVisibility(cb); });
+  });
+
   function copyUrl(inputId, btn) {
     const input = document.getElementById(inputId);
     function onCopied() {

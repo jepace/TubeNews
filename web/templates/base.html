@@ -17,19 +17,15 @@
           <a href="{{ url_for('admin_users') }}">Users</a>
           <a href="{{ url_for('admin_feeds') }}">Feeds</a>
           <a href="{{ url_for('admin_runs') }}">Runs</a>
-        {% else %}
-          <a href="{{ url_for('dashboard') }}">Dashboard{% if unseen_channel_count %} <span class="nav-badge">{{ unseen_channel_count }}</span>{% endif %}</a>
         {% endif %}
         <a href="{{ url_for('serve_blog') }}">Blog</a>
         {% block nav_extra %}{% endblock %}
-        <a href="{{ url_for('admin_user', uid=current_user.get_id()) if current_user.is_admin else url_for('account') }}">{{ current_user.name }}</a>
-        <a href="{{ url_for('logout') }}">Log out</a>
-        <a href="/feed/{{ current_user.feed_token }}.xml" class="nav-rss" title="Subscribe via RSS">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="3" cy="13" r="2" fill="#f26522"/>
-            <path fill="#f26522" d="M1 5a8 8 0 0 1 8 8H7a6 6 0 0 0-6-6V5z"/>
-            <path fill="#f26522" d="M1 1a12 12 0 0 1 12 12h-2A10 10 0 0 0 1 3V1z"/>
+        <a href="{{ url_for('admin_user', uid=current_user.get_id()) if current_user.is_admin else url_for('account') }}" class="nav-profile">
+          <svg class="nav-profile-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+            <circle cx="12" cy="8" r="4"/>
+            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
           </svg>
+          {{ current_user.name }}{% if unseen_channel_count and not current_user.is_admin %} <span class="nav-badge">{{ unseen_channel_count }}</span>{% endif %}
         </a>
       {% else %}
         <a href="{{ url_for('login') }}">Log in</a>
