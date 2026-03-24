@@ -98,7 +98,7 @@ Defined at the top of `TubeNews.py` (and importable into `web/app.py`):
 | `GeminiStory` | `title`, `dateline`, `content` (`str`), `start_time_seconds` (`int`), `topics` (`list[str]`) | `call_gemini_api()` return type; `write_story_files()` input |
 | `ParsedStory` | `title`, `dateline`, `body_html` (`str`), `start_seconds` (`int`), `topics` (`list[str]`), `content_hash` (`str`), `user_ids` (`list[str]`) | `parse_story_file()` return type; imported by `web/app.py` |
 | `MetadataDict` | `video_id`, `video_title`, `status`, `processed_at`, `processed_focuses` (`total=False`) | Internal; represents `metadata.json` content |
-| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter |
+| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter. Each run record written to `run_log.json` also includes a top-level `"pid"` field (`int`, `os.getpid()`) so the web UI can link to `archive/_run_logs/run-<pid>.log`. |
 
 Defined in `web/app.py`:
 
@@ -241,8 +241,12 @@ archive/
 │   ├── 2000-01-01_XXXXXXXXXXX/ # ignored_too_old stubs use 2000 date prefix
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
+├── _run_logs/                  # Per-run stdout/stderr logs (reserved — leading _ prevents slug collision)
+│   └── run-<pid>.log           # Log file for a single TubeNews.py run (named by PID)
 └── rss.xml                     # Regional aggregate feed (all channels)
 ```
+
+**Reserved directory naming convention:** Directories whose names start with `_` are reserved for internal use (e.g., `_run_logs`). Because `slugify()` strips leading underscores, no channel name can produce a slug that starts with `_`, so there is no namespace collision risk. All archive scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive_channel_stats`, etc.) skip directories whose names start with `_`.
 
 ### Story Markdown Format
 
@@ -490,6 +494,9 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config |
 | GET/POST | `/admin/feeds/<channel_id>/edit` | `admin_feed_edit` | Edit a channel in config; renames the archive directory when `channel_name` changes so the back catalog is preserved |
 | POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config |
+| GET | `/admin/runs` | `admin_runs` | Run history; shows per-run log links and a "View log" link for the currently-running process |
+| POST | `/admin/run-now` | `admin_run_now` | Launch a manual TubeNews.py run; stdout/stderr redirected to `archive/_run_logs/run-<pid>.log` |
+| GET | `/admin/run-log/<int:pid>` | `admin_run_log` | Stream the captured log for the run with the given PID; auto-refreshes while that PID holds the lock |
 | GET | `/admin/blog` | `admin_all_stories` | Blog view of all stories from all channels — the HTML counterpart to `archive/rss.xml`; links to that aggregate feed in the sub-header |
 | POST | `/admin/story/delete` | `admin_story_delete` | Delete a single story `.md` file; rebuilds the per-channel and aggregate feeds; only accepts numbered `.md` filenames (path traversal guarded) |
 

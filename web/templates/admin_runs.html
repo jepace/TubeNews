@@ -33,6 +33,9 @@
         <button type="submit" class="btn-save">Run Now</button>
       </form>
     {% endif %}
+    {% if current_run_pid %}
+      <a href="{{ url_for('admin_run_log', pid=current_run_pid) }}" style="font-size:0.9rem;">View log</a>
+    {% endif %}
   </div>
 
   {% if supadata %}
@@ -59,6 +62,7 @@
         <th>AI</th>
         <th>Transcripts</th>
         <th>Channels</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -92,9 +96,14 @@
             <span class="muted">No new stories</span>
           {% endif %}
         </td>
+        <td style="white-space:nowrap;">
+          {% if run.has_log and run.pid %}
+            <a href="{{ url_for('admin_run_log', pid=run.pid) }}" onclick="event.stopPropagation();" style="font-size:0.85rem;">Log</a>
+          {% endif %}
+        </td>
       </tr>
       <tr class="run-detail" id="run-detail-{{ rid }}" style="display:none;">
-        <td colspan="6" style="padding:0 1rem 0.75rem 2.5rem; background:var(--bg);">
+        <td colspan="7" style="padding:0 1rem 0.75rem 2.5rem; background:var(--bg);">
           <table style="font-size:0.85rem; border-collapse:collapse; width:100%;">
             <thead>
               <tr>

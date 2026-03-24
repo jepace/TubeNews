@@ -762,7 +762,7 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
         feed.link(href=base_url, rel="self")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir()]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and not d.name.startswith("_")]:
         for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
             metadata_path = meeting_dir / "metadata.json"
             if not metadata_path.exists():
@@ -844,7 +844,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
     feed.link(href=base_url if base_url else "https://www.youtube.com", rel="alternate")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
         channel_json = channel_dir / "channel.json"
         if not channel_json.exists():
             continue
@@ -948,7 +948,7 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
     logger.info(f"TubeNews: Rebuilding blog for {name}")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
         channel_json = channel_dir / "channel.json"
         if not channel_json.exists():
             continue
@@ -1574,6 +1574,7 @@ def _main_body(args) -> None:
             "ai_rate_limited": False,
             "transcript_quota_exhausted": True,
             "feeds": [],
+            "pid": os.getpid(),
         })
         try:
             run_log_path.write_text(json.dumps(runs[-30:], indent=2))
@@ -1647,6 +1648,7 @@ def _main_body(args) -> None:
         "ai_rate_limited": ai_rate_limit_event.is_set(),
         "transcript_quota_exhausted": transcript_rate_limit_event.is_set(),
         "feeds": feed_results,
+        "pid": os.getpid(),
     })
     try:
         run_log_path.write_text(json.dumps(runs[-30:], indent=2))
