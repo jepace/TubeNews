@@ -62,7 +62,6 @@ from TubeNews import (  # noqa: E402
     parse_story_file,
     build_user_feed_xml,
     slugify,
-    _story_matches_focus,
     rebuild_feed,
     rebuild_aggregate_feed,
 )
@@ -583,16 +582,14 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     return None, []
 
 
-def _get_user_stories(user_data: dict) -> list[StoryDict]:
+def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     """Return parsed stories for a user's subscribed channels, newest-first.
 
-    Stories are filtered by the user's per-channel focus (``channel_focus`` in
-    ``user.json``).  If no focus is set for a channel, all stories from that
-    channel are returned.  Stories written before topic tagging was introduced
-    (no ``**Topics:**`` line) are always included regardless of focus.
+    Stories are filtered by ``user_id``: if a story's ``**Users:**`` line is
+    present, it is shown only to the listed users.  Stories without a
+    ``**Users:**`` line (feed-level or legacy) are shown to everyone.
     """
     subscribed = set(user_data.get("channel_ids", []))
-    channel_focus = user_data.get("channel_focus", {})
     raw: list[dict] = []
     channels_cfg = _load_channels()
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
@@ -621,8 +618,8 @@ def _get_user_stories(user_data: dict) -> list[StoryDict]:
     for entry in raw:
         try:
             s = parse_story_file(entry["file"])
-            focus = channel_focus.get(entry.get("channel_id", ""), "")
-            if not _story_matches_focus(s.get("topics", []), focus):
+            story_user_ids = s.get("user_ids", [])
+            if story_user_ids and user_id not in story_user_ids:
                 continue
             vid = entry["meta"]["video_id"]
             vt = entry["meta"].get("video_title", "")
@@ -884,7 +881,8 @@ def serve_blog_public(token: str):
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
                 cfg = _load_config()
-                stories = _get_user_stories(data)
+                uid = user_json.parent.name
+                stories = _get_user_stories(data, uid)
                 blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
                 return render_template("blog.html", stories=stories, blog_name=blog_name,
                                        feed_path=f"/feed/{token}.xml",
@@ -903,7 +901,7 @@ def serve_blog():
         flash("Subscribe to channels to start reading your blog.", "info")
         return redirect(url_for("dashboard"))
     cfg = _load_config()
-    stories = _get_user_stories(current_user._data)
+    stories = _get_user_stories(current_user._data, current_user.get_id())
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml")
@@ -1394,16 +1392,44 @@ def admin_feed_edit(channel_id: str):
                                 old_dir.rename(new_dir)
                             except OSError as exc:
                                 rename_error = f"Could not rename archive directory: {exc}"
+                elif old_dir is None:
+                    # Channel has no channel.json yet; check whether new_slug collides
+                    # with an existing directory that belongs to a different channel.
+                    candidate = STORAGE_ROOT / new_slug
+                    if candidate.is_dir():
+                        cj = candidate / "channel.json"
+                        if cj.exists():
+                            try:
+                                existing = json.loads(cj.read_text())
+                                if existing.get("channel_id") != channel_id:
+                                    rename_error = (
+                                        f"Archive directory '{new_slug}' already belongs to "
+                                        f"another channel — choose a different channel name."
+                                    )
+                            except Exception:
+                                pass  # corrupt channel.json; safe to overwrite
                 if rename_error:
                     flash(rename_error, "error")
                 else:
-                    # Update channel.json in the (possibly renamed) archive dir
+                    # Update channel.json in the (possibly renamed) archive dir.
+                    # Guard: only write if the directory either has no channel.json
+                    # or the existing channel.json already belongs to this channel.
                     archive_dir = STORAGE_ROOT / new_slug
                     if archive_dir.is_dir():
                         try:
-                            (archive_dir / "channel.json").write_text(
-                                json.dumps({"channel_id": new_channel_id, "channel_name": channel_name})
-                            )
+                            existing_cj = archive_dir / "channel.json"
+                            safe_to_write = True
+                            if existing_cj.exists():
+                                try:
+                                    existing = json.loads(existing_cj.read_text())
+                                    if existing.get("channel_id") not in (channel_id, new_channel_id):
+                                        safe_to_write = False
+                                except Exception:
+                                    pass  # corrupt; overwrite is fine
+                            if safe_to_write:
+                                existing_cj.write_text(
+                                    json.dumps({"channel_id": new_channel_id, "channel_name": channel_name})
+                                )
                         except OSError:
                             pass  # non-fatal; next rebuild_feed will overwrite it
                     channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
