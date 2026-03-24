@@ -313,25 +313,6 @@ button[type="submit"]:hover,
 
 .form-footer a { color: var(--accent); }
 
-/* Dashboard */
-.dashboard h1 {
-  font-size: 1.4rem;
-  margin-bottom: 1.5rem;
-}
-
-.dashboard section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.dashboard h2 {
-  font-size: 1rem;
-  font-weight: 600;
-  margin-bottom: 1rem;
-}
 
 .feed-url-row {
   display: flex;

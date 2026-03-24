@@ -731,7 +731,7 @@ def serve_transcript(channel_slug, meeting_id):
 @limiter.limit("10 per minute")
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("account"))
 
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
@@ -755,7 +755,7 @@ def login():
 @limiter.limit("5 per minute")
 def register():
     if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("account"))
 
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
@@ -788,59 +788,9 @@ def register():
             login_user(User(user_dir, data))
             _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
             flash("Account created. Choose your channels below.", "success")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("account"))
 
     return render_template("register.html")
-
-
-@app.route("/dashboard", methods=["GET", "POST"])
-@login_required
-def dashboard():
-    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
-
-    if request.method == "POST":
-        if request.form.get("action") == "prefs":
-            font_size = request.form.get("font_size", "normal")
-            if font_size not in ("normal", "large", "larger"):
-                font_size = "normal"
-            dark_mode = "dark_mode" in request.form
-            current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
-            current_user._save()
-            flash("Display preferences saved.", "success")
-            return redirect(url_for("dashboard"))
-
-        selected = set(request.form.getlist("channel_ids"))
-        valid_ids = {ch["channel_id"] for ch in channels}
-        new_ids = sorted(selected & valid_ids)
-        current_user.set_channel_ids(new_ids)
-        blog_name = request.form.get("blog_name", "").strip()
-        current_user._data["blog_name"] = blog_name
-        channel_focus = {}
-        for ch_id in new_ids:
-            raw = request.form.get(f"focus_{ch_id}", "")
-            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
-            if lines:
-                channel_focus[ch_id] = lines
-        current_user._data["channel_focus"] = channel_focus
-        current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
-        current_user._save()
-        flash("Subscriptions updated.", "success")
-        return redirect(url_for("dashboard"))
-
-    # GET: mark all channels as seen so the nav badge clears on this page load.
-    current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
-    current_user._save()
-
-    prefs = current_user._data.get("preferences", {})
-    return render_template(
-        "dashboard.html",
-        channels=channels,
-        subscribed=set(current_user.channel_ids),
-        channel_focus=current_user._data.get("channel_focus", {}),
-        feed_url=_feed_url(current_user.feed_token),
-        blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
-        prefs=prefs,
-    )
 
 
 @app.route("/logout")
@@ -899,7 +849,7 @@ def serve_blog():
     """Render the logged-in user's blog inside the app template."""
     if not current_user.channel_ids:
         flash("Subscribe to channels to start reading your blog.", "info")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("account"))
     cfg = _load_config()
     stories = _get_user_stories(current_user._data, current_user.get_id())
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
@@ -932,35 +882,79 @@ def channel_blog(channel_id: str):
 @app.route("/account", methods=["GET", "POST"])
 @login_required
 def account():
-    """Self-service account settings: name, email, feed token URLs."""
+    """User profile: subscriptions, display preferences, account info, and credentials."""
+    channels = sorted(_load_channels(), key=lambda ch: ch.get("channel_name", "").lower())
+
     if request.method == "POST":
-        new_name = request.form.get("name", "").strip()
-        new_email = request.form.get("email", "").strip().lower()
-        current_pw = request.form.get("current_password", "")
-        if not new_name or not new_email or "@" not in new_email:
-            flash("Name and a valid email are required.", "error")
+        action = request.form.get("action", "")
+
+        if action == "prefs":
+            font_size = request.form.get("font_size", "normal")
+            if font_size not in ("normal", "large", "larger"):
+                font_size = "normal"
+            dark_mode = "dark_mode" in request.form
+            current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+            current_user._save()
+            flash("Display preferences saved.", "success")
             return redirect(url_for("account"))
-        if not check_password_hash(current_user._data["password_hash"], current_pw):
-            flash("Current password is incorrect.", "error")
-            return redirect(url_for("account"))
-        if new_email != current_user.email:
-            existing = _find_user_by_email(new_email)
-            if existing:
-                flash("That email is already in use by another account.", "error")
+
+        if action == "info":
+            new_name = request.form.get("name", "").strip()
+            new_email = request.form.get("email", "").strip().lower()
+            current_pw = request.form.get("current_password", "")
+            if not new_name or not new_email or "@" not in new_email:
+                flash("Name and a valid email are required.", "error")
                 return redirect(url_for("account"))
-        old_email = current_user.email
-        current_user._data["name"] = new_name
-        current_user._data["email"] = new_email
+            if not check_password_hash(current_user._data["password_hash"], current_pw):
+                flash("Current password is incorrect.", "error")
+                return redirect(url_for("account"))
+            if new_email != current_user.email:
+                existing = _find_user_by_email(new_email)
+                if existing:
+                    flash("That email is already in use by another account.", "error")
+                    return redirect(url_for("account"))
+            old_email = current_user.email
+            current_user._data["name"] = new_name
+            current_user._data["email"] = new_email
+            current_user._save()
+            if new_email != old_email:
+                _index_remove(old_email)
+                _index_add(new_email, current_user.get_id())
+            flash("Account info updated.", "success")
+            return redirect(url_for("account"))
+
+        # Default: subscription save
+        selected = set(request.form.getlist("channel_ids"))
+        valid_ids = {ch["channel_id"] for ch in channels}
+        new_ids = sorted(selected & valid_ids)
+        current_user.set_channel_ids(new_ids)
+        blog_name = request.form.get("blog_name", "").strip()
+        current_user._data["blog_name"] = blog_name
+        channel_focus = {}
+        for ch_id in new_ids:
+            raw = request.form.get(f"focus_{ch_id}", "")
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+            if lines:
+                channel_focus[ch_id] = lines
+        current_user._data["channel_focus"] = channel_focus
+        current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
         current_user._save()
-        if new_email != old_email:
-            _index_remove(old_email)
-            _index_add(new_email, current_user.get_id())
-        flash("Account info updated.", "success")
+        flash("Subscriptions updated.", "success")
         return redirect(url_for("account"))
+
+    # GET: mark all channels as seen so the nav badge clears on this page load.
+    current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
+    current_user._save()
+
+    prefs = current_user._data.get("preferences", {})
     return render_template(
         "account.html",
+        channels=channels,
+        subscribed=set(current_user.channel_ids),
+        channel_focus=current_user._data.get("channel_focus", {}),
         feed_url=_feed_url(current_user.feed_token),
-        blog_url=_blog_url(current_user.feed_token),
+        blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
+        prefs=prefs,
     )
 
 

@@ -437,26 +437,26 @@ def test_logout_redirects_to_login(logged_in_client):
 # Dashboard
 # ---------------------------------------------------------------------------
 
-def test_dashboard_requires_login(client, archive):
-    r = client.get("/dashboard")
+def test_account_requires_login(client, archive):
+    r = client.get("/account")
     assert r.status_code == 302
     assert "/login" in r.headers["Location"]
 
 
-def test_dashboard_shows_channels(logged_in_client):
-    r = logged_in_client.get("/dashboard")
+def test_account_shows_channels(logged_in_client):
+    r = logged_in_client.get("/account")
     assert b"Alpha City Council" in r.data
     assert b"Beta City Council" in r.data
 
 
-def test_dashboard_shows_feed_url_when_subscribed(logged_in_client):
-    r = logged_in_client.get("/dashboard")
+def test_account_shows_feed_url_when_subscribed(logged_in_client):
+    r = logged_in_client.get("/account")
     # The sharing URL section appears when the user has subscriptions.
     assert b"known-test-feed-token-abc123" in r.data
 
 
-def test_dashboard_subscribe_updates_channels(logged_in_client, archive):
-    r = logged_in_client.post("/dashboard", data={
+def test_account_subscribe_updates_channels(logged_in_client, archive):
+    r = logged_in_client.post("/account", data={
         "channel_ids": ["UC_ALPHA_ID", "UC_BETA__ID"],
     }, follow_redirects=True)
     assert r.status_code == 200
@@ -799,15 +799,15 @@ def test_feed_edit_no_channel_json_blocked_when_new_slug_collides_with_other_cha
 
 
 # ---------------------------------------------------------------------------
-# Dashboard subscription save — focuses stored as list, capped at 3
+# Account subscription save — focuses stored as list, capped at 3
 # ---------------------------------------------------------------------------
 
-def test_dashboard_saves_focuses_as_list(logged_in_client, archive):
+def test_account_saves_focuses_as_list(logged_in_client, archive):
     """Focuses entered as newline-separated lines are saved as a list."""
     import json as _json
     import web.app as webapp
 
-    r = logged_in_client.post("/dashboard", data={
+    r = logged_in_client.post("/account", data={
         "channel_ids": ["UC_ALPHA_ID"],
         "focus_UC_ALPHA_ID": "housing, zoning\ntransportation, roads",
     }, follow_redirects=True)
@@ -830,12 +830,12 @@ def test_dashboard_saves_focuses_as_list(logged_in_client, archive):
     assert "transportation, roads" in focus_val
 
 
-def test_dashboard_caps_focuses_at_three(logged_in_client, archive):
+def test_account_caps_focuses_at_three(logged_in_client, archive):
     """A fourth focus line is silently dropped."""
     import json as _json
     import web.app as webapp
 
-    r = logged_in_client.post("/dashboard", data={
+    r = logged_in_client.post("/account", data={
         "channel_ids": ["UC_ALPHA_ID"],
         "focus_UC_ALPHA_ID": "focus one\nfocus two\nfocus three\nfocus four",
     }, follow_redirects=True)
@@ -856,12 +856,12 @@ def test_dashboard_caps_focuses_at_three(logged_in_client, archive):
 # Unseen-channel nav badge
 # ---------------------------------------------------------------------------
 
-def test_dashboard_get_initialises_seen_channel_ids(logged_in_client, archive):
-    """GET /dashboard writes seen_channel_ids covering all configured channels."""
+def test_account_get_initialises_seen_channel_ids(logged_in_client, archive):
+    """GET /account writes seen_channel_ids covering all configured channels."""
     import json as _json
     import web.app as webapp
 
-    logged_in_client.get("/dashboard")
+    logged_in_client.get("/account")
 
     users_dir = webapp.STORAGE_ROOT / "users"
     for uid_dir in users_dir.iterdir():
@@ -875,12 +875,12 @@ def test_dashboard_get_initialises_seen_channel_ids(logged_in_client, archive):
     pytest.fail("User not found")
 
 
-def test_dashboard_post_sets_seen_channel_ids(logged_in_client, archive):
-    """POST /dashboard includes seen_channel_ids in the save."""
+def test_account_post_sets_seen_channel_ids(logged_in_client, archive):
+    """POST /account includes seen_channel_ids in the save."""
     import json as _json
     import web.app as webapp
 
-    logged_in_client.post("/dashboard", data={"channel_ids": ["UC_ALPHA_ID"]},
+    logged_in_client.post("/account", data={"channel_ids": ["UC_ALPHA_ID"]},
                           follow_redirects=True)
 
     users_dir = webapp.STORAGE_ROOT / "users"
@@ -929,8 +929,8 @@ def test_nav_badge_hidden_when_seen_channel_ids_absent(logged_in_client, archive
     assert b'nav-badge' not in r.data
 
 
-def test_nav_badge_hidden_after_dashboard_visit(client, archive):
-    """Badge disappears once the user visits /dashboard (marks all as seen)."""
+def test_nav_badge_hidden_after_account_visit(client, archive):
+    """Badge disappears once the user visits /account (marks all as seen)."""
     import json as _json
     import web.app as webapp
 
@@ -950,12 +950,12 @@ def test_nav_badge_hidden_after_dashboard_visit(client, archive):
 
     client.post("/login", data={"email": "watcher@example.com", "password": "testpassword123"})
 
-    # Badge present before visiting dashboard (/blog renders since user has a subscription)
+    # Badge present before visiting account (/blog renders since user has a subscription)
     r = client.get("/blog")
     assert b'nav-badge' in r.data
 
-    # Visit dashboard — clears the badge
-    client.get("/dashboard")
+    # Visit account page — clears the badge
+    client.get("/account")
 
     # Badge gone on subsequent page load
     r = client.get("/blog")
@@ -1045,13 +1045,13 @@ def test_login_next_blocks_protocol_relative_url(client, archive, registered_use
 
 
 def test_login_next_allows_local_path(client, archive, registered_user):
-    """?next=/dashboard must redirect to that local path after login."""
+    """?next=/account must redirect to that local path after login."""
     r = client.post(
-        "/login?next=/dashboard",
+        "/login?next=/account",
         data={"email": "test@example.com", "password": "testpassword123"},
     )
     assert r.status_code == 302
-    assert r.headers["Location"].endswith("/dashboard")
+    assert r.headers["Location"].endswith("/account")
 
 
 # ---------------------------------------------------------------------------
@@ -1476,7 +1476,7 @@ def test_account_get_returns_200(logged_in_client, archive):
     """GET /account must return 200 for a logged-in user."""
     r = logged_in_client.get("/account")
     assert r.status_code == 200
-    assert b"Account Settings" in r.data
+    assert b"Account info" in r.data
 
 
 def test_account_get_shows_name_and_email(logged_in_client, archive):
@@ -1490,6 +1490,7 @@ def test_account_info_update_saves_name(logged_in_client, archive):
     """POST /account with correct password must update display name."""
     import web.app as _wa
     r = logged_in_client.post("/account", data={
+        "action": "info",
         "name": "New Name",
         "email": "test@example.com",
         "current_password": "testpassword123",
@@ -1510,6 +1511,7 @@ def test_account_info_wrong_password_rejected(logged_in_client, archive):
     """POST /account with wrong current password must flash an error and not save."""
     import web.app as _wa
     r = logged_in_client.post("/account", data={
+        "action": "info",
         "name": "Hacked Name",
         "email": "test@example.com",
         "current_password": "wrongpassword!",
@@ -1538,6 +1540,7 @@ def test_account_info_email_change_updates_index(logged_in_client, archive, monk
     _wa._index_add("test@example.com", uid)
 
     logged_in_client.post("/account", data={
+        "action": "info",
         "name": "Test User",
         "email": "newemail@example.com",
         "current_password": "testpassword123",

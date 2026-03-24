@@ -376,10 +376,10 @@ def test_admin_edit_user_page_loads(flask_env):
     assert resp.status_code == 200
 
 
-# ── Dashboard page ────────────────────────────────────────────────────────
+# ── Account page ──────────────────────────────────────────────────────────
 
-def test_dashboard_feed_url_is_root_relative(flask_env):
-    """RSS feed URL on the dashboard must be root-relative when base_url is unset."""
+def test_account_feed_url_is_root_relative(flask_env):
+    """RSS feed URL on the account page must be root-relative when base_url is unset."""
     client, admin_id, _ = flask_env
     # Give the admin a subscription so the feed URL section renders.
     import app as wa
@@ -389,15 +389,15 @@ def test_dashboard_feed_url_is_root_relative(flask_env):
         {"channel_id": "UC_TEST_CHAN", "channel_name": "Test Channel", "focus": "test"}
     ]):
         user.set_channel_ids(["UC_TEST_CHAN"])
-        resp = client.get("/dashboard")
+        resp = client.get("/account")
     html = resp.data.decode()
     assert "/feed/admin-feed-token-xyz.xml" in html
     assert "https://localhost" not in html
     assert "https://127" not in html
 
 
-def test_dashboard_blog_url_is_root_relative(flask_env):
-    """Blog URL on the dashboard must be root-relative when base_url is unset."""
+def test_account_blog_url_is_root_relative(flask_env):
+    """Blog URL on the account page must be root-relative when base_url is unset."""
     client, admin_id, _ = flask_env
     import app as wa
     user = wa._find_user_by_id(admin_id)
@@ -405,7 +405,7 @@ def test_dashboard_blog_url_is_root_relative(flask_env):
         {"channel_id": "UC_TEST_CHAN", "channel_name": "Test Channel", "focus": "test"}
     ]):
         user.set_channel_ids(["UC_TEST_CHAN"])
-        resp = client.get("/dashboard")
+        resp = client.get("/account")
     html = resp.data.decode()
     assert "/blog/admin-feed-token-xyz.html" in html
     assert "https://localhost" not in html
