@@ -31,6 +31,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import TypedDict
 
 # ---------------------------------------------------------------------------
 # Third-party imports
@@ -71,7 +72,8 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]
         # request_timeout — seconds before giving up on YouTube / Supadata calls.
         request_timeout = int(cfg.get("request_timeout", 15))
 
-    except Exception:
+    except Exception as exc:
+        logging.warning(f"Failed to load config; using defaults: {exc}")
         storage_root = base_dir / "archive"
         request_timeout = 15
 
@@ -126,26 +128,88 @@ def setup_logging(debug_mode: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Data contracts (TypedDicts)
+# ---------------------------------------------------------------------------
+
+
+class VideoInfo(TypedDict):
+    """One discovered video entry from :func:`discover_videos`."""
+    id: str
+    title: str
+    date: str
+    is_live: bool
+
+
+class FeedConfig(TypedDict):
+    """Per-channel configuration block from ``TubeNews.json``."""
+    channel_id: str
+    channel_name: str
+    focus: str
+
+
+class GeminiStory(TypedDict):
+    """One story dict as returned by :func:`call_gemini_api`."""
+    title: str
+    dateline: str
+    content: str
+    start_time_seconds: int
+    topics: list[str]
+
+
+class ParsedStory(TypedDict):
+    """Structured fields extracted from a ``.md`` story file by :func:`parse_story_file`."""
+    title: str
+    dateline: str
+    body_html: str
+    start_seconds: int
+    topics: list[str]
+    content_hash: str
+
+
+class MetadataDict(TypedDict, total=False):
+    """Contents of a ``metadata.json`` archive file.
+
+    All fields are optional (``total=False``) because metadata files may be
+    written incrementally and old files pre-date several keys.
+    """
+    video_id: str
+    video_title: str
+    status: str
+    processed_at: float
+    processed_focuses: list[str]
+
+
+class FeedResult(TypedDict):
+    """Per-channel result dict collected by ``_main_body``."""
+    channel_id: str
+    channel_name: str
+    stories_written: int
+
+
+# ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
 
 
-def slugify(text: str) -> str:
-    """Convert *text* to a filesystem-safe slug.
+from tubenews_utils import slugify  # noqa: E402  (below module-level constants)
 
-    Every character that isn't a letter or digit is replaced with an
-    underscore, then leading/trailing underscores are stripped.
 
-    Examples:
-        >>> slugify("City Council")
-        'City_Council'
-        >>> slugify("---test---")
-        'test'
+def _fmt_no_leading_zeros(dt: datetime, fmt: str) -> str:
+    """Format *dt* with *fmt* and strip leading zeros from day/hour fields.
+
+    Replaces the POSIX-only ``%-d``/``%-I`` strftime codes with a portable
+    alternative.  Only zeros preceded by a space are removed, so two-digit
+    numbers such as 10, 11, 12 are unaffected.
+
+    Example::
+        >>> from datetime import datetime
+        >>> _fmt_no_leading_zeros(datetime(2026, 1, 5, 9, 30), "%B %d, %Y at %I:%M %p")
+        'January 5, 2026 at 9:30 AM'
     """
-    return re.sub(r"[^a-zA-Z0-9]", "_", text).strip("_")
+    return re.sub(r" 0(\d)", r" \1", dt.strftime(fmt))
 
 
-def parse_story_file(story_path: Path) -> dict:
+def parse_story_file(story_path: Path) -> ParsedStory:
     """Read a story Markdown file and return its structured fields.
 
     Story files are written by :func:`write_story_files` in a fixed format::
@@ -196,7 +260,7 @@ def parse_story_file(story_path: Path) -> dict:
     }
 
 
-def _story_matches_focus(story_topics: list, focuses) -> bool:
+def _story_matches_focus(story_topics: list[str], focuses: str | list[str]) -> bool:
     """Return True if a story should be shown for the given focus configuration.
 
     *focuses* may be a single comma-separated string (legacy) or a list of
@@ -333,7 +397,7 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
     return result
 
 
-def discover_videos(channel_id: str, feed_name: str = "") -> list[dict]:
+def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
     """Scrape a channel's *videos* and *streams* tabs; return video metadata.
 
     Both tabs are fetched concurrently.  Results are merged in a fixed order
@@ -449,7 +513,7 @@ def call_gemini_api(
     gemini_api_key: str,
     model_name: str,
     feed_name: str = "",
-) -> list | bool | None:
+) -> list[GeminiStory] | bool | None:
     """Send a transcript to Google Gemini and parse the returned news stories.
 
     The prompt instructs Gemini to act as an investigative reporter and return
@@ -514,7 +578,7 @@ def call_gemini_api(
 
 
 def write_story_files(
-    stories: list,
+    stories: list[GeminiStory],
     meeting_dir: Path,
     video_id: str = "",
     *,
@@ -567,7 +631,7 @@ def write_story_files(
 # ---------------------------------------------------------------------------
 
 
-def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
+def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
     """Regenerate ``<feed_dir>/rss.xml`` from all processed meetings.
 
     Includes all stories, sorted newest-meeting first.
@@ -603,26 +667,30 @@ def rebuild_feed(feed_dir: Path, feed_cfg: dict) -> None:
             continue
 
         for story_file in sorted(meeting_dir.glob("[0-9]*.md")):
-            story = parse_story_file(story_file)
-            feed_entry = feed.add_entry()
-            feed_entry.id(story["content_hash"])
-            feed_entry.title(f"{story['title']} | {metadata.get('video_title', 'Video')}")
-            feed_entry.link(
-                href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
-            )
-            yt_url = f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
-            video_title = metadata.get("video_title", "")
-            feed_entry.content(
-                f"<h2>{story['title']}</h2>"
-                f"<p><strong>{story['dateline']}</strong></p>"
-                f"<p><em>{video_title}</em> &mdash; "
-                f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
-                f"<br>{story['body_html']}",
-                type="html",
-            )
-            feed_entry.published(
-                datetime.fromtimestamp(metadata["processed_at"]).astimezone()
-            )
+            try:
+                story = parse_story_file(story_file)
+                feed_entry = feed.add_entry()
+                feed_entry.id(story["content_hash"])
+                feed_entry.title(f"{story['title']} | {metadata.get('video_title', 'Video')}")
+                feed_entry.link(
+                    href=f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
+                )
+                yt_url = f"https://youtu.be/{metadata['video_id']}?t={story['start_seconds']}"
+                video_title = metadata.get("video_title", "")
+                feed_entry.content(
+                    f"<h2>{story['title']}</h2>"
+                    f"<p><strong>{story['dateline']}</strong></p>"
+                    f"<p><em>{video_title}</em> &mdash; "
+                    f"&#9654; <a href=\"{yt_url}\">{yt_url}</a></p>"
+                    f"<br>{story['body_html']}",
+                    type="html",
+                )
+                feed_entry.published(
+                    datetime.fromtimestamp(metadata["processed_at"]).astimezone()
+                )
+            except Exception as exc:
+                logger.debug(f"Skipping {story_file}: {exc}")
+                continue
 
     feed.rss_file(feed_dir / "rss.xml", pretty=True)
     (feed_dir / "channel.json").write_text(
@@ -668,7 +736,8 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
                         "meta": metadata,
                         "channel_name": channel_dir.name.replace("_", " "),
                     })
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
@@ -697,13 +766,14 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
                     entry["meta"].get("processed_at", time.time())
                 ).astimezone()
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
 
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict | None = None) -> bytes:
+def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict[str, str | list[str]] | None = None) -> bytes:
     """Build and return RSS feed XML bytes for a user's subscribed channels.
 
     Contains all the feed-building logic.  Does *not* write anything to disk —
@@ -739,7 +809,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
             continue
         try:
             channel_info = json.loads(channel_json.read_text())
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {channel_json}: {exc}")
             continue
         channel_id = channel_info.get("channel_id")
         if channel_id not in subscribed:
@@ -756,7 +827,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     all_stories.append({"file": story_file, "meta": metadata,
                                         "channel_name": channel_name, "channel_id": channel_id})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
@@ -788,13 +860,14 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
                     entry["meta"].get("processed_at", time.time())
                 ).astimezone()
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
 
     return feed.rss_str(pretty=True)
 
 
-def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None:
+def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
     """Write ``archive/users/<id>/rss.xml`` for a user's subscribed channels.
 
     Thin wrapper around :func:`build_user_feed_xml` that writes the result to
@@ -814,7 +887,7 @@ def rebuild_user_feed(user: dict, base_url: str = "", user_id: str = "") -> None
     (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
-def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None:
+def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
     """Generate ``archive/users/<id>/index.html`` — a static blog page for a user.
 
     Pulls stories from the user's subscribed channels (same logic as
@@ -840,7 +913,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
             continue
         try:
             channel_info = json.loads(channel_json.read_text())
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {channel_json}: {exc}")
             continue
         if channel_info.get("channel_id") not in subscribed:
             continue
@@ -856,7 +930,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     all_stories.append({"file": story_file, "meta": metadata, "channel_name": channel_name,
                                         "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
@@ -883,7 +958,8 @@ def rebuild_user_blog(user: dict, base_url: str = "", user_id: str = "") -> None
     for entry in all_stories:
         try:
             story = parse_story_file(entry["file"])
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
         yt_url = f"https://youtu.be/{entry['meta']['video_id']}?t={story['start_seconds']}"
         video_title = entry["meta"].get("video_title", "")
@@ -1019,7 +1095,8 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
                 continue
             try:
                 data = json.loads(user_json.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {uid_dir.name}: {exc}")
                 continue
             if channel_id not in data.get("channel_ids", []):
                 continue
@@ -1046,7 +1123,7 @@ def process_video(
     video_title: str,
     video_date: str,
     is_live: bool,
-    feed: dict,
+    feed: FeedConfig,
     feed_dir: Path,
     supadata_client: Supadata,
     config: dict,
@@ -1169,7 +1246,7 @@ def process_video(
 
 
 def process_feed(
-    feed: dict,
+    feed: FeedConfig,
     supadata_client: Supadata,
     config: dict,
     ai_rate_limit_event: threading.Event | None = None,
@@ -1300,11 +1377,11 @@ def process_feed(
 # ---------------------------------------------------------------------------
 
 
-def _send_ntfy(topic: str, total_stories: int, feed_results: list[dict], started_at: float) -> None:
+def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], started_at: float) -> None:
     """POST a run-summary notification to ntfy.sh/<topic>."""
     import urllib.request as _urllib_request
 
-    timestamp = datetime.fromtimestamp(started_at).strftime("%B %-d, %Y at %-I:%M %p")
+    timestamp = _fmt_no_leading_zeros(datetime.fromtimestamp(started_at), "%B %d, %Y at %I:%M %p")
     story_word = "story" if total_stories == 1 else "stories"
     lines = [f"{total_stories} new {story_word} — {timestamp}"]
     for r in feed_results:
@@ -1382,12 +1459,12 @@ def _main_body(args) -> None:
         config = json.load(config_file)
 
     supadata_client = Supadata(api_key=config["supadata_api_key"])
-    logger.info(f"Session Start | {datetime.now().strftime('%A, %B %-d, %Y')} | AI Model: {config.get('gemini_model')}")
+    logger.info(f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')} | AI Model: {config.get('gemini_model')}")
 
     ai_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()
 
-    def _run_feed(feed: dict) -> dict:
+    def _run_feed(feed: FeedConfig) -> FeedResult:
         try:
             content_changed, _, stories_written = process_feed(
                 feed, supadata_client, config, ai_rate_limit_event
@@ -1439,7 +1516,8 @@ def _main_body(args) -> None:
     run_log_path = STORAGE_ROOT / "run_log.json"
     try:
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Failed to load run log; starting fresh: {exc}")
         runs = []
     runs.append({
         "started_at": started_at,

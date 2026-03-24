@@ -1046,3 +1046,345 @@ def test_run_now_sends_ntfy(archive, monkeypatch):
 
     assert len(sent) == 1
     assert "run started" in sent[0][0].lower()
+
+
+# ---------------------------------------------------------------------------
+# /admin/feeds — feed list, add, delete
+# ---------------------------------------------------------------------------
+
+def test_admin_feeds_requires_login(client, archive):
+    """GET /admin/feeds must redirect to login for anonymous users."""
+    r = client.get("/admin/feeds", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_admin_feeds_requires_admin(logged_in_client, archive):
+    """GET /admin/feeds must return 403 for a non-admin authenticated user."""
+    r = logged_in_client.get("/admin/feeds")
+    assert r.status_code == 403
+
+
+def test_admin_feeds_returns_200(admin_client, archive):
+    """GET /admin/feeds must return 200 for an admin user."""
+    r = admin_client.get("/admin/feeds")
+    assert r.status_code == 200
+
+
+def test_admin_feeds_lists_configured_channels(admin_client, archive):
+    """Feed list page must include the names of all configured channels."""
+    r = admin_client.get("/admin/feeds")
+    body = r.data.decode()
+    assert "Alpha City Council" in body
+    assert "Beta City Council" in body
+
+
+def test_admin_feed_add_get_returns_form(admin_client, archive):
+    """GET /admin/feeds/add must return 200 with the add-feed form."""
+    r = admin_client.get("/admin/feeds/add")
+    assert r.status_code == 200
+
+
+def test_admin_feed_add_post_success(admin_client, archive):
+    """POSTing valid data to /admin/feeds/add must add the channel and redirect."""
+    r = admin_client.post("/admin/feeds/add", data={
+        "channel_id": "UC_GAMMA_ID",
+        "channel_name": "Gamma City Council",
+        "focus": "parks, transit",
+    }, follow_redirects=False)
+    assert r.status_code == 302
+
+    cfg = json.loads(webapp.CONFIG_FILE.read_text())
+    ids = [ch["channel_id"] for ch in cfg["feeds"]]
+    assert "UC_GAMMA_ID" in ids
+
+
+def test_admin_feed_add_post_missing_fields_shows_error(admin_client, archive):
+    """Missing required fields must flash an error and not add a channel."""
+    r = admin_client.post("/admin/feeds/add", data={
+        "channel_id": "UC_GAMMA_ID",
+        "channel_name": "",
+        "focus": "parks",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "required" in body.lower()
+
+    cfg = json.loads(webapp.CONFIG_FILE.read_text())
+    ids = [ch["channel_id"] for ch in cfg["feeds"]]
+    assert "UC_GAMMA_ID" not in ids
+
+
+def test_admin_feed_add_post_invalid_channel_id_shows_error(admin_client, archive):
+    """A channel_id that doesn't start with 'UC' must be rejected."""
+    r = admin_client.post("/admin/feeds/add", data={
+        "channel_id": "NOTUC123456",
+        "channel_name": "Gamma City",
+        "focus": "parks",
+    }, follow_redirects=True)
+    body = r.data.decode()
+    assert "UC" in body  # error message mentions "UC" prefix requirement
+
+    cfg = json.loads(webapp.CONFIG_FILE.read_text())
+    ids = [ch["channel_id"] for ch in cfg["feeds"]]
+    assert "NOTUC123456" not in ids
+
+
+def test_admin_feed_add_post_duplicate_channel_id_shows_error(admin_client, archive):
+    """Adding a channel whose ID already exists must flash a duplicate error."""
+    r = admin_client.post("/admin/feeds/add", data={
+        "channel_id": "UC_ALPHA_ID",   # already in fixture config
+        "channel_name": "Alpha Duplicate",
+        "focus": "housing",
+    }, follow_redirects=True)
+    body = r.data.decode()
+    assert "already exists" in body.lower()
+
+    # Config must still have exactly one entry for UC_ALPHA_ID
+    cfg = json.loads(webapp.CONFIG_FILE.read_text())
+    assert sum(1 for ch in cfg["feeds"] if ch["channel_id"] == "UC_ALPHA_ID") == 1
+
+
+def test_admin_feed_delete_removes_channel(admin_client, archive):
+    """POSTing to /admin/feeds/<id>/delete must remove the channel from config."""
+    r = admin_client.post("/admin/feeds/UC_BETA__ID/delete", follow_redirects=False)
+    assert r.status_code == 302
+
+    cfg = json.loads(webapp.CONFIG_FILE.read_text())
+    ids = [ch["channel_id"] for ch in cfg["feeds"]]
+    assert "UC_BETA__ID" not in ids
+
+
+def test_admin_feed_delete_unknown_channel_returns_404(admin_client, archive):
+    """Deleting a channel ID not in config must return 404."""
+    r = admin_client.post("/admin/feeds/UC_DOES_NOT_EXIST/delete")
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /blog — _get_user_stories() focus filtering via Flask route
+# ---------------------------------------------------------------------------
+
+def _write_story_with_topics(meeting_dir: Path, filename: str, title: str,
+                              topics: str, start_seconds: int = 60) -> None:
+    """Write a story .md file that includes a **Topics:** line."""
+    (meeting_dir / filename).write_text(
+        f"# {title}\n*TESTVILLE — Jan 15, 2026*\n\nStory body.\n\n"
+        f"---\n**Segment Start:** {start_seconds}s\n**Topics:** {topics}\n",
+        encoding="utf-8",
+    )
+
+
+def test_blog_route_filters_by_focus(archive, monkeypatch):
+    """GET /blog must show only stories whose topics match the user's channel focus."""
+    import TubeNews
+
+    monkeypatch.setattr(webapp, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(webapp, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", archive)
+
+    # Add a second story to the alpha channel with a non-matching topic
+    alpha_dir = archive / "alpha_city"
+    meeting_dir = alpha_dir / "2026-01-15_VID12345678"
+    _write_story_with_topics(meeting_dir, "02_Budget_Story.md",
+                             "Budget Approved", topics="budget, finance")
+    _write_story_with_topics(meeting_dir, "03_Housing_Story.md",
+                             "Housing Project Approved", topics="housing, zoning")
+
+    # Create a user subscribed to Alpha with focus "housing"
+    user = _make_user(
+        archive / "users",
+        name="Focus User",
+        email="focus@example.com",
+        channel_ids=["UC_ALPHA_ID"],
+        token="focus-test-token-xyz789",
+        password="focuspassword123",
+    )
+    user_dir = next((archive / "users").iterdir())
+    data = json.loads((user_dir / "user.json").read_text())
+    data["channel_focus"] = {"UC_ALPHA_ID": ["housing"]}
+    (user_dir / "user.json").write_text(json.dumps(data))
+
+    flask_app.config["TESTING"] = True
+    flask_app.config["WTF_CSRF_ENABLED"] = False
+    with flask_app.test_client() as c:
+        c.post("/login", data={"email": "focus@example.com", "password": "focuspassword123"})
+        r = c.get("/blog")
+
+    body = r.data.decode()
+    assert "Housing Project Approved" in body, "focus-matching story must appear"
+    assert "Budget Approved" not in body, "non-matching story must be filtered out"
+
+
+def test_blog_route_unfiltered_when_no_focus(archive, monkeypatch):
+    """GET /blog must show all stories when the user has no channel focus set."""
+    import TubeNews
+
+    monkeypatch.setattr(webapp, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(webapp, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", archive)
+
+    alpha_dir = archive / "alpha_city"
+    meeting_dir = alpha_dir / "2026-01-15_VID12345678"
+    _write_story_with_topics(meeting_dir, "02_Budget_Story.md",
+                             "Budget Approved", topics="budget, finance")
+    _write_story_with_topics(meeting_dir, "03_Housing_Story.md",
+                             "Housing Project Approved", topics="housing, zoning")
+
+    user = _make_user(
+        archive / "users",
+        name="No Focus User",
+        email="nofocus@example.com",
+        channel_ids=["UC_ALPHA_ID"],
+        token="nofocus-test-token-abc456",
+        password="nofocuspassword1",
+    )
+
+    flask_app.config["TESTING"] = True
+    flask_app.config["WTF_CSRF_ENABLED"] = False
+    with flask_app.test_client() as c:
+        c.post("/login", data={"email": "nofocus@example.com", "password": "nofocuspassword1"})
+        r = c.get("/blog")
+
+    body = r.data.decode()
+    assert "Budget Approved" in body, "all stories must appear when no focus is set"
+    assert "Housing Project Approved" in body
+
+
+# ---------------------------------------------------------------------------
+# Email index — _read/_write/_index_add/_index_remove + _find_user_by_email
+# ---------------------------------------------------------------------------
+
+def test_email_index_round_trip(archive, monkeypatch):
+    """_index_add writes an entry; _read_email_index reads it back."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    _wa._index_add("alice@example.com", "uuid-alice")
+    index = _wa._read_email_index()
+    assert index.get("alice@example.com") == "uuid-alice"
+
+
+def test_index_remove_deletes_entry(archive, monkeypatch):
+    """_index_remove must remove only the targeted entry."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    _wa._index_add("alice@example.com", "uuid-alice")
+    _wa._index_add("bob@example.com", "uuid-bob")
+    _wa._index_remove("alice@example.com")
+    index = _wa._read_email_index()
+    assert "alice@example.com" not in index
+    assert index.get("bob@example.com") == "uuid-bob"
+
+
+def test_find_user_by_email_uses_index(archive, monkeypatch):
+    """_find_user_by_email must resolve via the index without touching individual user.json files."""
+    import web.app as _wa
+    users_root = archive / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+
+    user_data = _make_user(users_root, "Alice", "alice@example.com", [])
+    # Manually discover the UUID that _make_user created.
+    uid = next(p.name for p in users_root.iterdir()
+               if (p / "user.json").exists() and
+               json.loads((p / "user.json").read_text()).get("email") == "alice@example.com")
+    _wa._index_add("alice@example.com", uid)
+
+    found = _wa._find_user_by_email("alice@example.com")
+    assert found is not None
+    assert found.email == "alice@example.com"
+
+
+def test_find_user_by_email_falls_back_to_glob_when_no_index(archive, monkeypatch):
+    """Without an index file, _find_user_by_email must still work via glob scan."""
+    import web.app as _wa
+    users_root = archive / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+
+    _make_user(users_root, "Bob", "bob@example.com", [])
+    # Ensure no index exists.
+    index_file = users_root / "index.json"
+    if index_file.exists():
+        index_file.unlink()
+
+    found = _wa._find_user_by_email("bob@example.com")
+    assert found is not None
+    assert found.email == "bob@example.com"
+
+
+def test_find_user_by_email_glob_fallback_repairs_index(archive, monkeypatch):
+    """Glob fallback must write a new index entry so the next call is O(1)."""
+    import web.app as _wa
+    users_root = archive / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+
+    _make_user(users_root, "Carol", "carol@example.com", [])
+    index_file = users_root / "index.json"
+    if index_file.exists():
+        index_file.unlink()
+
+    _wa._find_user_by_email("carol@example.com")
+
+    assert index_file.exists(), "index must be created by the fallback path"
+    index = json.loads(index_file.read_text())
+    assert "carol@example.com" in index
+
+
+def test_register_route_writes_index(archive, monkeypatch):
+    """Successful registration must add the new user to the email index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+
+    flask_app.config["TESTING"] = True
+    flask_app.config["WTF_CSRF_ENABLED"] = False
+    with flask_app.test_client() as c:
+        c.post("/register", data={
+            "email": "newuser@example.com",
+            "password": "securepassword1",
+            "confirm_password": "securepassword1",
+            "name": "New User",
+        })
+
+    index = _wa._read_email_index()
+    assert "newuser@example.com" in index
+
+
+def test_admin_delete_removes_index_entry(archive, monkeypatch, admin_client):
+    """Deleting a user via the admin route must remove them from the index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    users_root = archive / "users"
+    _make_user(users_root, "Victim", "victim@example.com", [])
+    uid = next(p.name for p in users_root.iterdir()
+               if (p / "user.json").exists() and
+               json.loads((p / "user.json").read_text()).get("email") == "victim@example.com")
+    _wa._index_add("victim@example.com", uid)
+
+    admin_client.post(f"/admin/user/{uid}/delete",
+                      data={"confirm_email": "victim@example.com"})
+
+    index = _wa._read_email_index()
+    assert "victim@example.com" not in index
+
+
+def test_admin_email_change_updates_index(archive, monkeypatch, admin_client):
+    """Changing a user's email via the admin route must update the index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    users_root = archive / "users"
+    _make_user(users_root, "Rename Me", "old@example.com", [])
+    uid = next(p.name for p in users_root.iterdir()
+               if (p / "user.json").exists() and
+               json.loads((p / "user.json").read_text()).get("email") == "old@example.com")
+    _wa._index_add("old@example.com", uid)
+
+    admin_client.post(f"/admin/user/{uid}/info",
+                      data={"name": "Rename Me", "email": "new@example.com"})
+
+    index = _wa._read_email_index()
+    assert "old@example.com" not in index
+    assert index.get("new@example.com") == uid

@@ -11,6 +11,7 @@ Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
+from typing import TypedDict
 
 from flask import (
     Flask,
@@ -53,7 +55,17 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from TubeNews import STORAGE_ROOT, parse_story_file, build_user_feed_xml, slugify, _story_matches_focus, rebuild_feed, rebuild_aggregate_feed  # noqa: E402
+from TubeNews import (  # noqa: E402
+    STORAGE_ROOT,
+    FeedConfig,
+    ParsedStory,
+    parse_story_file,
+    build_user_feed_xml,
+    slugify,
+    _story_matches_focus,
+    rebuild_feed,
+    rebuild_aggregate_feed,
+)
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 USERS_ROOT = STORAGE_ROOT / "users"
@@ -65,6 +77,7 @@ TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 try:
     _cfg = json.loads(CONFIG_FILE.read_text())
@@ -152,16 +165,99 @@ class User(UserMixin):
         (self._dir / "user.json").write_text(json.dumps(self._data, indent=2))
 
 
+# ---------------------------------------------------------------------------
+# Data contracts (TypedDicts)
+# ---------------------------------------------------------------------------
+
+
+class ChannelInfo(TypedDict):
+    """Minimal channel descriptor returned by :func:`_channel_info_for_dir`."""
+    channel_id: str
+    channel_name: str
+
+
+class ChannelStat(TypedDict):
+    """Per-channel archive statistics returned by :func:`_archive_channel_stats`."""
+    channel_id: str
+    channel_name: str
+    processed: int
+    ignored: int
+    no_stories: int
+    story_count: int
+    last_processed: float
+
+
+class StoryDict(TypedDict):
+    """Fully-resolved story dict served to Flask templates and the blog/feed builders."""
+    title: str
+    dateline: str
+    body_html: str
+    start_seconds: int
+    video_id: str
+    video_title: str
+    channel_name: str
+    channel_slug: str
+    meeting_id: str
+    story_filename: str
+    processed_at: float
+
+
+# ---------------------------------------------------------------------------
+# User lookup helpers
+# ---------------------------------------------------------------------------
+
+
+def _read_email_index() -> dict[str, str]:
+    """Return the email→uuid mapping from USERS_ROOT/index.json, or {} on failure."""
+    try:
+        return json.loads((USERS_ROOT / "index.json").read_text())
+    except Exception:
+        return {}
+
+
+def _write_email_index(index: dict[str, str]) -> None:
+    """Atomically write *index* (email→uuid) to USERS_ROOT/index.json."""
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
+    tmp = USERS_ROOT / "index.json.tmp"
+    tmp.write_text(json.dumps(index, indent=2))
+    tmp.replace(USERS_ROOT / "index.json")
+
+
+def _index_add(email: str, uid: str) -> None:
+    index = _read_email_index()
+    index[email.strip().lower()] = uid
+    _write_email_index(index)
+
+
+def _index_remove(email: str) -> None:
+    index = _read_email_index()
+    index.pop(email.strip().lower(), None)
+    _write_email_index(index)
+
+
 def _find_user_by_email(email: str) -> User | None:
     if not USERS_ROOT.is_dir():
         return None
     needle = email.strip().lower()
+
+    # Fast path: O(1) index lookup.
+    index = _read_email_index()
+    if needle in index:
+        user = _find_user_by_id(index[needle])
+        if user and user.email.lower() == needle:
+            return user
+        # Index entry is stale — fall through to glob scan.
+
+    # Slow path: glob scan (first run after upgrade, or index corruption recovery).
     for user_json in USERS_ROOT.glob("*/user.json"):
         try:
             data = json.loads(user_json.read_text())
             if data.get("email", "").lower() == needle:
-                return User(user_json.parent, data)
-        except Exception:
+                user = User(user_json.parent, data)
+                _index_add(needle, user_json.parent.name)  # repair index
+                return user
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     return None
 
@@ -183,7 +279,8 @@ def _all_users() -> list[User]:
     for user_json in sorted(USERS_ROOT.glob("*/user.json")):
         try:
             users.append(User(user_json.parent, json.loads(user_json.read_text())))
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     return sorted(users, key=lambda u: u.name.lower())
 
@@ -240,13 +337,13 @@ def _load_config() -> dict:
         return {}
 
 
-def _save_feeds(feeds: list[dict]) -> None:
+def _save_feeds(feeds: list[FeedConfig]) -> None:
     cfg = _load_config()
     cfg["feeds"] = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
 
-def _load_channels() -> list[dict]:
+def _load_channels() -> list[FeedConfig]:
     try:
         return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
     except Exception:
@@ -349,7 +446,7 @@ def _safe_next(url: str | None) -> str:
     return url_for("serve_blog")
 
 
-def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[dict]) -> dict | None:
+def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[FeedConfig]) -> ChannelInfo | None:
     """Return ``{channel_id, channel_name}`` for *channel_dir*.
 
     Reads ``channel.json`` when present; falls back to matching the directory
@@ -381,12 +478,12 @@ def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
             try:
                 if json.loads(cj.read_text()).get("channel_id") == channel_id:
                     return d
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Skipping {d}: {exc}")
     return None
 
 
-def _archive_channel_stats() -> list[dict]:
+def _archive_channel_stats() -> list[ChannelStat]:
     """Scan archive dirs and return per-channel processing stats."""
     stats = []
     if not STORAGE_ROOT.is_dir():
@@ -412,7 +509,8 @@ def _archive_channel_stats() -> list[dict]:
                     ignored += 1
                 elif status == "no_stories":
                     no_stories += 1
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meta_file}: {exc}")
                 continue
         stats.append({
             "channel_id": info.get("channel_id", ""),
@@ -426,7 +524,7 @@ def _archive_channel_stats() -> list[dict]:
     return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
-def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
+def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
     All processed stories are returned with no time cutoff — this is a full
@@ -455,7 +553,8 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
         raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
         stories = []
@@ -477,13 +576,14 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[dict]]:
                     "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
                 })
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {entry['file']}: {exc}")
                 continue
         return channel_name, stories
     return None, []
 
 
-def _get_user_stories(user_data: dict) -> list[dict]:
+def _get_user_stories(user_data: dict) -> list[StoryDict]:
     """Return parsed stories for a user's subscribed channels, newest-first.
 
     Stories are filtered by the user's per-channel focus (``channel_focus`` in
@@ -513,7 +613,8 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
                                 "channel_id": channel_id,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
     raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
     stories = []
@@ -538,7 +639,8 @@ def _get_user_stories(user_data: dict) -> list[dict]:
                 "story_filename": entry["file"].name,
                 "processed_at": entry["meta"].get("processed_at", 0),
             })
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
     return stories
 
@@ -685,6 +787,7 @@ def register():
                 "created_at": int(datetime.now(timezone.utc).timestamp()),
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
+            _index_add(email, user_uuid)
             login_user(User(user_dir, data))
             _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
             flash("Account created. Choose your channels below.", "success")
@@ -764,7 +867,8 @@ def serve_feed(token: str):
                 uid = user_json.parent.name
                 xml_bytes = build_user_feed_xml(data, base_url=_base_url(), user_id=uid)
                 return Response(xml_bytes, mimetype="application/rss+xml")
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     abort(404)
 
@@ -785,7 +889,8 @@ def serve_blog_public(token: str):
                 return render_template("blog.html", stories=stories, blog_name=blog_name,
                                        feed_path=f"/feed/{token}.xml",
                                        body_classes=_prefs_to_classes(data.get("preferences", {})))
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
     abort(404)
 
@@ -876,10 +981,14 @@ def admin_user_info(uid: str):
         if existing:
             flash("That email is already in use by another account.", "error")
             return redirect(url_for("admin_user", uid=uid))
+    old_email = user.email
     user._data["name"] = new_name
     user._data["email"] = new_email
     user._data["blog_name"] = request.form.get("blog_name", "").strip()
     user._save()
+    if new_email != old_email:
+        _index_remove(old_email)
+        _index_add(new_email, uid)
     flash("User info updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
@@ -1008,6 +1117,7 @@ def admin_user_delete(uid: str):
         flash("Email confirmation did not match — account not deleted.", "error")
         return redirect(url_for("admin_user", uid=uid))
     deleted_email = user.email
+    _index_remove(deleted_email)
     for f in user._dir.iterdir():
         f.unlink()
     user._dir.rmdir()
@@ -1050,6 +1160,7 @@ def admin_user_add():
             "created_at": int(datetime.now(timezone.utc).timestamp()),
         }
         (user_dir / "user.json").write_text(json.dumps(data, indent=2))
+        _index_add(email, user_uuid)
         flash(f"Account created for {name} ({email}).", "success")
 
     return redirect(url_for("admin_users"))
@@ -1214,7 +1325,8 @@ def admin_all_stories():
                             "story_filename": story_file.name,
                             "processed_at": meta.get("processed_at", 0),
                         })
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Skipping {meeting_dir}: {exc}")
                     continue
     stories.sort(key=lambda s: s["processed_at"], reverse=True)
     return render_template("blog.html", stories=stories, blog_name="All Channels",

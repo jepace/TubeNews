@@ -87,11 +87,11 @@ These two patterns are deliberately different: feeds are configuration (small,
 operator-managed, read at startup), users are application state (runtime-created,
 individually owned).
 
-**If the user count grows large enough that glob-scanning on every login/lookup
+~~**If the user count grows large enough that glob-scanning on every login/lookup
 becomes a bottleneck**, consider adding a lightweight `archive/users/index.json`
 that maps email → uuid. The per-user files stay as-is; the index just speeds up
 `_find_user_by_email()`. Rebuild the index on registration, deletion, and email
-change. No schema migration needed for existing user directories.
+change. No schema migration needed for existing user directories.~~ **Done — see Completed Items.**
 
 **If `TubeNews.json` becomes unwieldy** (many feeds + many server config keys),
 consider splitting it:
@@ -109,6 +109,17 @@ check `feeds.json` into version control (no secrets) while keeping
 
 ## Completed Items
 
+### Email index for O(1) user lookup (March 2026)
+
+`_find_user_by_email()` previously globbed `archive/users/*/user.json` on every
+login, duplicate-email check, and admin info update — O(n) in the number of
+users. An `archive/users/index.json` file (email → UUID dict) now provides O(1)
+lookup. The index is written atomically (write-then-rename) and is kept in sync
+on registration, admin-created accounts, account deletion, and email changes.
+`_find_user_by_email()` still falls back to a glob scan if the index is missing
+or an entry is stale, and repairs the index on the fly — so existing deployments
+upgrade without any manual migration step.
+
 ### Per-user per-channel focus filtering (March 2026)
 
 Users can now set a personal focus per channel subscription (e.g. "housing,
@@ -118,6 +129,49 @@ time in both `_get_user_stories()` and `build_user_feed_xml()`.  Old stories
 (written before topic tagging was added) always pass through unfiltered.
 No API cost increase — one Gemini call per video regardless of subscriber count.
 
+### Silent `except Exception:` blocks now log skips (March 2026)
+
+All bare `except Exception: continue` / `pass` blocks in file-scanning loops
+across `TubeNews.py` and `web/app.py` now capture the exception as `exc` and
+emit `logger.debug(f"Skipping {path}: {exc}")`.  One-off failures (config load,
+run-log load) use `logger.warning(...)` instead.  Intentionally silent fallbacks
+(graceful degradation on missing config keys, ntfy notification failures) were
+left unchanged.
+
+### Admin feed-management routes and focus filtering now tested (March 2026)
+
+`tests/test_webapp.py` now covers `/admin/feeds` (list, add, delete) including
+auth guards, validation errors (missing fields, bad channel ID prefix,
+duplicate channel ID), and the happy path for each mutation.  Two new tests
+exercise `_get_user_stories()` focus filtering via the `/blog` Flask route
+directly: one asserts that a user with focus "housing" sees only housing
+stories; the other confirms all stories appear when no focus is configured.
+261 tests pass.
+
+### Windows datetime portability fixed (March 2026)
+
+`%-d` and `%-I` strftime format codes replaced with a new `_fmt_no_leading_zeros(dt, fmt)`
+helper that uses `%d`/`%I` and strips leading zeros via `re.sub(r" 0(\d)", r" \1", ...)`.
+Works identically on Windows, Linux, and macOS.
+
+### `helpers/catchup.py` `slugify()` duplication eliminated (March 2026)
+
+`slugify()` extracted into `tubenews_utils.py` (no heavy dependencies).
+`TubeNews.py` now imports from it (`from tubenews_utils import slugify`) and
+re-exports it so all existing callers (`web/app.py`, tests) are unaffected.
+`helpers/catchup.py` adds `sys.path.insert(0, str(BASE_DIR))` and imports
+from `tubenews_utils` directly, removing its local copy.
+
+### TypedDict data contracts introduced (March 2026)
+
+All bare `dict` and `list[dict]` type annotations on public function signatures
+have been replaced with named `TypedDict` classes.  Defined in `TubeNews.py`:
+`VideoInfo`, `FeedConfig`, `GeminiStory`, `ParsedStory`, `MetadataDict`,
+`FeedResult`.  Defined in `web/app.py`: `ChannelInfo`, `ChannelStat`,
+`StoryDict`.  `FeedConfig` and `ParsedStory` are imported into `web/app.py`
+from `TubeNews`.  See the "Data Contracts" section in `CLAUDE.md` for the full
+field listing.
+
 ---
 
 ## Known Issues / Future Hardening
@@ -125,53 +179,10 @@ No API cost increase — one Gemini call per video regardless of subscriber coun
 The following issues were identified in a QA sweep and deferred because they
 are low-risk in current usage or require larger refactoring to address cleanly.
 
-### Bare `except Exception:` blocks hide errors
+### Web UI — login/register rate-limiting behaviour untested
 
-Several inner loops in `rebuild_aggregate_feed`, `rebuild_user_feed`, and
-`rebuild_user_blog` use `except Exception: continue` to skip corrupt story or
-metadata files.  The skip behaviour is correct, but the absence of logging
-makes it impossible to know which files were skipped or why.
-
-**Future fix:** Add `logger.debug(f"Skipping {path}: {exc}")` in each of these
-handlers so silent skips are at least visible in debug mode.
-
-### Type hints use generic `dict` throughout
-
-Functions like `discover_videos()` return `list[dict]` but the actual structure
-is `list[{id, title, date, is_live}]`.  Similarly, `process_feed()`,
-`process_video()`, and the feed-config dicts are all typed as bare `dict`.
-
-**Future fix:** Define `TypedDict` classes (`VideoInfo`, `FeedConfig`,
-`StoryDict`, etc.) and use them in all annotations.  This makes the data
-contracts explicit and enables static type checking with mypy/pyright.
-
-### `helpers/catchup.py` duplicates `slugify()`
-
-The helper defines its own `slugify()` to avoid importing TubeNews (which
-drags in feedgen, supadata, etc.).  If the slugify implementation ever changes
-in `TubeNews.py`, the helper must be updated manually.
-
-**Future fix:** Extract `slugify()` into a tiny `tubenews_utils.py` with no
-heavy dependencies, importable by both.
-
-### Windows datetime portability
-
-`%-d` and `%-I` strftime format codes (used in `_send_ntfy()` and `main()`)
-are POSIX-only and crash on Windows with a stray `%` error.
-
-**Future fix:** Replace `%-d`/`%-I` with a portable helper that strips leading
-zeros after formatting (e.g. `dt.strftime("%B %d, %Y").replace(" 0", " ")`).
-
-### Web UI has no automated tests
-
-~~All Flask routes, the `User` model, and helper functions in `web/app.py` are
-currently untested.~~  A `tests/test_web.py` and `tests/test_webapp.py` now
-cover URL generation, subscription saves, admin guards, public token routes,
-and lock-file detection.  Good baseline coverage exists.
-
-**Remaining gaps:**
-- Login/register rate-limiting behaviour is not exercised by the test suite.
-- The admin feed-management routes (`/admin/feeds/*`) are untested.
-- `_get_user_stories()` focus filtering is covered indirectly through
-  `build_user_feed_xml` tests but has no dedicated integration-level tests
-  against the Flask routes.
+Login and register routes are rate-limited (flask-limiter, 10/min and 5/min
+respectively).  Testing this requires firing many real requests to trip the
+limiter and verifying the 429 response; the test suite disables rate-limiting
+globally via `RATELIMIT_ENABLED = False`, so no simple unit test covers this
+path.  Acceptance-level or load tests would be the right vehicle.
