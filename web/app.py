@@ -470,7 +470,7 @@ def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
     if not STORAGE_ROOT.is_dir():
         return None
     for d in STORAGE_ROOT.iterdir():
-        if not d.is_dir() or d.name == "users":
+        if not d.is_dir() or d.name == "users" or d.name.startswith("_"):
             continue
         cj = d / "channel.json"
         if cj.exists():
@@ -489,7 +489,7 @@ def _archive_channel_stats() -> list[ChannelStat]:
         return stats
     channels_cfg = _load_channels()
     for channel_dir in STORAGE_ROOT.iterdir():
-        if not channel_dir.is_dir() or channel_dir.name == "users":
+        if not channel_dir.is_dir() or channel_dir.name == "users" or channel_dir.name.startswith("_"):
             continue
         info = _channel_info_for_dir(channel_dir, channels_cfg)
         if not info:
@@ -534,7 +534,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
         return None, []
     channels_cfg = _load_channels()
     for channel_dir in STORAGE_ROOT.iterdir():
-        if not channel_dir.is_dir() or channel_dir.name == "users":
+        if not channel_dir.is_dir() or channel_dir.name == "users" or channel_dir.name.startswith("_"):
             continue
         channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
         if not channel_info or channel_info.get("channel_id") != channel_id:
@@ -1257,6 +1257,18 @@ def admin_runs():
         runs = []
     starting = request.args.get("starting") == "1"
     is_running = _is_running() or starting
+    # Determine which historical runs have a log file available.
+    run_logs_dir = STORAGE_ROOT / "_run_logs"
+    for run in runs:
+        pid = run.get("pid")
+        run["has_log"] = bool(pid and (run_logs_dir / f"run-{pid}.log").exists())
+    # Pass current running PID so the template can link to the live log.
+    current_run_pid = None
+    if is_running and not starting:
+        try:
+            current_run_pid = int(LOCK_FILE.read_text().strip())
+        except Exception:
+            pass
     return render_template(
         "admin_runs.html",
         runs=list(reversed(runs)),
@@ -1264,6 +1276,7 @@ def admin_runs():
         is_running=is_running,
         starting=starting,
         supadata=_get_supadata_balance(),
+        current_run_pid=current_run_pid,
     )
 
 
@@ -1274,15 +1287,36 @@ def admin_run_now():
     if _is_running():
         flash("TubeNews is already running.", "info")
         return redirect(url_for("admin_runs"))
-    subprocess.Popen(
-        [sys.executable, str(TUBENEWS_PY)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    run_logs_dir = STORAGE_ROOT / "_run_logs"
+    run_logs_dir.mkdir(exist_ok=True)
+    # Open a placeholder log file; rename to run-{pid}.log once we have the PID.
+    tmp_log = run_logs_dir / ".run-starting.log"
+    with open(tmp_log, "w") as log_fh:
+        proc = subprocess.Popen(
+            [sys.executable, str(TUBENEWS_PY)],
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+        )
+    tmp_log.rename(run_logs_dir / f"run-{proc.pid}.log")
     _web_ntfy("TubeNews: run started", f"Manual run triggered by {current_user.email}.")
     flash("TubeNews run started.", "success")
     return redirect(url_for("admin_runs") + "?starting=1")
+
+
+@app.route("/admin/run-log/<int:pid>")
+@login_required
+@admin_required
+def admin_run_log(pid: int):
+    log_path = STORAGE_ROOT / "_run_logs" / f"run-{pid}.log"
+    content = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    # Show the live indicator only when this specific PID is the running process.
+    try:
+        running_pid = int(LOCK_FILE.read_text().strip()) if LOCK_FILE.exists() else None
+    except Exception:
+        running_pid = None
+    is_running = running_pid == pid
+    return render_template("admin_run_log.html", content=content, is_running=is_running, pid=pid)
 
 
 def _get_supadata_balance() -> dict | None:
@@ -1373,7 +1407,7 @@ def admin_all_stories():
     channels_cfg = _load_channels()
     if STORAGE_ROOT.is_dir():
         for channel_dir in STORAGE_ROOT.iterdir():
-            if not channel_dir.is_dir() or channel_dir.name == "users":
+            if not channel_dir.is_dir() or channel_dir.name == "users" or channel_dir.name.startswith("_"):
                 continue
             channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
             if not channel_info:

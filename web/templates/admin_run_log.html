@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Run Log (PID {{ pid }}) — TubeNews{% endblock %}
+
+{% block head_extra %}
+{% if is_running %}
+  <meta http-equiv="refresh" content="3">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.25rem;">
+    <h1 style="margin:0;">Run Log <span class="muted" style="font-size:0.75em; font-weight:400;">(PID {{ pid }})</span></h1>
+    {% if is_running %}
+      <span class="pill pill-locked" style="font-size:0.9rem;">&#9679; Running<span id="run-dots"></span></span>
+      <script>
+        (function() {
+          var el = document.getElementById('run-dots');
+          var frames = ['.', '..', '...'];
+          var i = 0;
+          el.textContent = frames[0];
+          setInterval(function() { el.textContent = frames[++i % 3]; }, 500);
+        })();
+      </script>
+    {% endif %}
+    <a href="{{ url_for('admin_runs') }}" style="margin-left:auto; font-size:0.9rem;">&#8592; Back to runs</a>
+  </div>
+
+  {% if content %}
+    <pre style="background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:1rem; font-size:0.8rem; overflow:auto; max-height:75vh; white-space:pre-wrap; word-break:break-all;">{{ content }}</pre>
+    <script>
+      (function() {
+        var pre = document.querySelector('pre');
+        {% if is_running %}
+        // Scroll to bottom and keep it pinned unless the user scrolls up.
+        var pinned = true;
+        pre.addEventListener('scroll', function() {
+          pinned = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+        });
+        function scrollToBottom() { if (pinned) pre.scrollTop = pre.scrollHeight; }
+        scrollToBottom();
+        window.addEventListener('load', scrollToBottom);
+        {% else %}
+        // Scroll to bottom on initial load so the end of the log is visible.
+        pre.scrollTop = pre.scrollHeight;
+        {% endif %}
+      })();
+    </script>
+  {% else %}
+    <p class="muted">Log file not found for PID {{ pid }}.</p>
+  {% endif %}
+</div>
+{% endblock %}

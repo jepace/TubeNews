@@ -618,6 +618,9 @@ def test_run_now_launches_subprocess_when_idle(admin_client, monkeypatch):
     # Must be launched detached (start_new_session=True).
     _, kwargs = mock_popen.call_args
     assert kwargs.get("start_new_session") is True
+    # stdout and stderr must not be DEVNULL — they should be a file handle.
+    assert kwargs.get("stdout") is not subprocess.DEVNULL
+    assert kwargs.get("stderr") is not subprocess.DEVNULL
 
 
 def test_run_now_redirects_to_admin_runs(admin_client, monkeypatch):
@@ -644,6 +647,98 @@ def test_run_now_does_not_launch_when_locked(admin_client, archive, monkeypatch)
     monkeypatch.setattr(subprocess, "Popen", mock_popen)
     admin_client.post("/admin/run-now")
     mock_popen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/run-log/<pid>
+# ---------------------------------------------------------------------------
+
+def test_run_log_requires_login(client, archive):
+    r = client.get("/admin/run-log/12345")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_run_log_requires_admin(logged_in_client, archive):
+    r = logged_in_client.get("/admin/run-log/12345")
+    assert r.status_code == 403
+
+
+def test_run_log_returns_200_when_log_exists(admin_client, archive):
+    """When the log file for a PID exists its content must appear on the page."""
+    run_logs_dir = archive / "_run_logs"
+    run_logs_dir.mkdir()
+    (run_logs_dir / "run-12345.log").write_text("INFO: Session Start\nINFO: done\n")
+    r = admin_client.get("/admin/run-log/12345")
+    assert r.status_code == 200
+    assert b"Session Start" in r.data
+
+
+def test_run_log_returns_200_when_no_log_file(admin_client, archive):
+    """Page must render without error even when the log file does not exist."""
+    r = admin_client.get("/admin/run-log/99999")
+    assert r.status_code == 200
+
+
+def test_run_log_shows_running_indicator_when_pid_matches_lock(admin_client, archive):
+    """Running indicator appears only when the requested PID holds the lock."""
+    pid = os.getpid()
+    (archive / ".tubenews.lock").write_text(str(pid))
+    run_logs_dir = archive / "_run_logs"
+    run_logs_dir.mkdir()
+    (run_logs_dir / f"run-{pid}.log").write_text("INFO: running\n")
+    r = admin_client.get(f"/admin/run-log/{pid}")
+    assert b"Running" in r.data
+
+
+def test_run_log_no_running_indicator_for_other_pid(admin_client, archive):
+    """Running indicator must NOT appear when the PID does not match the lock."""
+    (archive / ".tubenews.lock").write_text(str(os.getpid()))
+    run_logs_dir = archive / "_run_logs"
+    run_logs_dir.mkdir()
+    other_pid = 99999
+    (run_logs_dir / f"run-{other_pid}.log").write_text("INFO: old run\n")
+    r = admin_client.get(f"/admin/run-log/{other_pid}")
+    assert b"Running" not in r.data
+
+
+def test_run_now_creates_log_in_run_logs_dir(admin_client, archive, monkeypatch):
+    """Run Now must write stdout/stderr into archive/_run_logs/run-{pid}.log."""
+    fake_pid = 55555
+    mock_proc = MagicMock()
+    mock_proc.pid = fake_pid
+    mock_popen = MagicMock(return_value=mock_proc)
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    admin_client.post("/admin/run-now")
+    _, kwargs = mock_popen.call_args
+    # stdout and stderr must be the same open file handle (not DEVNULL).
+    assert kwargs["stdout"] is kwargs["stderr"]
+    # The log file must now exist under _run_logs/ with the PID name.
+    assert (archive / "_run_logs" / f"run-{fake_pid}.log").exists()
+
+
+def test_admin_runs_shows_log_link_for_run_with_log(admin_client, archive):
+    """The runs table must link to the log page for runs that have a log file."""
+    pid = 77777
+    run_logs_dir = archive / "_run_logs"
+    run_logs_dir.mkdir()
+    (run_logs_dir / f"run-{pid}.log").write_text("INFO: run output\n")
+    run_log = [{
+        "started_at": 1741910400.0, "finished_at": 1741910460.0,
+        "total_stories": 0, "ai_rate_limited": False,
+        "transcript_quota_exhausted": False, "feeds": [], "pid": pid,
+    }]
+    (archive / "run_log.json").write_text(json.dumps(run_log))
+    r = admin_client.get("/admin/runs")
+    assert f"/admin/run-log/{pid}".encode() in r.data
+
+
+def test_admin_runs_shows_view_log_link_when_running(admin_client, archive):
+    """'View log' link appears next to the Running indicator when a run is active."""
+    pid = os.getpid()
+    (archive / ".tubenews.lock").write_text(str(pid))
+    r = admin_client.get("/admin/runs")
+    assert f"/admin/run-log/{pid}".encode() in r.data
 
 
 # ---------------------------------------------------------------------------
@@ -1112,7 +1207,9 @@ def test_run_now_sends_ntfy(archive, monkeypatch):
     sent = []
     monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
     monkeypatch.setattr(webapp, "_is_running", lambda: False)
-    monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **kw: None)
+    fake_proc = MagicMock()
+    fake_proc.pid = 11111
+    monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **kw: fake_proc)
 
     flask_app.config["TESTING"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
