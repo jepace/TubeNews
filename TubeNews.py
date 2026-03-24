@@ -38,7 +38,7 @@ from typing import TypedDict
 # ---------------------------------------------------------------------------
 import requests
 from feedgen.feed import FeedGenerator
-from supadata import Supadata
+from supadata import Supadata, SupadataError
 
 # ---------------------------------------------------------------------------
 # Environment & paths
@@ -477,11 +477,17 @@ def fetch_transcript(
     supadata_client: Supadata,
     feed_name: str = "",
     video_title: str = "",
+    transcript_rate_limit_event: threading.Event | None = None,
 ) -> str | None:
     """Fetch timed transcript segments from the Supadata API.
 
     Each segment is formatted as ``"<offset_seconds>s --> <text>"`` so Gemini
     knows where each sentence occurs in the video timeline.
+
+    When a quota-exhausted error is detected (HTTP 402 or a
+    ``SupadataError`` whose ``error`` code suggests credit exhaustion),
+    *transcript_rate_limit_event* is set so that ``process_video`` and
+    ``process_feed`` can abort remaining videos immediately.
 
     Returns the formatted transcript string, or None if the API call fails.
     """
@@ -500,7 +506,26 @@ def fetch_transcript(
             logger.debug(f"{prefix}Supadata: Received {len(segments)} segments")
             return "\n".join(lines)
     except Exception as exc:
-        if "live streaming" in str(exc).lower():
+        exc_str = str(exc).lower()
+        # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
+        is_quota_error = False
+        if isinstance(exc, SupadataError):
+            is_quota_error = any(
+                kw in (exc.error or "").lower()
+                for kw in ("credit", "quota", "payment", "limit", "billing")
+            )
+        elif isinstance(exc, requests.exceptions.HTTPError):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            is_quota_error = status == 402
+
+        if is_quota_error:
+            logger.error(
+                f"{prefix}Supadata: Quota exhausted — no credits remaining. "
+                f"Halting transcript fetches for this run."
+            )
+            if transcript_rate_limit_event is not None:
+                transcript_rate_limit_event.set()
+        elif "live streaming" in exc_str:
             logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry next run")
         else:
             logger.error(f"{prefix}Supadata: Call failed: {exc}")
@@ -1163,6 +1188,7 @@ def process_video(
     video_num: int = 0,
     total_videos: int = 0,
     focuses: list[tuple[str, list[str]]] | None = None,
+    transcript_rate_limit_event: threading.Event | None = None,
 ) -> str:
     """Fetch, analyse, and archive one video.
 
@@ -1178,17 +1204,24 @@ def process_video(
 
     Returns a ``(status, n_stories)`` tuple where *status* is one of:
 
-        ``"content_written"``  – stories were generated and written to disk;
-                                 *n_stories* is the count of new stories added.
-        ``"ai_rate_limited"``  – Gemini returned 429; caller should set
-                                 ``ai_disabled = True`` for the session;
-                                 *n_stories* is 0.
-        ``"skipped"``          – transcript unavailable, live stream, AI
-                                 disabled, or AI returned nothing; *n_stories*
-                                 is 0.  When Gemini returns an empty story list,
-                                 a ``metadata.json`` with ``status: "no_stories"``
-                                 is written so the video is not resubmitted to
-                                 the AI on future runs.
+        ``"content_written"``         – stories were generated and written to
+                                        disk; *n_stories* is the count of new
+                                        stories added.
+        ``"ai_rate_limited"``         – Gemini returned 429; caller should set
+                                        ``ai_disabled = True`` for the session;
+                                        *n_stories* is 0.
+        ``"transcript_quota_exhausted"`` – Supadata quota is exhausted;
+                                        *transcript_rate_limit_event* has been
+                                        set; caller should stop processing
+                                        further videos; *n_stories* is 0.
+        ``"skipped"``                 – transcript unavailable, live stream, AI
+                                        disabled, or AI returned nothing;
+                                        *n_stories* is 0.  When Gemini returns
+                                        an empty story list, a
+                                        ``metadata.json`` with
+                                        ``status: "no_stories"`` is written so
+                                        the video is not resubmitted to the AI
+                                        on future runs.
     """
     if focuses is None:
         focuses = [(feed.get("focus", ""), [])]
@@ -1209,6 +1242,9 @@ def process_video(
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
     else:
+        # If quota was already known exhausted, don't attempt the API call.
+        if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
+            return "transcript_quota_exhausted", 0
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
         logger.info(f"{channel_name}: {video_title}: TubeNews: Processing new video{counter}")
         if is_live:
@@ -1218,8 +1254,12 @@ def process_video(
         transcript_text = fetch_transcript(
             video_id, supadata_client,
             feed_name=channel_name, video_title=video_title,
+            transcript_rate_limit_event=transcript_rate_limit_event,
         )
         if not transcript_text:
+            # Distinguish quota exhaustion from ordinary fetch failure.
+            if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
+                return "transcript_quota_exhausted", 0
             return "skipped", 0
 
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
@@ -1293,6 +1333,7 @@ def process_feed(
     supadata_client: Supadata,
     config: dict,
     ai_rate_limit_event: threading.Event | None = None,
+    transcript_rate_limit_event: threading.Event | None = None,
 ) -> tuple[bool, bool, int]:
     """Process all new videos for one configured channel.
 
@@ -1302,6 +1343,10 @@ def process_feed(
     *ai_rate_limit_event* is an optional shared :class:`threading.Event`.
     When set (by any channel hitting a 429), all channels skip further AI
     calls for the remainder of the run.  Pass ``None`` for single-channel use.
+
+    *transcript_rate_limit_event* is an optional shared :class:`threading.Event`.
+    When set (Supadata quota exhausted), processing stops immediately for all
+    remaining videos across all channels.
 
     Returns:
         A ``(content_changed, ai_rate_limited, stories_written)`` tuple.
@@ -1402,6 +1447,7 @@ def process_feed(
             video_num=video_num,
             total_videos=total,
             focuses=focuses,
+            transcript_rate_limit_event=transcript_rate_limit_event,
         )
 
         if result == "content_written":
@@ -1411,6 +1457,9 @@ def process_feed(
             ai_rate_limited = True
             if ai_rate_limit_event is not None:
                 ai_rate_limit_event.set()
+        elif result == "transcript_quota_exhausted":
+            # Event already set by process_video; stop wasting time on this feed.
+            break
 
     return content_changed, ai_rate_limited, stories_written
 
@@ -1504,13 +1553,38 @@ def _main_body(args) -> None:
     supadata_client = Supadata(api_key=config["supadata_api_key"])
     logger.info(f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')} | AI Model: {config.get('gemini_model')}")
 
+    # Check cached Supadata balance before doing any work.
+    quota_ok, cached_balance = _check_supadata_quota(config)
+    started_at = time.time()
+    if not quota_ok:
+        run_log_path = STORAGE_ROOT / "run_log.json"
+        try:
+            runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
+        except Exception:
+            runs = []
+        runs.append({
+            "started_at": started_at,
+            "finished_at": time.time(),
+            "total_stories": 0,
+            "ai_rate_limited": False,
+            "transcript_quota_exhausted": True,
+            "feeds": [],
+        })
+        try:
+            run_log_path.write_text(json.dumps(runs[-30:], indent=2))
+        except Exception as exc:
+            logger.warning(f"TubeNews: Failed to write run log: {exc}")
+        return
+
     ai_rate_limit_event = threading.Event()
+    transcript_rate_limit_event = threading.Event()
     any_content_changed = threading.Event()
 
     def _run_feed(feed: FeedConfig) -> FeedResult:
         try:
             content_changed, _, stories_written = process_feed(
-                feed, supadata_client, config, ai_rate_limit_event
+                feed, supadata_client, config, ai_rate_limit_event,
+                transcript_rate_limit_event,
             )
             if content_changed:
                 rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
@@ -1531,7 +1605,6 @@ def _main_body(args) -> None:
                 "stories_written": 0,
             }
 
-    started_at = time.time()
     max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         feed_results = list(executor.map(_run_feed, config["feeds"]))
@@ -1567,6 +1640,7 @@ def _main_body(args) -> None:
         "finished_at": time.time(),
         "total_stories": total_stories,
         "ai_rate_limited": ai_rate_limit_event.is_set(),
+        "transcript_quota_exhausted": transcript_rate_limit_event.is_set(),
         "feeds": feed_results,
     })
     try:
@@ -1579,6 +1653,47 @@ def _main_body(args) -> None:
         _send_ntfy(ntfy_topic, total_stories, feed_results, started_at)
 
     _cache_supadata_balance(config)
+
+
+def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
+    """Check Supadata credit balance before starting a run.
+
+    Reads the balance cached at the end of the previous run
+    (``archive/supadata_balance.json``) — no live API call is made here so no
+    credits are consumed.  If the file is absent (first run) we proceed
+    optimistically; the end-of-run cache will populate it for next time.
+
+    Returns:
+        ``(ok, balance)`` — *ok* is True when there are credits remaining
+        (or when the balance cannot be determined), *balance* is the raw
+        cached dict or None.  When *ok* is False the caller should abort
+        and record ``transcript_quota_exhausted`` in the run log.
+    """
+    balance_path = STORAGE_ROOT / "supadata_balance.json"
+    if not balance_path.exists():
+        return True, None
+    try:
+        balance = json.loads(balance_path.read_text())
+    except Exception:
+        return True, None
+    max_credits = balance.get("maxCredits", 0)
+    used_credits = balance.get("usedCredits", 0)
+    remaining = max_credits - used_credits
+    if max_credits > 0 and remaining <= 0:
+        reset_date = balance.get("resetDate", "unknown")
+        logger.error(
+            f"TubeNews: Supadata quota exhausted (0 of {max_credits} credits remaining). "
+            f"Resets: {reset_date}. Aborting run — no transcripts can be fetched."
+        )
+        return False, balance
+    if max_credits > 0:
+        pct_used = used_credits / max_credits * 100
+        if pct_used >= 90:
+            logger.warning(
+                f"TubeNews: Supadata credits low — {remaining} of {max_credits} remaining "
+                f"({pct_used:.0f}% used)."
+            )
+    return True, balance
 
 
 def _cache_supadata_balance(config: dict) -> None:

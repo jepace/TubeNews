@@ -130,7 +130,7 @@ Defined in `web/app.py`:
 | `_relative_date_to_iso(text)` | Converts a YouTube relative-date string (e.g. `"11 days ago"`) to `YYYY-MM-DD`; parses exact dates from completed-stream text |
 | `_parse_channel_page_metadata(html)` | Extracts `{videoId → {title, date, is_live}}` from the `ytInitialData` JSON blob embedded in a channel listing page |
 | `discover_videos(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns `list[VideoInfo]` |
-| `fetch_transcript(video_id, supadata_client)` | Fetches timed transcript segments from Supadata; returns formatted string or None |
+| `fetch_transcript(video_id, supadata_client, ..., transcript_rate_limit_event=None)` | Fetches timed transcript segments from Supadata; returns formatted string or None. When a quota-exhausted error is detected (HTTP 402 or `SupadataError` with a credit-related `error` code), sets `transcript_rate_limit_event` before returning None so callers can stop immediately. |
 
 ### AI story generation
 
@@ -155,8 +155,9 @@ Defined in `web/app.py`:
 
 | Function | Description |
 |---|---|
-| `process_video(video_id, ..., focuses=None)` | Fetch + analyse one video. *focuses* is a list of `(focus_string, user_ids)` pairs; calls Gemini once per pair and writes `**Users:**` metadata for each story. Falls back to `[(feed["focus"], [])]` (unrestricted) when omitted. Deduplicates stories by title across focus passes, merging user_ids. Returns `("content_written", n)`, `("ai_rate_limited", 0)`, or `("skipped", 0)`. |
-| `process_feed(feed, ...)` | Collects focuses via `_collect_channel_focuses`, processes all videos needing work for any focus; returns `(content_changed, ai_rate_limited, stories_written)` |
+| `process_video(video_id, ..., focuses=None, transcript_rate_limit_event=None)` | Fetch + analyse one video. *focuses* is a list of `(focus_string, user_ids)` pairs; calls Gemini once per pair and writes `**Users:**` metadata for each story. Falls back to `[(feed["focus"], [])]` (unrestricted) when omitted. Deduplicates stories by title across focus passes, merging user_ids. Returns `("content_written", n)`, `("ai_rate_limited", 0)`, `("transcript_quota_exhausted", 0)`, or `("skipped", 0)`. Skips the transcript API call immediately if `transcript_rate_limit_event` is already set. |
+| `process_feed(feed, ..., ai_rate_limit_event=None, transcript_rate_limit_event=None)` | Collects focuses via `_collect_channel_focuses`, processes all videos needing work for any focus; returns `(content_changed, ai_rate_limited, stories_written)`. Breaks out of the video loop immediately when `transcript_rate_limit_event` is set. |
+| `_check_supadata_quota(config)` | Reads `archive/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
 ---
