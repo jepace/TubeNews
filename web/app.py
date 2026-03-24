@@ -1392,16 +1392,44 @@ def admin_feed_edit(channel_id: str):
                                 old_dir.rename(new_dir)
                             except OSError as exc:
                                 rename_error = f"Could not rename archive directory: {exc}"
+                elif old_dir is None:
+                    # Channel has no channel.json yet; check whether new_slug collides
+                    # with an existing directory that belongs to a different channel.
+                    candidate = STORAGE_ROOT / new_slug
+                    if candidate.is_dir():
+                        cj = candidate / "channel.json"
+                        if cj.exists():
+                            try:
+                                existing = json.loads(cj.read_text())
+                                if existing.get("channel_id") != channel_id:
+                                    rename_error = (
+                                        f"Archive directory '{new_slug}' already belongs to "
+                                        f"another channel — choose a different channel name."
+                                    )
+                            except Exception:
+                                pass  # corrupt channel.json; safe to overwrite
                 if rename_error:
                     flash(rename_error, "error")
                 else:
-                    # Update channel.json in the (possibly renamed) archive dir
+                    # Update channel.json in the (possibly renamed) archive dir.
+                    # Guard: only write if the directory either has no channel.json
+                    # or the existing channel.json already belongs to this channel.
                     archive_dir = STORAGE_ROOT / new_slug
                     if archive_dir.is_dir():
                         try:
-                            (archive_dir / "channel.json").write_text(
-                                json.dumps({"channel_id": new_channel_id, "channel_name": channel_name})
-                            )
+                            existing_cj = archive_dir / "channel.json"
+                            safe_to_write = True
+                            if existing_cj.exists():
+                                try:
+                                    existing = json.loads(existing_cj.read_text())
+                                    if existing.get("channel_id") not in (channel_id, new_channel_id):
+                                        safe_to_write = False
+                                except Exception:
+                                    pass  # corrupt; overwrite is fine
+                            if safe_to_write:
+                                existing_cj.write_text(
+                                    json.dumps({"channel_id": new_channel_id, "channel_name": channel_name})
+                                )
                         except OSError:
                             pass  # non-fatal; next rebuild_feed will overwrite it
                     channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}

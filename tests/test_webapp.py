@@ -720,6 +720,82 @@ def test_feed_rename_blocked_when_target_dir_exists(admin_client, archive):
     assert (archive / new_slug).is_dir()
 
 
+def test_feed_rename_no_channel_json_does_not_corrupt_other_channel(admin_client, archive):
+    """Editing a channel with no channel.json must not overwrite another channel's channel.json.
+
+    Regression test: when old_dir is None (no channel.json found for the being-edited
+    channel), the collision check was skipped. If new_slug matched an existing directory
+    belonging to a different channel, that directory's channel.json was overwritten with
+    the wrong channel_id, causing _get_channel_stories to return empty results for the
+    victim channel.
+    """
+    import json as _json
+
+    # Create a channel directory with no channel.json (simulates a new channel
+    # that ran through catchup.py but never had rebuild_feed called).
+    orphan_dir = archive / "orphan_channel"
+    orphan_dir.mkdir()
+    # Add some ignored_too_old stubs (typical catchup.py output)
+    stub = orphan_dir / "2000-01-01_XXXXXXXXXXX"
+    stub.mkdir()
+    (stub / "metadata.json").write_text(json.dumps({
+        "video_id": "XXXXXXXXXXX", "status": "ignored_too_old", "processed_at": 0
+    }))
+    # Add this channel to the config
+    import web.app as _webapp
+    cfg = _json.loads(_webapp.CONFIG_FILE.read_text())
+    cfg["feeds"].append({"channel_id": "UC_ORPHAN_", "channel_name": "Orphan Channel", "focus": "test"})
+    _webapp.CONFIG_FILE.write_text(_json.dumps(cfg))
+
+    # Attempt to rename "Orphan Channel" to "Alpha City Council" — same name (and slug)
+    # as an existing channel (UC_ALPHA_ID) that DOES have a channel.json in alpha_city/.
+    r = admin_client.post("/admin/feeds/UC_ORPHAN_/edit", data={
+        "channel_id": "UC_ORPHAN_",
+        "channel_name": "Alpha City Council",   # slug "alpha_city_council" != "alpha_city"
+        "focus": "test",
+    }, follow_redirects=True)
+    # The slug for "Alpha City Council" is "alpha_city_council", which does NOT collide
+    # with the existing "alpha_city" directory, so this succeeds. Verify alpha_city's
+    # channel.json was not disturbed.
+    alpha_cj = archive / "alpha_city" / "channel.json"
+    assert alpha_cj.exists()
+    data = _json.loads(alpha_cj.read_text())
+    assert data["channel_id"] == "UC_ALPHA_ID", (
+        "alpha_city/channel.json must not be overwritten when editing a different channel"
+    )
+
+
+def test_feed_edit_no_channel_json_blocked_when_new_slug_collides_with_other_channel(admin_client, archive):
+    """Editing a channel with no channel.json must show an error if new_slug matches
+    a directory that already has a channel.json belonging to a different channel.
+    """
+    import json as _json
+
+    # Channel with no channel.json
+    orphan_dir = archive / "orphan_channel"
+    orphan_dir.mkdir()
+    import web.app as _webapp
+    cfg = _json.loads(_webapp.CONFIG_FILE.read_text())
+    cfg["feeds"].append({"channel_id": "UC_ORPHAN_", "channel_name": "Orphan Channel", "focus": "test"})
+    _webapp.CONFIG_FILE.write_text(_json.dumps(cfg))
+
+    # Rename orphan to "alpha city" — slugify("alpha city") = "alpha_city" — which
+    # IS the existing directory for UC_ALPHA_ID (it has channel.json).
+    r = admin_client.post("/admin/feeds/UC_ORPHAN_/edit", data={
+        "channel_id": "UC_ORPHAN_",
+        "channel_name": "alpha city",   # slug = "alpha_city" — collides!
+        "focus": "test",
+    }, follow_redirects=True)
+
+    assert b"already belongs to" in r.data or b"already exists" in r.data, (
+        "Must show an error when the target directory belongs to another channel"
+    )
+    # The victim channel's channel.json must not have been overwritten
+    alpha_cj = archive / "alpha_city" / "channel.json"
+    data = _json.loads(alpha_cj.read_text())
+    assert data["channel_id"] == "UC_ALPHA_ID", (
+        "alpha_city/channel.json must not be overwritten"
+    )
 
 
 # ---------------------------------------------------------------------------
