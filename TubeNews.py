@@ -496,9 +496,14 @@ def fetch_transcript(
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        transcript_response = supadata_client.transcript(url=url, text=False)
+        transcript_response = supadata_client.transcript(url=url, lang="en", text=False)
         if hasattr(transcript_response, "content") and transcript_response.content:
             segments = transcript_response.content
+            lang_received = getattr(transcript_response, "lang", "") or ""
+            if lang_received and lang_received != "en":
+                logger.warning(f"{prefix}Supadata: Requested English transcript but received '{lang_received}'")
+            else:
+                logger.debug(f"{prefix}Supadata: Language: {lang_received or 'unknown'}")
             lines = [
                 f"{int(getattr(seg, 'offset', 0) / 1000)}s --> {getattr(seg, 'text', '')}"
                 for seg in segments
