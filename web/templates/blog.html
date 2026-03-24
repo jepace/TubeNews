@@ -117,9 +117,10 @@
     var anchor = bar.dataset.anchor;
 
     if (hasNativeShare) {
-      // iOS/mobile: replace all custom buttons with a single native share button.
-      // The OS share sheet covers copy-link, email, AirDrop, etc. natively, and
-      // avoids clipboard-API restrictions that exist on iOS without HTTPS.
+      // iOS/mobile: add a native share button that opens the OS share sheet
+      // (covers AirDrop, Messages, copy-link, etc.).  Keep "Copy article" visible
+      // as a fallback for copying the full text — clipboard works in secure
+      // contexts; on plain HTTP the copy button degrades gracefully.
       var nativeBtn = document.createElement('button');
       nativeBtn.type = 'button';
       nativeBtn.className = 'share-native';
@@ -127,10 +128,18 @@
       nativeBtn.title = 'Share via system share sheet';
       bar.insertBefore(nativeBtn, bar.firstChild);
       nativeBtn.addEventListener('click', function () {
-        navigator.share({ title: title, url: articleLink(anchor) }).catch(function () {});
+        navigator.share({ title: title, url: articleLink(anchor) }).catch(function (err) {
+          // AbortError = user dismissed the sheet — ignore.
+          // Any other error (e.g. HTTP context on Chrome/iOS) — fall back to
+          // copying the link so the user gets something useful.
+          if (err && err.name !== 'AbortError') {
+            copyText(articleLink(anchor), nativeBtn, 'Link copied!');
+          }
+        });
       });
-      // Hide the manual buttons — the native share sheet supersedes them on iOS.
-      ['share-copy-text', 'share-copy-link', 'share-email', 'share-mastodon'].forEach(function (cls) {
+      // Hide the redundant buttons (copy-link, email, mastodon) since the share
+      // sheet handles them, but leave "Copy article" for the full text.
+      ['share-copy-link', 'share-email', 'share-mastodon'].forEach(function (cls) {
         var el = bar.querySelector('.' + cls);
         if (el) el.style.display = 'none';
       });
