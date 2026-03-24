@@ -901,12 +901,8 @@ def account():
         if action == "info":
             new_name = request.form.get("name", "").strip()
             new_email = request.form.get("email", "").strip().lower()
-            current_pw = request.form.get("current_password", "")
             if not new_name or not new_email or "@" not in new_email:
                 flash("Name and a valid email are required.", "error")
-                return redirect(url_for("account"))
-            if not check_password_hash(current_user._data["password_hash"], current_pw):
-                flash("Current password is incorrect.", "error")
                 return redirect(url_for("account"))
             if new_email != current_user.email:
                 existing = _find_user_by_email(new_email)

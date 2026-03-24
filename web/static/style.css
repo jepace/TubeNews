@@ -148,12 +148,11 @@ nav a:hover { text-decoration: underline; }
 
   #main-nav.nav-open { display: flex; }
 
-  #main-nav .nav-rss { padding: 0.1rem 0; }
 }
 
 
-.nav-rss { display: flex; align-items: center; line-height: 0; }
-.nav-rss:hover { opacity: 0.75; }
+.nav-profile { display: inline-flex; align-items: center; gap: 0.35rem; }
+.nav-profile-icon { opacity: 0.6; flex-shrink: 0; }
 
 .nav-badge {
   display: inline-flex;
