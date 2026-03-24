@@ -236,7 +236,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**")
+        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**")
     ]
     body_html = "<br>".join(body_lines).replace("\n", "<br>")
 
