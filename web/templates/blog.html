@@ -116,11 +116,17 @@
     var title  = bar.dataset.title;
     var anchor = bar.dataset.anchor;
 
+    // "Copy article" always works — on iOS it copies full text; on desktop the
+    // share sheet doesn't exist so this is the only way to get the full text.
+    bar.querySelector('.share-copy-text').addEventListener('click', function () {
+      copyText(plainText(bar), this, 'Copied!');
+    });
+
     if (hasNativeShare) {
       // iOS/mobile: add a native share button that opens the OS share sheet
-      // (covers AirDrop, Messages, copy-link, etc.).  Keep "Copy article" visible
-      // as a fallback for copying the full text — clipboard works in secure
-      // contexts; on plain HTTP the copy button degrades gracefully.
+      // (covers AirDrop, Messages, copy-link, etc.).  "Copy article" above stays
+      // active for copying the full text — clipboard works in secure contexts;
+      // on plain HTTP the copy button degrades gracefully.
       var nativeBtn = document.createElement('button');
       nativeBtn.type = 'button';
       nativeBtn.className = 'share-native';
@@ -138,16 +144,12 @@
         });
       });
       // Hide the redundant buttons (copy-link, email, mastodon) since the share
-      // sheet handles them, but leave "Copy article" for the full text.
+      // sheet handles them.
       ['share-copy-link', 'share-email', 'share-mastodon'].forEach(function (cls) {
         var el = bar.querySelector('.' + cls);
         if (el) el.style.display = 'none';
       });
     } else {
-      bar.querySelector('.share-copy-text').addEventListener('click', function () {
-        copyText(plainText(bar), this, 'Copied!');
-      });
-
       bar.querySelector('.share-copy-link').addEventListener('click', function () {
         copyText(articleLink(anchor), this, 'Copied!');
       });
