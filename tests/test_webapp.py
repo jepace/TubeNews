@@ -1249,3 +1249,142 @@ def test_blog_route_unfiltered_when_no_focus(archive, monkeypatch):
     body = r.data.decode()
     assert "Budget Approved" in body, "all stories must appear when no focus is set"
     assert "Housing Project Approved" in body
+
+
+# ---------------------------------------------------------------------------
+# Email index — _read/_write/_index_add/_index_remove + _find_user_by_email
+# ---------------------------------------------------------------------------
+
+def test_email_index_round_trip(archive, monkeypatch):
+    """_index_add writes an entry; _read_email_index reads it back."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    _wa._index_add("alice@example.com", "uuid-alice")
+    index = _wa._read_email_index()
+    assert index.get("alice@example.com") == "uuid-alice"
+
+
+def test_index_remove_deletes_entry(archive, monkeypatch):
+    """_index_remove must remove only the targeted entry."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    _wa._index_add("alice@example.com", "uuid-alice")
+    _wa._index_add("bob@example.com", "uuid-bob")
+    _wa._index_remove("alice@example.com")
+    index = _wa._read_email_index()
+    assert "alice@example.com" not in index
+    assert index.get("bob@example.com") == "uuid-bob"
+
+
+def test_find_user_by_email_uses_index(archive, monkeypatch):
+    """_find_user_by_email must resolve via the index without touching individual user.json files."""
+    import web.app as _wa
+    users_root = archive / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+
+    user_data = _make_user(users_root, "Alice", "alice@example.com", [])
+    # Manually discover the UUID that _make_user created.
+    uid = next(p.name for p in users_root.iterdir()
+               if (p / "user.json").exists() and
+               json.loads((p / "user.json").read_text()).get("email") == "alice@example.com")
+    _wa._index_add("alice@example.com", uid)
+
+    found = _wa._find_user_by_email("alice@example.com")
+    assert found is not None
+    assert found.email == "alice@example.com"
+
+
+def test_find_user_by_email_falls_back_to_glob_when_no_index(archive, monkeypatch):
+    """Without an index file, _find_user_by_email must still work via glob scan."""
+    import web.app as _wa
+    users_root = archive / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+
+    _make_user(users_root, "Bob", "bob@example.com", [])
+    # Ensure no index exists.
+    index_file = users_root / "index.json"
+    if index_file.exists():
+        index_file.unlink()
+
+    found = _wa._find_user_by_email("bob@example.com")
+    assert found is not None
+    assert found.email == "bob@example.com"
+
+
+def test_find_user_by_email_glob_fallback_repairs_index(archive, monkeypatch):
+    """Glob fallback must write a new index entry so the next call is O(1)."""
+    import web.app as _wa
+    users_root = archive / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+
+    _make_user(users_root, "Carol", "carol@example.com", [])
+    index_file = users_root / "index.json"
+    if index_file.exists():
+        index_file.unlink()
+
+    _wa._find_user_by_email("carol@example.com")
+
+    assert index_file.exists(), "index must be created by the fallback path"
+    index = json.loads(index_file.read_text())
+    assert "carol@example.com" in index
+
+
+def test_register_route_writes_index(archive, monkeypatch):
+    """Successful registration must add the new user to the email index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+
+    flask_app.config["TESTING"] = True
+    flask_app.config["WTF_CSRF_ENABLED"] = False
+    with flask_app.test_client() as c:
+        c.post("/register", data={
+            "email": "newuser@example.com",
+            "password": "securepassword1",
+            "confirm_password": "securepassword1",
+            "name": "New User",
+        })
+
+    index = _wa._read_email_index()
+    assert "newuser@example.com" in index
+
+
+def test_admin_delete_removes_index_entry(archive, monkeypatch, admin_client):
+    """Deleting a user via the admin route must remove them from the index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    users_root = archive / "users"
+    _make_user(users_root, "Victim", "victim@example.com", [])
+    uid = next(p.name for p in users_root.iterdir()
+               if (p / "user.json").exists() and
+               json.loads((p / "user.json").read_text()).get("email") == "victim@example.com")
+    _wa._index_add("victim@example.com", uid)
+
+    admin_client.post(f"/admin/user/{uid}/delete",
+                      data={"confirm_email": "victim@example.com"})
+
+    index = _wa._read_email_index()
+    assert "victim@example.com" not in index
+
+
+def test_admin_email_change_updates_index(archive, monkeypatch, admin_client):
+    """Changing a user's email via the admin route must update the index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+
+    users_root = archive / "users"
+    _make_user(users_root, "Rename Me", "old@example.com", [])
+    uid = next(p.name for p in users_root.iterdir()
+               if (p / "user.json").exists() and
+               json.loads((p / "user.json").read_text()).get("email") == "old@example.com")
+    _wa._index_add("old@example.com", uid)
+
+    admin_client.post(f"/admin/user/{uid}/info",
+                      data={"name": "Rename Me", "email": "new@example.com"})
+
+    index = _wa._read_email_index()
+    assert "old@example.com" not in index
+    assert index.get("new@example.com") == uid

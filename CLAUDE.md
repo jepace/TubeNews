@@ -438,7 +438,11 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_feed_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
 | `_find_archive_dir_for_channel(channel_id)` | Scans `archive/*/channel.json` and returns the `Path` whose `channel_id` matches; used by `admin_feed_edit` to locate the archive dir regardless of historical directory naming |
 | `_blog_url(token)` | Builds the full `/blog/<token>.html` URL using `base_url` or `url_for` |
-| `_find_user_by_email(email)` | Scans `archive/users/` for a matching email |
+| `_read_email_index()` | Returns the email→UUID dict from `archive/users/index.json`; returns `{}` on any error |
+| `_write_email_index(index)` | Atomically writes the email→UUID dict to `archive/users/index.json` (write-then-rename) |
+| `_index_add(email, uid)` | Adds or updates an entry in the email index |
+| `_index_remove(email)` | Removes an entry from the email index |
+| `_find_user_by_email(email)` | O(1) lookup via `index.json`; falls back to a glob scan and repairs the index if the entry is missing or stale |
 | `_find_user_by_id(uid)` | Loads a user by their UUID directory name |
 | `_all_users()` | Returns all users sorted by name |
 

@@ -207,15 +207,55 @@ class StoryDict(TypedDict):
 # ---------------------------------------------------------------------------
 
 
+def _read_email_index() -> dict[str, str]:
+    """Return the email→uuid mapping from USERS_ROOT/index.json, or {} on failure."""
+    try:
+        return json.loads((USERS_ROOT / "index.json").read_text())
+    except Exception:
+        return {}
+
+
+def _write_email_index(index: dict[str, str]) -> None:
+    """Atomically write *index* (email→uuid) to USERS_ROOT/index.json."""
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
+    tmp = USERS_ROOT / "index.json.tmp"
+    tmp.write_text(json.dumps(index, indent=2))
+    tmp.replace(USERS_ROOT / "index.json")
+
+
+def _index_add(email: str, uid: str) -> None:
+    index = _read_email_index()
+    index[email.strip().lower()] = uid
+    _write_email_index(index)
+
+
+def _index_remove(email: str) -> None:
+    index = _read_email_index()
+    index.pop(email.strip().lower(), None)
+    _write_email_index(index)
+
+
 def _find_user_by_email(email: str) -> User | None:
     if not USERS_ROOT.is_dir():
         return None
     needle = email.strip().lower()
+
+    # Fast path: O(1) index lookup.
+    index = _read_email_index()
+    if needle in index:
+        user = _find_user_by_id(index[needle])
+        if user and user.email.lower() == needle:
+            return user
+        # Index entry is stale — fall through to glob scan.
+
+    # Slow path: glob scan (first run after upgrade, or index corruption recovery).
     for user_json in USERS_ROOT.glob("*/user.json"):
         try:
             data = json.loads(user_json.read_text())
             if data.get("email", "").lower() == needle:
-                return User(user_json.parent, data)
+                user = User(user_json.parent, data)
+                _index_add(needle, user_json.parent.name)  # repair index
+                return user
         except Exception as exc:
             logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
@@ -747,6 +787,7 @@ def register():
                 "created_at": int(datetime.now(timezone.utc).timestamp()),
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
+            _index_add(email, user_uuid)
             login_user(User(user_dir, data))
             _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
             flash("Account created. Choose your channels below.", "success")
@@ -940,10 +981,14 @@ def admin_user_info(uid: str):
         if existing:
             flash("That email is already in use by another account.", "error")
             return redirect(url_for("admin_user", uid=uid))
+    old_email = user.email
     user._data["name"] = new_name
     user._data["email"] = new_email
     user._data["blog_name"] = request.form.get("blog_name", "").strip()
     user._save()
+    if new_email != old_email:
+        _index_remove(old_email)
+        _index_add(new_email, uid)
     flash("User info updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
@@ -1072,6 +1117,7 @@ def admin_user_delete(uid: str):
         flash("Email confirmation did not match — account not deleted.", "error")
         return redirect(url_for("admin_user", uid=uid))
     deleted_email = user.email
+    _index_remove(deleted_email)
     for f in user._dir.iterdir():
         f.unlink()
     user._dir.rmdir()
@@ -1114,6 +1160,7 @@ def admin_user_add():
             "created_at": int(datetime.now(timezone.utc).timestamp()),
         }
         (user_dir / "user.json").write_text(json.dumps(data, indent=2))
+        _index_add(email, user_uuid)
         flash(f"Account created for {name} ({email}).", "success")
 
     return redirect(url_for("admin_users"))

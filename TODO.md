@@ -87,11 +87,11 @@ These two patterns are deliberately different: feeds are configuration (small,
 operator-managed, read at startup), users are application state (runtime-created,
 individually owned).
 
-**If the user count grows large enough that glob-scanning on every login/lookup
+~~**If the user count grows large enough that glob-scanning on every login/lookup
 becomes a bottleneck**, consider adding a lightweight `archive/users/index.json`
 that maps email → uuid. The per-user files stay as-is; the index just speeds up
 `_find_user_by_email()`. Rebuild the index on registration, deletion, and email
-change. No schema migration needed for existing user directories.
+change. No schema migration needed for existing user directories.~~ **Done — see Completed Items.**
 
 **If `TubeNews.json` becomes unwieldy** (many feeds + many server config keys),
 consider splitting it:
@@ -108,6 +108,17 @@ check `feeds.json` into version control (no secrets) while keeping
 ---
 
 ## Completed Items
+
+### Email index for O(1) user lookup (March 2026)
+
+`_find_user_by_email()` previously globbed `archive/users/*/user.json` on every
+login, duplicate-email check, and admin info update — O(n) in the number of
+users. An `archive/users/index.json` file (email → UUID dict) now provides O(1)
+lookup. The index is written atomically (write-then-rename) and is kept in sync
+on registration, admin-created accounts, account deletion, and email changes.
+`_find_user_by_email()` still falls back to a glob scan if the index is missing
+or an entry is stale, and repairs the index on the fly — so existing deployments
+upgrade without any manual migration step.
 
 ### Per-user per-channel focus filtering (March 2026)
 
