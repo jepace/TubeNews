@@ -164,6 +164,7 @@ class ParsedStory(TypedDict):
     start_seconds: int
     topics: list[str]
     content_hash: str
+    user_ids: list[str]
 
 
 class MetadataDict(TypedDict, total=False):
@@ -236,7 +237,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**")
+        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**")
     ]
     body_html = "<br>".join(body_lines).replace("\n", "<br>")
 
@@ -249,12 +250,19 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if topics_match else []
     )
 
+    users_match = re.search(r"\*\*Users:\*\*\s*(.+)", text)
+    user_ids = (
+        [u.strip() for u in users_match.group(1).split(",") if u.strip()]
+        if users_match else []
+    )
+
     return {
         "title": title,
         "dateline": dateline,
         "body_html": body_html,
         "start_seconds": start_seconds,
         "topics": topics,
+        "user_ids": user_ids,
         # Keep a hash of the raw text so feed entry IDs are stable across runs.
         "content_hash": hashlib.md5(text.encode()).hexdigest(),
     }
@@ -624,6 +632,9 @@ def write_story_files(
             topics = story.get("topics") or []
             if topics:
                 fh.write(f"**Topics:** {', '.join(str(t).lower().strip() for t in topics)}\n")
+            story_user_ids = story.get("_user_ids") or []
+            if story_user_ids:
+                fh.write(f"**Users:** {', '.join(story_user_ids)}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -836,8 +847,8 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
     for entry in all_stories:
         try:
             story = parse_story_file(entry["file"])
-            focus = channel_focus.get(entry.get("channel_id", ""), "")
-            if not _story_matches_focus(story.get("topics", []), focus):
+            story_user_ids = story.get("user_ids", [])
+            if story_user_ids and user_id not in story_user_ids:
                 continue
             feed_entry = feed.add_entry()
             feed_entry.id(story["content_hash"])
@@ -1070,20 +1081,31 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     )
 
 
-def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
-    """Return the ordered list of unique focus strings to use when processing *channel_id*.
+def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str, list[str]]]:
+    """Return ordered ``(focus, user_ids)`` pairs to use when processing *channel_id*.
 
-    Starts with *feed_focus* from ``TubeNews.json`` (if non-empty), then appends
-    each unique focus found in any subscriber's ``user.json`` for this channel.
-    Duplicates are silently dropped; if the total exceeds
-    :data:`MAX_FOCUSES_PER_CHANNEL` the list is truncated with a warning.
+    Each pair represents one Gemini call.  ``user_ids`` is the list of user
+    UUID directory names whose focus produced this entry; an empty list means
+    the focus came from the feed-level config and is unrestricted (all users
+    see the resulting stories).
 
-    Returns at least ``[""]`` so the caller always has at least one focus to
-    iterate (an empty string means "no focus filter" — same behaviour as today).
+    Starts with *feed_focus* from ``TubeNews.json`` (unrestricted), then
+    appends each unique user focus.  When multiple users share the same focus
+    string their UUIDs are merged into a single entry so Gemini is only called
+    once.  If a user focus matches the feed-level focus it is absorbed into the
+    unrestricted entry.
+
+    The list is capped at :data:`MAX_FOCUSES_PER_CHANNEL` and always contains
+    at least one entry (``("", [])`` when nothing is configured).
     """
-    focuses: list[str] = []
+    # focus_string → user_ids ([] = unrestricted/feed-level)
+    focus_map: dict[str, list[str]] = {}
+    focus_order: list[str] = []
+
     if feed_focus and feed_focus.strip():
-        focuses.append(feed_focus.strip())
+        f = feed_focus.strip()
+        focus_map[f] = []  # feed-level: no user restriction
+        focus_order.append(f)
 
     users_dir = STORAGE_ROOT / "users"
     if users_dir.is_dir():
@@ -1105,8 +1127,18 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
                 raw = [raw] if raw.strip() else []
             for f in raw:
                 f = f.strip()
-                if f and f not in focuses:
-                    focuses.append(f)
+                if not f:
+                    continue
+                if f in focus_map:
+                    existing = focus_map[f]
+                    if existing:  # user-restricted: add this user
+                        focus_map[f] = existing + [uid_dir.name]
+                    # if [] (feed-level/unrestricted), leave as-is
+                else:
+                    focus_map[f] = [uid_dir.name]
+                    focus_order.append(f)
+
+    focuses = [(f, focus_map[f]) for f in focus_order]
 
     if len(focuses) > MAX_FOCUSES_PER_CHANNEL:
         logger.warning(
@@ -1115,7 +1147,7 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[str]:
         )
         focuses = focuses[:MAX_FOCUSES_PER_CHANNEL]
 
-    return focuses or [""]
+    return focuses or [("", [])]
 
 
 def process_video(
@@ -1130,7 +1162,7 @@ def process_video(
     ai_disabled: bool,
     video_num: int = 0,
     total_videos: int = 0,
-    focuses: list[str] | None = None,
+    focuses: list[tuple[str, list[str]]] | None = None,
 ) -> str:
     """Fetch, analyse, and archive one video.
 
@@ -1138,11 +1170,11 @@ def process_video(
     completed the fetch but failed during AI analysis) before hitting the
     Supadata API again.
 
-    *focuses* is the list of focus strings to use when calling Gemini (one
-    API call per focus).  If omitted, falls back to ``feed["focus"]``.  When
-    a video has already been processed for some focuses (recorded in
-    ``metadata.json`` as ``processed_focuses``), only the new focuses are
-    passed to Gemini; their stories are appended to the existing story files.
+    *focuses* is a list of ``(focus_string, user_ids)`` pairs — one Gemini
+    call is made per pair.  ``user_ids`` is the list of user UUID directory
+    names whose focus produced this entry; ``[]`` means unrestricted
+    (feed-level focus, shown to all users).  If omitted, falls back to a
+    single unrestricted call using ``feed["focus"]``.
 
     Returns a ``(status, n_stories)`` tuple where *status* is one of:
 
@@ -1159,7 +1191,7 @@ def process_video(
                                  the AI on future runs.
     """
     if focuses is None:
-        focuses = [feed.get("focus", "")]
+        focuses = [(feed.get("focus", ""), [])]
 
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
@@ -1199,9 +1231,11 @@ def process_video(
         return "skipped", 0
 
     # Call Gemini once per focus, deduplicating stories by title across passes.
-    seen_titles: set[str] = set()
+    # Track title → index so we can merge user_ids when the same story appears
+    # in multiple focus passes.
+    seen_titles: dict[str, int] = {}
     all_stories: list = []
-    for focus in focuses:
+    for focus, user_ids in focuses:
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
         result = call_gemini_api(
@@ -1217,8 +1251,17 @@ def process_video(
             return "ai_rate_limited", 0
         for story in (result or []):
             title = story.get("title", "")
-            if title not in seen_titles:
-                seen_titles.add(title)
+            if title in seen_titles:
+                # Merge user_ids: unrestricted (feed-level) always wins
+                existing = all_stories[seen_titles[title]]
+                existing_uids: list[str] = existing.get("_user_ids", [])
+                if not existing_uids or not user_ids:
+                    existing["_user_ids"] = []  # unrestricted wins
+                else:
+                    existing["_user_ids"] = sorted(set(existing_uids) | set(user_ids))
+            else:
+                story["_user_ids"] = list(user_ids)
+                seen_titles[title] = len(all_stories)
                 all_stories.append(story)
 
     if all_stories:
@@ -1228,7 +1271,7 @@ def process_video(
             "video_title": video_title,
             "status": "processed",
             "processed_at": time.time(),
-            "processed_focuses": sorted(focuses),
+            "processed_focuses": sorted(f for f, _ in focuses),
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
         return "content_written", len(all_stories)
@@ -1239,7 +1282,7 @@ def process_video(
         "video_title": video_title,
         "status": "no_stories",
         "processed_at": time.time(),
-        "processed_focuses": sorted(focuses),
+        "processed_focuses": sorted(f for f, _ in focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
     return "skipped", 0

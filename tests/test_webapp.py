@@ -1162,62 +1162,58 @@ def test_admin_feed_delete_unknown_channel_returns_404(admin_client, archive):
 
 
 # ---------------------------------------------------------------------------
-# /blog — _get_user_stories() focus filtering via Flask route
+# /blog — _get_user_stories() user-id filtering via Flask route
 # ---------------------------------------------------------------------------
 
-def _write_story_with_topics(meeting_dir: Path, filename: str, title: str,
-                              topics: str, start_seconds: int = 60) -> None:
-    """Write a story .md file that includes a **Topics:** line."""
+def _write_story_with_users(meeting_dir: Path, filename: str, title: str,
+                             *user_ids: str, start_seconds: int = 60) -> None:
+    """Write a story .md file with a **Users:** line listing the given UUIDs."""
+    users_line = f"**Users:** {', '.join(user_ids)}\n" if user_ids else ""
     (meeting_dir / filename).write_text(
         f"# {title}\n*TESTVILLE — Jan 15, 2026*\n\nStory body.\n\n"
-        f"---\n**Segment Start:** {start_seconds}s\n**Topics:** {topics}\n",
+        f"---\n**Segment Start:** {start_seconds}s\n{users_line}",
         encoding="utf-8",
     )
 
 
-def test_blog_route_filters_by_focus(archive, monkeypatch):
-    """GET /blog must show only stories whose topics match the user's channel focus."""
+def test_blog_route_filters_by_user_id(archive, monkeypatch):
+    """GET /blog shows only stories tagged with the logged-in user's UUID."""
     import TubeNews
 
     monkeypatch.setattr(webapp, "STORAGE_ROOT", archive)
     monkeypatch.setattr(webapp, "USERS_ROOT", archive / "users")
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", archive)
 
-    # Add a second story to the alpha channel with a non-matching topic
+    # Create user so we know their UUID before writing story files
+    users_root = archive / "users"
+    _make_user(users_root, name="Alice", email="alice@example.com",
+               channel_ids=["UC_ALPHA_ID"], token="alice-token-xyz789",
+               password="alicepassword123")
+    alice_uuid = next(users_root.iterdir()).name
+
     alpha_dir = archive / "alpha_city"
     meeting_dir = alpha_dir / "2026-01-15_VID12345678"
-    _write_story_with_topics(meeting_dir, "02_Budget_Story.md",
-                             "Budget Approved", topics="budget, finance")
-    _write_story_with_topics(meeting_dir, "03_Housing_Story.md",
-                             "Housing Project Approved", topics="housing, zoning")
-
-    # Create a user subscribed to Alpha with focus "housing"
-    user = _make_user(
-        archive / "users",
-        name="Focus User",
-        email="focus@example.com",
-        channel_ids=["UC_ALPHA_ID"],
-        token="focus-test-token-xyz789",
-        password="focuspassword123",
-    )
-    user_dir = next((archive / "users").iterdir())
-    data = json.loads((user_dir / "user.json").read_text())
-    data["channel_focus"] = {"UC_ALPHA_ID": ["housing"]}
-    (user_dir / "user.json").write_text(json.dumps(data))
+    # Tagged for Alice — only she sees it
+    _write_story_with_users(meeting_dir, "02_Alice_Story.md", "Alice Only Story", alice_uuid)
+    # Tagged for another user — Alice does not see it
+    _write_story_with_users(meeting_dir, "03_Bob_Story.md", "Bob Only Story", "other-uuid-xyz")
+    # No **Users:** tag — shown to everyone
+    _write_story_with_users(meeting_dir, "04_Untagged.md", "Untagged Story For All")
 
     flask_app.config["TESTING"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
     with flask_app.test_client() as c:
-        c.post("/login", data={"email": "focus@example.com", "password": "focuspassword123"})
+        c.post("/login", data={"email": "alice@example.com", "password": "alicepassword123"})
         r = c.get("/blog")
 
     body = r.data.decode()
-    assert "Housing Project Approved" in body, "focus-matching story must appear"
-    assert "Budget Approved" not in body, "non-matching story must be filtered out"
+    assert "Alice Only Story" in body, "story tagged for this user must appear"
+    assert "Bob Only Story" not in body, "story tagged for another user must be hidden"
+    assert "Untagged Story For All" in body, "untagged stories must always appear"
 
 
-def test_blog_route_unfiltered_when_no_focus(archive, monkeypatch):
-    """GET /blog must show all stories when the user has no channel focus set."""
+def test_blog_route_untagged_shows_to_all(archive, monkeypatch):
+    """GET /blog shows stories without a **Users:** tag to every subscribed user."""
     import TubeNews
 
     monkeypatch.setattr(webapp, "STORAGE_ROOT", archive)
@@ -1226,28 +1222,27 @@ def test_blog_route_unfiltered_when_no_focus(archive, monkeypatch):
 
     alpha_dir = archive / "alpha_city"
     meeting_dir = alpha_dir / "2026-01-15_VID12345678"
-    _write_story_with_topics(meeting_dir, "02_Budget_Story.md",
-                             "Budget Approved", topics="budget, finance")
-    _write_story_with_topics(meeting_dir, "03_Housing_Story.md",
-                             "Housing Project Approved", topics="housing, zoning")
+    # These have no **Users:** line so they are untagged (feed-level / legacy)
+    _write_story_with_users(meeting_dir, "02_Budget_Story.md", "Budget Approved")
+    _write_story_with_users(meeting_dir, "03_Housing_Story.md", "Housing Project Approved")
 
-    user = _make_user(
+    _make_user(
         archive / "users",
-        name="No Focus User",
-        email="nofocus@example.com",
+        name="Any User",
+        email="anyuser@example.com",
         channel_ids=["UC_ALPHA_ID"],
-        token="nofocus-test-token-abc456",
-        password="nofocuspassword1",
+        token="anyuser-test-token-abc456",
+        password="anyuserpassword1",
     )
 
     flask_app.config["TESTING"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
     with flask_app.test_client() as c:
-        c.post("/login", data={"email": "nofocus@example.com", "password": "nofocuspassword1"})
+        c.post("/login", data={"email": "anyuser@example.com", "password": "anyuserpassword1"})
         r = c.get("/blog")
 
     body = r.data.decode()
-    assert "Budget Approved" in body, "all stories must appear when no focus is set"
+    assert "Budget Approved" in body, "untagged stories must appear for any user"
     assert "Housing Project Approved" in body
 
 

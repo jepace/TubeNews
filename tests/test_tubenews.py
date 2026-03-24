@@ -1139,6 +1139,65 @@ def test_write_story_files_empty_topics_no_line(tmp_path):
     text = written[0].read_text(encoding="utf-8")
     assert "**Topics:**" not in text
 
+def test_write_story_files_user_ids_written(tmp_path):
+    """When a story has _user_ids, a **Users:** line is written."""
+    stories = [{
+        "title": "Road Work Approved",
+        "dateline": "GILROY, Calif. — March 22, 2026",
+        "content": "Roads discussed.",
+        "start_time_seconds": 0,
+        "_user_ids": ["uuid-alice", "uuid-bob"],
+    }]
+    write_story_files(stories, tmp_path)
+    text = list(tmp_path.glob("[0-9]*.md"))[0].read_text(encoding="utf-8")
+    assert "**Users:** uuid-alice, uuid-bob" in text
+
+def test_write_story_files_no_user_ids_no_users_line(tmp_path):
+    """When _user_ids is absent, no **Users:** line is written."""
+    stories = [{
+        "title": "Budget Passed",
+        "dateline": "GILROY, Calif. — March 22, 2026",
+        "content": "Budget passed.",
+        "start_time_seconds": 0,
+    }]
+    write_story_files(stories, tmp_path)
+    text = list(tmp_path.glob("[0-9]*.md"))[0].read_text(encoding="utf-8")
+    assert "**Users:**" not in text
+
+def test_parse_story_file_user_ids_present(tmp_path):
+    """**Users:** line is parsed into a list of UUIDs."""
+    story = tmp_path / "01_Test.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\nBody.\n\n---\n"
+        "**Segment Start:** 60s\n"
+        "**Users:** uuid-alice, uuid-bob\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert result["user_ids"] == ["uuid-alice", "uuid-bob"]
+
+def test_parse_story_file_user_ids_absent(tmp_path):
+    """Old story files without a **Users:** line return an empty user_ids list."""
+    story = tmp_path / "01_Old.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\nBody.\n\n---\n**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert result["user_ids"] == []
+
+def test_parse_story_file_users_line_not_in_body(tmp_path):
+    """The **Users:** line must not appear in body_html."""
+    story = tmp_path / "01_Test.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\nBody.\n\n---\n"
+        "**Segment Start:** 0s\n"
+        "**Users:** uuid-alice\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert "Users" not in result["body_html"]
+
 
 # ---------------------------------------------------------------------------
 # _story_matches_focus — list input (multiple focuses)
@@ -1259,19 +1318,23 @@ def _make_user_dir(users_dir, channel_id, focuses, channel_ids=None):
 
 
 def test_collect_channel_focuses_feed_only(tmp_path, monkeypatch):
-    """Only feed_focus, no subscribers → returns [feed_focus]."""
+    """Only feed_focus, no subscribers → returns [(feed_focus, [])] (unrestricted)."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
-    assert result == ["housing, zoning"]
+    assert result == [("housing, zoning", [])]
 
 def test_collect_channel_focuses_user_focus_added(tmp_path, monkeypatch):
-    """User focus for the channel is appended after feed_focus."""
+    """User focus for the channel is appended after feed_focus with the user's ID."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
     users = tmp_path / "users"
     users.mkdir()
-    _make_user_dir(users, "UCxxx", ["transit, roads"])
+    uid_dir = _make_user_dir(users, "UCxxx", ["transit, roads"])
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
-    assert result == ["housing, zoning", "transit, roads"]
+    focuses = [f for f, _ in result]
+    assert focuses == ["housing, zoning", "transit, roads"]
+    # Feed-level focus is unrestricted; user focus has the user's UUID
+    assert result[0][1] == []
+    assert uid_dir.name in result[1][1]
 
 def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypatch):
     """A user not subscribed to the channel must not contribute focuses."""
@@ -1280,17 +1343,20 @@ def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypa
     users.mkdir()
     _make_user_dir(users, "UCxxx", ["transit"], channel_ids=["UCother"])
     result = _collect_channel_focuses("UCxxx", "housing")
-    assert result == ["housing"]
+    assert result == [("housing", [])]
 
 def test_collect_channel_focuses_deduplication(tmp_path, monkeypatch):
-    """Duplicate focuses across users are dropped."""
+    """Same focus from two users → one entry with both user IDs."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
     users = tmp_path / "users"
     users.mkdir()
-    _make_user_dir(users, "UCxxx", ["housing, zoning"])
-    _make_user_dir(users, "UCxxx", ["housing, zoning"])  # same focus, second user
-    result = _collect_channel_focuses("UCxxx", "housing, zoning")
-    assert result.count("housing, zoning") == 1
+    uid1 = _make_user_dir(users, "UCxxx", ["housing, zoning"])
+    uid2 = _make_user_dir(users, "UCxxx", ["housing, zoning"])
+    result = _collect_channel_focuses("UCxxx", "")
+    focuses = [f for f, _ in result]
+    assert focuses.count("housing, zoning") == 1
+    user_ids = result[0][1]
+    assert uid1.name in user_ids and uid2.name in user_ids
 
 def test_collect_channel_focuses_cap(tmp_path, monkeypatch):
     """Total focuses are capped at MAX_FOCUSES_PER_CHANNEL."""
@@ -1303,10 +1369,10 @@ def test_collect_channel_focuses_cap(tmp_path, monkeypatch):
     assert len(result) <= MAX_FOCUSES_PER_CHANNEL
 
 def test_collect_channel_focuses_fallback_empty(tmp_path, monkeypatch):
-    """No config and no subscribers → [\"\""]."""
+    """No config and no subscribers → [("", [])]."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
     result = _collect_channel_focuses("UCxxx", "")
-    assert result == [""]
+    assert result == [("", [])]
 
 def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
     """Old user.json with string channel_focus is handled gracefully."""
@@ -1315,7 +1381,28 @@ def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
     users.mkdir()
     _make_user_dir(users, "UCxxx", "housing, zoning")  # string, not list
     result = _collect_channel_focuses("UCxxx", "")
-    assert "housing, zoning" in result
+    focuses = [f for f, _ in result]
+    assert "housing, zoning" in focuses
+
+def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path, monkeypatch):
+    """When a user focus matches the feed-level focus it stays unrestricted."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    _make_user_dir(users, "UCxxx", ["housing, zoning"])
+    result = _collect_channel_focuses("UCxxx", "housing, zoning")
+    assert result == [("housing, zoning", [])]  # still unrestricted
+
+def test_collect_channel_focuses_user_ids_merged_across_users(tmp_path, monkeypatch):
+    """Two users sharing a focus get their IDs merged into one entry."""
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    users = tmp_path / "users"
+    users.mkdir()
+    uid1 = _make_user_dir(users, "UCxxx", ["roads"])
+    uid2 = _make_user_dir(users, "UCxxx", ["roads"])
+    result = _collect_channel_focuses("UCxxx", "")
+    assert len(result) == 1
+    assert set(result[0][1]) == {uid1.name, uid2.name}
 
 
 # ---------------------------------------------------------------------------
