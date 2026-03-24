@@ -29,6 +29,8 @@ from TubeNews import (
     _acquire_lock,
     _release_lock,
     _story_matches_focus,
+    _check_supadata_quota,
+    fetch_transcript,
 )
 
 
@@ -1602,3 +1604,151 @@ def test_rebuild_user_blog_skips_corrupt_story_file(tmp_path, monkeypatch):
 
     html = (tmp_path / "users" / "Alice" / "index.html").read_text()
     assert "Story 1 from Alpha City Council" in html
+
+
+# ---------------------------------------------------------------------------
+# Supadata quota handling
+# ---------------------------------------------------------------------------
+
+def test_check_supadata_quota_no_file_proceeds(tmp_path, monkeypatch):
+    """When no cached balance file exists, quota check returns ok=True."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
+    assert ok is True
+    assert balance is None
+
+
+def test_check_supadata_quota_credits_remaining(tmp_path, monkeypatch):
+    """When credits are available, quota check returns ok=True."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_text(json.dumps({
+        "maxCredits": 1000, "usedCredits": 500, "plan": "starter",
+    }))
+    ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
+    assert ok is True
+    assert balance["usedCredits"] == 500
+
+
+def test_check_supadata_quota_exhausted(tmp_path, monkeypatch):
+    """When usedCredits == maxCredits, quota check returns ok=False."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_text(json.dumps({
+        "maxCredits": 1000, "usedCredits": 1000, "plan": "starter",
+        "resetDate": "2026-04-01",
+    }))
+    ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
+    assert ok is False
+    assert balance["resetDate"] == "2026-04-01"
+
+
+def test_check_supadata_quota_over_limit(tmp_path, monkeypatch):
+    """When usedCredits exceeds maxCredits, quota check returns ok=False."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_text(json.dumps({
+        "maxCredits": 1000, "usedCredits": 1001, "plan": "starter",
+    }))
+    ok, _ = _check_supadata_quota({"supadata_api_key": "key"})
+    assert ok is False
+
+
+def test_check_supadata_quota_corrupt_file_proceeds(tmp_path, monkeypatch):
+    """A corrupt balance file is treated as 'unknown' — proceed optimistically."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_bytes(b"\xff\xfe not json")
+    ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
+    assert ok is True
+    assert balance is None
+
+
+def test_fetch_transcript_sets_quota_event_on_supadata_error(monkeypatch):
+    """fetch_transcript sets transcript_rate_limit_event when SupadataError has a credit error code."""
+    import threading
+    import TubeNews
+    from supadata import SupadataError
+
+    mock_client = type("C", (), {
+        "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
+            SupadataError(error="insufficient-credits", message="No credits", details="")
+        ))
+    })()
+
+    event = threading.Event()
+    result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
+    assert result is None
+    assert event.is_set()
+
+
+def test_fetch_transcript_sets_quota_event_on_http_402(monkeypatch):
+    """fetch_transcript sets transcript_rate_limit_event on HTTP 402 HTTPError."""
+    import threading
+    import requests as _requests
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.status_code = 402
+    http_err = _requests.exceptions.HTTPError(response=mock_response)
+
+    mock_client = type("C", (), {
+        "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(http_err))
+    })()
+
+    event = threading.Event()
+    result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
+    assert result is None
+    assert event.is_set()
+
+
+def test_fetch_transcript_does_not_set_event_on_other_errors(monkeypatch):
+    """fetch_transcript does NOT set the event for non-quota errors (e.g. video not found)."""
+    import threading
+    from supadata import SupadataError
+
+    mock_client = type("C", (), {
+        "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
+            SupadataError(error="video-not-found", message="Not found", details="")
+        ))
+    })()
+
+    event = threading.Event()
+    result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
+    assert result is None
+    assert not event.is_set()
+
+
+def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch):
+    """process_feed must stop processing further videos once transcript quota is exhausted."""
+    import threading
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "VID_A", "title": "Meeting A", "date": yesterday, "is_live": False},
+        {"id": "VID_B", "title": "Meeting B", "date": yesterday, "is_live": False},
+    ])
+
+    calls = []
+
+    def fake_fetch(video_id, client, feed_name="", video_title="",
+                   transcript_rate_limit_event=None):
+        calls.append(video_id)
+        if transcript_rate_limit_event is not None:
+            transcript_rate_limit_event.set()
+        return None
+
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    event = threading.Event()
+    process_feed(feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"},
+                 transcript_rate_limit_event=event)
+
+    # Only one video should have been attempted before the event stopped the loop.
+    assert len(calls) == 1
+    assert event.is_set()

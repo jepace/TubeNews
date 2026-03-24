@@ -35,6 +35,20 @@
     {% endif %}
   </div>
 
+  {% if supadata %}
+    {% set remaining = supadata.maxCredits - supadata.usedCredits %}
+    {% if remaining <= 0 %}
+      <div style="background:var(--danger-bg, #fff0f0); border:1px solid var(--danger, #c00); border-radius:6px; padding:0.75rem 1rem; margin-bottom:1.25rem; font-size:0.9rem;">
+        <strong>Supadata quota exhausted.</strong>
+        No transcript credits remaining ({{ supadata.usedCredits | int }} / {{ supadata.maxCredits | int }} used).
+        Runs are aborted until quota resets.
+        {% if supadata.resetDate %}
+          Resets: <strong>{{ supadata.resetDate }}</strong>.
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
+
   {% if runs %}
   <table class="user-table" id="runs-table">
     <thead>
@@ -43,6 +57,7 @@
         <th>Duration</th>
         <th>Stories</th>
         <th>AI</th>
+        <th>Transcripts</th>
         <th>Channels</th>
       </tr>
     </thead>
@@ -61,6 +76,13 @@
           {% endif %}
         </td>
         <td>
+          {% if run.transcript_quota_exhausted %}
+            <span class="pill pill-locked">Quota exhausted</span>
+          {% else %}
+            <span class="pill pill-active">OK</span>
+          {% endif %}
+        </td>
+        <td>
           {% set active = run.feeds | selectattr("stories_written", "gt", 0) | list %}
           {% if active %}
             {% for f in active %}
@@ -72,7 +94,7 @@
         </td>
       </tr>
       <tr class="run-detail" id="run-detail-{{ rid }}" style="display:none;">
-        <td colspan="5" style="padding:0 1rem 0.75rem 2.5rem; background:var(--bg);">
+        <td colspan="6" style="padding:0 1rem 0.75rem 2.5rem; background:var(--bg);">
           <table style="font-size:0.85rem; border-collapse:collapse; width:100%;">
             <thead>
               <tr>

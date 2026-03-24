@@ -1181,6 +1181,7 @@ def admin_runs():
         channel_stats=_archive_channel_stats(),
         is_running=is_running,
         starting=starting,
+        supadata=_get_supadata_balance(),
     )
 
 
