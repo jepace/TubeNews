@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Account Settings — TubeNews{% endblock %}
+
+{% block content %}
+<div class="admin">
+  <h1>Account Settings</h1>
+
+  <!-- ── Account info ──────────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Account info</h2>
+    <form method="post" action="{{ url_for('account') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="name">Display name</label>
+        <input type="text" id="name" name="name" value="{{ current_user.name }}" required>
+      </div>
+      <div class="form-row">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ current_user.email }}" required>
+      </div>
+      <div class="form-row">
+        <label for="current_password_info">Current password <span class="hint">(required to save changes)</span></label>
+        <input type="password" id="current_password_info" name="current_password" required autocomplete="current-password">
+      </div>
+      <button type="submit">Save info</button>
+    </form>
+  </section>
+
+  <!-- ── Change password ───────────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>Change password</h2>
+    <form method="post" action="{{ url_for('account_password') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="current_password_pw">Current password</label>
+        <input type="password" id="current_password_pw" name="current_password" required autocomplete="current-password">
+      </div>
+      <div class="form-row">
+        <label for="new_password">New password <span class="hint">(min 10 chars)</span></label>
+        <input type="password" id="new_password" name="new_password" minlength="10" required autocomplete="new-password">
+      </div>
+      <button type="submit">Change password</button>
+    </form>
+  </section>
+
+  <!-- ── RSS feed & blog URLs ──────────────────────────────────── -->
+  <section class="admin-section">
+    <h2>RSS feed URL</h2>
+    <div class="feed-url-row">
+      <input type="text" class="feed-url-input" id="feed-url" value="{{ feed_url }}" readonly>
+      <button type="button" onclick="copyUrl('feed-url', this)" class="btn-copy">Copy</button>
+    </div>
+    <h2 style="margin-top:1rem;">Blog URL</h2>
+    <div class="feed-url-row">
+      <input type="text" class="feed-url-input" id="blog-url" value="{{ blog_url }}" readonly>
+      <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
+    </div>
+    <form method="post" action="{{ url_for('account_rotate_token') }}"
+          class="inline-form" onsubmit="return confirm('Rotate the feed token? Your current RSS and blog URLs will stop working.')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-danger-sm" style="margin-top:0.75rem;">Rotate token</button>
+    </form>
+  </section>
+
+  <!-- ── Delete account ────────────────────────────────────────── -->
+  <section class="admin-section danger-zone">
+    <h2>Delete account</h2>
+    <p class="muted">Permanently removes your account and all generated feed files.
+      Enter your password and type your email address to confirm.</p>
+    <form method="post" action="{{ url_for('account_delete') }}"
+          onsubmit="return confirm('This will permanently delete your account. Are you sure?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <label for="delete_password">Current password</label>
+        <input type="password" id="delete_password" name="current_password" required autocomplete="current-password">
+      </div>
+      <div class="form-row">
+        <label for="confirm_email">Type <strong>{{ current_user.email }}</strong> to confirm</label>
+        <input type="email" id="confirm_email" name="confirm_email" placeholder="{{ current_user.email }}">
+      </div>
+      <button type="submit" class="btn-danger">Delete my account</button>
+    </form>
+  </section>
+</div>
+
+<script>
+  function copyUrl(inputId, btn) {
+    const input = document.getElementById(inputId);
+    function onCopied() {
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(input.value).then(onCopied).catch(() => fallbackCopy(input, onCopied));
+    } else {
+      fallbackCopy(input, onCopied);
+    }
+  }
+
+  function fallbackCopy(input, onCopied) {
+    input.select();
+    input.setSelectionRange(0, 99999);
+    try {
+      document.execCommand('copy');
+      onCopied();
+    } catch (e) {}
+    window.getSelection().removeAllRanges();
+  }
+</script>
+{% endblock %}

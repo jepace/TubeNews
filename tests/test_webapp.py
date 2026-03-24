@@ -1459,3 +1459,206 @@ def test_admin_email_change_updates_index(archive, monkeypatch, admin_client):
     index = _wa._read_email_index()
     assert "old@example.com" not in index
     assert index.get("new@example.com") == uid
+
+
+# ---------------------------------------------------------------------------
+# /account — self-service account settings
+# ---------------------------------------------------------------------------
+
+def test_account_requires_login(client, archive):
+    """GET /account must redirect to login when not authenticated."""
+    r = client.get("/account", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_account_get_returns_200(logged_in_client, archive):
+    """GET /account must return 200 for a logged-in user."""
+    r = logged_in_client.get("/account")
+    assert r.status_code == 200
+    assert b"Account Settings" in r.data
+
+
+def test_account_get_shows_name_and_email(logged_in_client, archive):
+    """Account page must pre-fill the user's current name and email."""
+    r = logged_in_client.get("/account")
+    assert b"Test User" in r.data
+    assert b"test@example.com" in r.data
+
+
+def test_account_info_update_saves_name(logged_in_client, archive):
+    """POST /account with correct password must update display name."""
+    import web.app as _wa
+    r = logged_in_client.post("/account", data={
+        "name": "New Name",
+        "email": "test@example.com",
+        "current_password": "testpassword123",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+    users_dir = _wa.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert d["name"] == "New Name"
+                return
+    pytest.fail("User not found")
+
+
+def test_account_info_wrong_password_rejected(logged_in_client, archive):
+    """POST /account with wrong current password must flash an error and not save."""
+    import web.app as _wa
+    r = logged_in_client.post("/account", data={
+        "name": "Hacked Name",
+        "email": "test@example.com",
+        "current_password": "wrongpassword!",
+    }, follow_redirects=True)
+    assert b"incorrect" in r.data.lower()
+    users_dir = _wa.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert d.get("name") != "Hacked Name"
+                return
+
+
+def test_account_info_email_change_updates_index(logged_in_client, archive, monkeypatch):
+    """Changing email via /account must update the email index."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    users_dir = _wa.STORAGE_ROOT / "users"
+    uid = next(
+        p.name for p in users_dir.iterdir()
+        if (p / "user.json").exists() and
+        json.loads((p / "user.json").read_text()).get("email") == "test@example.com"
+    )
+    _wa._index_add("test@example.com", uid)
+
+    logged_in_client.post("/account", data={
+        "name": "Test User",
+        "email": "newemail@example.com",
+        "current_password": "testpassword123",
+    })
+
+    index = _wa._read_email_index()
+    assert "test@example.com" not in index
+    assert index.get("newemail@example.com") == uid
+
+
+def test_account_password_change_succeeds(logged_in_client, archive):
+    """POST /account/password with correct current password must update the hash."""
+    import web.app as _wa
+    from werkzeug.security import check_password_hash as _cph
+    r = logged_in_client.post("/account/password", data={
+        "current_password": "testpassword123",
+        "new_password": "newpassword456",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+    users_dir = _wa.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert _cph(d["password_hash"], "newpassword456")
+                return
+    pytest.fail("User not found")
+
+
+def test_account_password_wrong_current_rejected(logged_in_client, archive):
+    """POST /account/password with wrong current password must flash an error."""
+    r = logged_in_client.post("/account/password", data={
+        "current_password": "wrongpassword!",
+        "new_password": "newpassword456",
+    }, follow_redirects=True)
+    assert b"incorrect" in r.data.lower()
+
+
+def test_account_password_too_short_rejected(logged_in_client, archive):
+    """POST /account/password with a new password under 10 chars must flash an error."""
+    r = logged_in_client.post("/account/password", data={
+        "current_password": "testpassword123",
+        "new_password": "short",
+    }, follow_redirects=True)
+    assert b"10 char" in r.data.lower() or b"least 10" in r.data.lower()
+
+
+def test_account_rotate_token_issues_new_token(logged_in_client, archive):
+    """POST /account/rotate-token must change the user's feed_token."""
+    import web.app as _wa
+    old_token = "known-test-feed-token-abc123"
+    logged_in_client.post("/account/rotate-token")
+    users_dir = _wa.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert d["feed_token"] != old_token
+                return
+    pytest.fail("User not found")
+
+
+def test_account_delete_requires_login(client, archive):
+    """POST /account/delete must redirect to login when not authenticated."""
+    r = client.post("/account/delete", data={
+        "current_password": "testpassword123",
+        "confirm_email": "test@example.com",
+    }, follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_account_delete_wrong_password_rejected(logged_in_client, archive):
+    """POST /account/delete with wrong password must flash an error and not delete."""
+    import web.app as _wa
+    r = logged_in_client.post("/account/delete", data={
+        "current_password": "wrongpassword!",
+        "confirm_email": "test@example.com",
+    }, follow_redirects=True)
+    assert b"incorrect" in r.data.lower()
+    users_dir = _wa.STORAGE_ROOT / "users"
+    emails = [
+        json.loads((p / "user.json").read_text()).get("email")
+        for p in users_dir.iterdir()
+        if (p / "user.json").exists()
+    ]
+    assert "test@example.com" in emails
+
+
+def test_account_delete_wrong_email_confirmation_rejected(logged_in_client, archive):
+    """POST /account/delete with wrong email confirmation must not delete the account."""
+    import web.app as _wa
+    r = logged_in_client.post("/account/delete", data={
+        "current_password": "testpassword123",
+        "confirm_email": "wrong@example.com",
+    }, follow_redirects=True)
+    assert b"did not match" in r.data.lower() or b"confirmation" in r.data.lower()
+    users_dir = _wa.STORAGE_ROOT / "users"
+    emails = [
+        json.loads((p / "user.json").read_text()).get("email")
+        for p in users_dir.iterdir()
+        if (p / "user.json").exists()
+    ]
+    assert "test@example.com" in emails
+
+
+def test_account_delete_success_removes_user(logged_in_client, archive, monkeypatch):
+    """POST /account/delete with correct credentials must delete the user directory."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    r = logged_in_client.post("/account/delete", data={
+        "current_password": "testpassword123",
+        "confirm_email": "test@example.com",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+    users_dir = _wa.STORAGE_ROOT / "users"
+    emails = [
+        json.loads((p / "user.json").read_text()).get("email")
+        for p in users_dir.iterdir()
+        if (p / "user.json").exists()
+    ]
+    assert "test@example.com" not in emails

@@ -469,6 +469,10 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET | `/logout` | `logout` | Clears session |
 | GET | `/blog` | `serve_blog` | Regenerates and serves the logged-in user's blog |
 | GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
+| GET/POST | `/account` | `account` | Self-service account settings: change name/email (requires current password) |
+| POST | `/account/password` | `account_password` | Change own password (requires current password; new password min 10 chars) |
+| POST | `/account/rotate-token` | `account_rotate_token` | Issue a new feed token; invalidates old RSS/blog URLs |
+| POST | `/account/delete` | `account_delete` | Delete own account (requires current password + email confirmation) |
 
 **Admin required (`admin_users` in config):**
 
