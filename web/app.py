@@ -925,6 +925,98 @@ def channel_blog(channel_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Account self-service routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/account", methods=["GET", "POST"])
+@login_required
+def account():
+    """Self-service account settings: name, email, feed token URLs."""
+    if request.method == "POST":
+        new_name = request.form.get("name", "").strip()
+        new_email = request.form.get("email", "").strip().lower()
+        current_pw = request.form.get("current_password", "")
+        if not new_name or not new_email or "@" not in new_email:
+            flash("Name and a valid email are required.", "error")
+            return redirect(url_for("account"))
+        if not check_password_hash(current_user._data["password_hash"], current_pw):
+            flash("Current password is incorrect.", "error")
+            return redirect(url_for("account"))
+        if new_email != current_user.email:
+            existing = _find_user_by_email(new_email)
+            if existing:
+                flash("That email is already in use by another account.", "error")
+                return redirect(url_for("account"))
+        old_email = current_user.email
+        current_user._data["name"] = new_name
+        current_user._data["email"] = new_email
+        current_user._save()
+        if new_email != old_email:
+            _index_remove(old_email)
+            _index_add(new_email, current_user.get_id())
+        flash("Account info updated.", "success")
+        return redirect(url_for("account"))
+    return render_template(
+        "account.html",
+        feed_url=_feed_url(current_user.feed_token),
+        blog_url=_blog_url(current_user.feed_token),
+    )
+
+
+@app.route("/account/password", methods=["POST"])
+@login_required
+def account_password():
+    """Change the logged-in user's own password."""
+    current_pw = request.form.get("current_password", "")
+    new_pw = request.form.get("new_password", "")
+    if not check_password_hash(current_user._data["password_hash"], current_pw):
+        flash("Current password is incorrect.", "error")
+        return redirect(url_for("account"))
+    if len(new_pw) < 10:
+        flash("New password must be at least 10 characters.", "error")
+        return redirect(url_for("account"))
+    current_user._data["password_hash"] = generate_password_hash(new_pw)
+    current_user._save()
+    flash("Password updated.", "success")
+    return redirect(url_for("account"))
+
+
+@app.route("/account/rotate-token", methods=["POST"])
+@login_required
+def account_rotate_token():
+    """Issue a new feed token for the logged-in user; invalidates old RSS/blog URLs."""
+    current_user._data["feed_token"] = str(uuid.uuid4())
+    current_user._save()
+    flash("Feed token rotated. Your old RSS and blog URLs are now invalid.", "success")
+    return redirect(url_for("account"))
+
+
+@app.route("/account/delete", methods=["POST"])
+@login_required
+def account_delete():
+    """Delete the logged-in user's own account."""
+    current_pw = request.form.get("current_password", "")
+    confirm_email = request.form.get("confirm_email", "").strip().lower()
+    if not check_password_hash(current_user._data["password_hash"], current_pw):
+        flash("Current password is incorrect.", "error")
+        return redirect(url_for("account"))
+    if confirm_email != current_user.email:
+        flash("Email confirmation did not match — account not deleted.", "error")
+        return redirect(url_for("account"))
+    deleted_email = current_user.email
+    uid = current_user.get_id()
+    user_dir = USERS_ROOT / uid
+    logout_user()
+    _index_remove(deleted_email)
+    for f in user_dir.iterdir():
+        f.unlink()
+    user_dir.rmdir()
+    flash("Your account has been deleted.", "success")
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------------------
 # Admin routes
 # ---------------------------------------------------------------------------
 
