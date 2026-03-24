@@ -10,7 +10,8 @@
 <body>
   <header>
     <a class="site-title" href="{{ url_for('index') }}">TubeNews</a>
-    <nav>
+    <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+    <nav id="main-nav">
       {% if current_user.is_authenticated %}
         {% if current_user.is_admin %}
           <a href="{{ url_for('admin_users') }}">Users</a>
@@ -34,6 +35,21 @@
       {% endif %}
     </nav>
   </header>
+  <script>
+    (function () {
+      var btn = document.getElementById('nav-toggle');
+      var nav = document.getElementById('main-nav');
+      if (!btn || !nav) return;
+      btn.addEventListener('click', function () {
+        var open = nav.classList.toggle('nav-open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      // Close the menu when a nav link is tapped.
+      nav.addEventListener('click', function (e) {
+        if (e.target.tagName === 'A') nav.classList.remove('nav-open');
+      });
+    })();
+  </script>
 
   {% block header_sub %}{% endblock %}
 

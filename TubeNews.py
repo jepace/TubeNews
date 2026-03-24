@@ -1558,8 +1558,14 @@ def _cache_supadata_balance(config: dict) -> None:
             (STORAGE_ROOT / "supadata_balance.json").write_text(
                 json.dumps(resp.json())
             )
-    except Exception:
-        pass
+            logger.debug("Supadata balance cached successfully.")
+        else:
+            logger.warning(
+                f"Supadata balance: HTTP {resp.status_code} from /v1/me — "
+                f"response body: {resp.text[:200]}"
+            )
+    except Exception as exc:
+        logger.warning(f"Supadata balance: request failed — {exc}")
 
 
 if __name__ == "__main__":

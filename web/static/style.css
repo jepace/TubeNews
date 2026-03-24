@@ -99,6 +99,19 @@ header {
 .header-sub a:hover { text-decoration: underline; }
 .header-sub .hs-ext { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
 
+/* Hamburger toggle — hidden on desktop */
+.nav-toggle {
+  display: none;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0.2rem 0.3rem;
+  margin: 0;
+}
+
 nav {
   display: flex;
   align-items: center;
@@ -112,6 +125,31 @@ nav a {
 }
 
 nav a:hover { text-decoration: underline; }
+
+/* Mobile nav: hamburger visible, nav hidden until toggled */
+@media (max-width: 600px) {
+  .nav-toggle { display: block; }
+
+  #main-nav {
+    display: none;
+    position: absolute;
+    top: 52px;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.9rem;
+    z-index: 199;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+  }
+
+  #main-nav.nav-open { display: flex; }
+
+  #main-nav .nav-rss { padding: 0.1rem 0; }
+}
 
 
 .nav-rss { display: flex; align-items: center; line-height: 0; }
