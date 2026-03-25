@@ -1740,3 +1740,114 @@ def test_account_delete_success_removes_user(logged_in_client, archive, monkeypa
         if (p / "user.json").exists()
     ]
     assert "test@example.com" not in emails
+
+
+# ---------------------------------------------------------------------------
+# Mark read / archive (inbox-zero) tests
+# ---------------------------------------------------------------------------
+
+def test_mark_read_adds_to_read_articles(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-read must persist content_hash in user.json."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    r = logged_in_client.post("/account/mark-read", data={"content_hash": "abc123"})
+    assert r.status_code == 200
+    data = json.loads(r.data)
+    assert data["ok"] is True
+    # Find the test user's user.json and verify the hash was saved.
+    users_dir = archive / "users"
+    user_data = None
+    for p in users_dir.iterdir():
+        f = p / "user.json"
+        if f.exists():
+            d = json.loads(f.read_text())
+            if d.get("email") == "test@example.com":
+                user_data = d
+                break
+    assert user_data is not None
+    assert "abc123" in user_data.get("read_articles", [])
+
+
+def test_mark_read_missing_hash_returns_400(logged_in_client, archive):
+    """POST /account/mark-read with no content_hash must return 400."""
+    r = logged_in_client.post("/account/mark-read", data={})
+    assert r.status_code == 400
+
+
+def test_mark_unread_removes_from_read_articles(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-unread must remove content_hash from user.json."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    # First mark as read.
+    logged_in_client.post("/account/mark-read", data={"content_hash": "abc123"})
+    # Then mark as unread.
+    r = logged_in_client.post("/account/mark-unread", data={"content_hash": "abc123"})
+    assert r.status_code == 200
+    assert json.loads(r.data)["ok"] is True
+    users_dir = archive / "users"
+    for p in users_dir.iterdir():
+        f = p / "user.json"
+        if f.exists():
+            d = json.loads(f.read_text())
+            if d.get("email") == "test@example.com":
+                assert "abc123" not in d.get("read_articles", [])
+                break
+
+
+def test_mark_unread_missing_hash_returns_400(logged_in_client, archive):
+    """POST /account/mark-unread with no content_hash must return 400."""
+    r = logged_in_client.post("/account/mark-unread", data={})
+    assert r.status_code == 400
+
+
+def test_mark_all_read_redirects_to_blog(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-all-read must redirect to /blog."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    r = logged_in_client.post("/account/mark-all-read")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/blog")
+
+
+def test_serve_read_requires_login(client, archive):
+    """/read must redirect unauthenticated requests to login."""
+    r = client.get("/read")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_serve_read_shows_archived_stories(logged_in_client, archive, monkeypatch):
+    """/read must show only stories whose content_hash is in read_articles."""
+    import hashlib
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    # The story body written by _make_channel is "Story body."
+    # Parse the actual hash so the test doesn't duplicate the hash logic.
+    import TubeNews as _tn
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    content_hash = parsed["content_hash"]
+    # Mark that story as read.
+    logged_in_client.post("/account/mark-read", data={"content_hash": content_hash})
+    r = logged_in_client.get("/read")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+
+
+def test_serve_blog_hides_read_stories(logged_in_client, archive, monkeypatch):
+    """/blog (inbox) must hide stories whose content_hash is in read_articles."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    import TubeNews as _tn
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    content_hash = parsed["content_hash"]
+    logged_in_client.post("/account/mark-read", data={"content_hash": content_hash})
+    r = logged_in_client.get("/blog")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" not in r.data
