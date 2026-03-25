@@ -260,4 +260,189 @@
 })();
 {% endif %}
 </script>
+
+<style>
+.story-focused {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+#kb-help {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 300;
+  align-items: center;
+  justify-content: center;
+}
+#kb-help-panel {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 2rem;
+  max-width: 400px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+#kb-help-panel h3 { margin: 0 0 1rem; font-size: 1rem; }
+#kb-help-panel table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+#kb-help-panel td { padding: .3rem .4rem .3rem 0; vertical-align: top; }
+#kb-help-panel td:first-child {
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-right: 1rem;
+}
+#kb-help-close {
+  margin-top: 1.2rem;
+  float: right;
+  cursor: pointer;
+  padding: .3rem .8rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: .9rem;
+}
+</style>
+
+<div id="kb-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+  <div id="kb-help-panel">
+    <h3>Keyboard shortcuts</h3>
+    <table>
+      <tr><td>j / k</td><td>Next / previous story</td></tr>
+      <tr><td>o</td><td>Open YouTube source</td></tr>
+      <tr><td>t</td><td>Read transcript</td></tr>
+      {% if current_user.is_authenticated and not channel_id %}
+        {% if is_archive %}
+      <tr><td>u</td><td>Move story to inbox</td></tr>
+        {% else %}
+      <tr><td>e</td><td>Archive story (mark as read)</td></tr>
+        {% endif %}
+      {% endif %}
+      {% if current_user.is_authenticated and current_user.is_admin %}
+      <tr><td>#</td><td>Delete story (admin)</td></tr>
+      {% endif %}
+      <tr><td>g i</td><td>Go to inbox</td></tr>
+      <tr><td>g a</td><td>Go to archive</td></tr>
+      <tr><td>?</td><td>Show / hide this help</td></tr>
+      <tr><td>Esc</td><td>Close this help</td></tr>
+    </table>
+    <button id="kb-help-close">Close</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  if (!document.querySelectorAll) return;
+  var helpEl   = document.getElementById('kb-help');
+  var closeBtn = document.getElementById('kb-help-close');
+  var focusIdx = -1;
+
+  function getArticles() {
+    return Array.from(document.querySelectorAll('article.story'));
+  }
+
+  function setFocus(idx) {
+    var articles = getArticles();
+    if (!articles.length) return;
+    var prev = articles[focusIdx];
+    if (prev) prev.classList.remove('story-focused');
+    focusIdx = Math.max(0, Math.min(idx, articles.length - 1));
+    var el = articles[focusIdx];
+    if (el) {
+      el.classList.add('story-focused');
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  function showHelp() { helpEl.style.display = 'flex'; }
+  function hideHelp() { helpEl.style.display = 'none'; }
+
+  closeBtn.addEventListener('click', hideHelp);
+  helpEl.addEventListener('click', function (e) { if (e.target === helpEl) hideHelp(); });
+
+  var pendingG = false;
+  var gTimer   = null;
+
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    var key = e.key;
+
+    if (key === 'Escape') { hideHelp(); return; }
+    if (key === '?') { e.preventDefault(); helpEl.style.display === 'flex' ? hideHelp() : showHelp(); return; }
+
+    if (pendingG) {
+      clearTimeout(gTimer);
+      pendingG = false;
+      if (key === 'i') { window.location.href = '/blog'; return; }
+      if (key === 'a') { window.location.href = '/read'; return; }
+      return;
+    }
+    if (key === 'g') {
+      pendingG = true;
+      gTimer = setTimeout(function () { pendingG = false; }, 1000);
+      e.preventDefault();
+      return;
+    }
+
+    var articles = getArticles();
+    if (!articles.length) return;
+
+    if (key === 'j') {
+      e.preventDefault();
+      setFocus(focusIdx < 0 ? 0 : focusIdx + 1);
+    } else if (key === 'k') {
+      e.preventDefault();
+      setFocus(focusIdx <= 0 ? 0 : focusIdx - 1);
+    } else if (key === 'o') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var watchLink = articles[focusIdx].querySelector('.story-watch');
+        if (watchLink) window.open(watchLink.href, '_blank', 'noopener');
+      }
+    } else if (key === 't') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var txLink = articles[focusIdx].querySelector('.story-transcript');
+        if (txLink) window.open(txLink.href, '_blank', 'noopener');
+      }
+    } else if (key === 'e') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var readBtn = articles[focusIdx].querySelector('.share-read');
+        if (readBtn) {
+          var nextIdx = focusIdx;
+          readBtn.click();
+          setTimeout(function () {
+            var remaining = getArticles();
+            if (remaining.length) { focusIdx = -1; setFocus(Math.min(nextIdx, remaining.length - 1)); }
+          }, 350);
+        }
+      }
+    } else if (key === 'u') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var unreadBtn = articles[focusIdx].querySelector('.share-unread');
+        if (unreadBtn) {
+          var nextIdx = focusIdx;
+          unreadBtn.click();
+          setTimeout(function () {
+            var remaining = getArticles();
+            if (remaining.length) { focusIdx = -1; setFocus(Math.min(nextIdx, remaining.length - 1)); }
+          }, 350);
+        }
+      }
+    } else if (key === '#') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var delBtn = articles[focusIdx].querySelector('.share-delete');
+        if (delBtn) delBtn.click();
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}
