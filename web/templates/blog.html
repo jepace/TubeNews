@@ -3,26 +3,32 @@
 
 {% block header_sub %}
 <div class="header-sub">
-  <span>{{ blog_name }}</span>
-  {% if channel_id %}
-  <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube channel</a>
-  {% endif %}
-  {% if feed_path %}
-  <a class="hs-ext" href="{{ feed_path }}">RSS feed</a>
-  {% endif %}
-  {% if current_user.is_authenticated and not channel_id %}
-    {% if is_archive %}
-    <a class="hs-ext" href="{{ url_for('serve_blog') }}">&#8592; Inbox</a>
-    {% else %}
-    <a class="hs-ext" href="{{ url_for('serve_read') }}">Archive{% if read_count %} ({{ read_count }}){% endif %}</a>
-    {% if stories %}
+  <div class="hs-left">
+    <span class="hs-feed-name">{{ blog_name }}</span>
+    {% if current_user.is_authenticated %}
+      <a class="hs-tab{% if not is_archive and not channel_id %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread</a>
+      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Archive</a>
+      {% if channel_id %}
+      <span class="hs-tab hs-tab-active">All</span>
+      {% endif %}
+    {% endif %}
+  </div>
+  <div class="hs-center">
+    {% if current_user.is_authenticated and not channel_id and not is_archive and stories %}
     <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="hs-btn">Mark all read</button>
+      <button type="submit" class="hs-action-btn">Mark all read</button>
     </form>
     {% endif %}
+  </div>
+  <div class="hs-right">
+    {% if channel_id %}
+    <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
     {% endif %}
-  {% endif %}
+    {% if feed_path %}
+    <a class="hs-rss" href="{{ feed_path }}">RSS</a>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}
 
