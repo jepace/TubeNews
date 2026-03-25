@@ -102,6 +102,9 @@ header {
 .hs-tab { font-weight: 400; color: var(--muted); padding: 0 0.1rem; border-bottom: 2px solid transparent; line-height: 36px; }
 .hs-tab:hover { color: var(--text); text-decoration: none; }
 .hs-tab-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+/* Center: bulk action buttons */
+.hs-center { flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; }
+.hs-center form { margin: 0; }
 /* Right: RSS and external links */
 .hs-right { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; }
 .hs-ext { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
@@ -117,8 +120,11 @@ header {
 }
 .hs-rss:hover { color: var(--text); border-color: var(--text); text-decoration: none; }
 .hs-action-btn {
+  appearance: none;
+  display: inline-block;
   font-size: 0.75rem;
   font-weight: 500;
+  font-family: inherit;
   color: var(--muted);
   background: none;
   border: 1px solid var(--border);
@@ -126,8 +132,9 @@ header {
   cursor: pointer;
   padding: 0.1rem 0.45rem;
   white-space: nowrap;
-  font-family: inherit;
-  line-height: 1.6;
+  line-height: inherit;
+  vertical-align: baseline;
+  margin: 0;
 }
 .hs-action-btn:hover { color: var(--text); border-color: var(--text); }
 
