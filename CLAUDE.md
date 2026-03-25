@@ -475,6 +475,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET | `/logout` | `logout` | Clears session |
 | GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories |
 | GET | `/read` | `serve_read` | Serves the logged-in user's read (archived) stories |
+| GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status |
 | GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
 | GET/POST | `/account` | `account` | Self-service account settings: change name/email (requires current password) |
 | POST | `/account/password` | `account_password` | Change own password (requires current password; new password min 10 chars) |

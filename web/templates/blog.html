@@ -5,20 +5,14 @@
 <div class="header-sub">
   <div class="hs-left">
     <span class="hs-feed-name">{{ blog_name }}</span>
-    {% if current_user.is_authenticated %}
-      <a class="hs-tab{% if not is_archive and not channel_id %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread</a>
+    {% if current_user.is_authenticated and not channel_id %}
+      <a class="hs-tab{% if not is_archive and not is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread</a>
       <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Archive</a>
-      {% if channel_id %}
+      <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}">All</a>
+    {% elif channel_id %}
+      <a class="hs-tab" href="{{ url_for('serve_blog') }}">Unread</a>
+      <a class="hs-tab" href="{{ url_for('serve_read') }}">Archive</a>
       <span class="hs-tab hs-tab-active">All</span>
-      {% endif %}
-    {% endif %}
-  </div>
-  <div class="hs-center">
-    {% if current_user.is_authenticated and not channel_id and not is_archive and stories %}
-    <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="hs-action-btn">Mark all read</button>
-    </form>
     {% endif %}
   </div>
   <div class="hs-right">
@@ -34,9 +28,14 @@
 
 {% block content %}
 <div class="blog-page">
-  <div class="blog-header">
-    <h1>{{ blog_name }}{% if is_archive %} &mdash; Archive{% endif %}</h1>
+  {% if current_user.is_authenticated and not channel_id and not is_archive and not is_all and stories %}
+  <div class="blog-toolbar">
+    <form method="post" action="{{ url_for('account_mark_all_read') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="blog-toolbar-btn">Mark all as read</button>
+    </form>
   </div>
+  {% endif %}
 
   {% if stories %}
     {% for story in stories %}

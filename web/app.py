@@ -878,6 +878,19 @@ def serve_read():
                            is_archive=True)
 
 
+@app.route("/all")
+@login_required
+def serve_all():
+    """Render all of the logged-in user's stories regardless of read status."""
+    if not current_user.channel_ids:
+        return redirect(url_for("account"))
+    stories = _get_user_stories(current_user._data, current_user.get_id())
+    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    return render_template("blog.html", stories=stories, blog_name=blog_name,
+                           feed_path=f"/feed/{current_user.feed_token}.xml",
+                           is_all=True)
+
+
 @app.route("/channel/<channel_id>")
 @login_required
 def channel_blog(channel_id: str):

@@ -1851,3 +1851,37 @@ def test_serve_blog_hides_read_stories(logged_in_client, archive, monkeypatch):
     r = logged_in_client.get("/blog")
     assert r.status_code == 200
     assert b"Alpha Council Approves Budget" not in r.data
+
+
+# ---------------------------------------------------------------------------
+# /all — combined inbox + archive view
+# ---------------------------------------------------------------------------
+
+
+def test_serve_all_requires_login(client, archive):
+    """/all must redirect unauthenticated requests to login."""
+    r = client.get("/all")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_serve_all_returns_200(logged_in_client):
+    r = logged_in_client.get("/all")
+    assert r.status_code == 200
+
+
+def test_serve_all_shows_both_read_and_unread_stories(logged_in_client, archive, monkeypatch):
+    """/all must show stories regardless of read status."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    import TubeNews as _tn
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    content_hash = parsed["content_hash"]
+    # Mark the story as read — /blog would hide it, /all must still show it.
+    logged_in_client.post("/account/mark-read", data={"content_hash": content_hash})
+    r = logged_in_client.get("/all")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
