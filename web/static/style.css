@@ -91,15 +91,46 @@ header {
   height: 36px;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  font-size: 0.9rem;
-  font-weight: 600;
+  justify-content: space-between;
+  font-size: 0.85rem;
 }
 .header-sub a { color: var(--text); text-decoration: none; }
 .header-sub a:hover { text-decoration: underline; }
-.header-sub .hs-ext { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
-.header-sub .hs-btn { font-weight: 400; font-size: 0.8rem; color: var(--muted); background: none; border: none; cursor: pointer; padding: 0; }
-.header-sub .hs-btn:hover { text-decoration: underline; color: var(--text); }
+/* Left: feed name + nav tabs */
+.hs-left { flex: 1; display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.hs-feed-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-tab { font-weight: 400; color: var(--muted); padding: 0 0.1rem; border-bottom: 2px solid transparent; line-height: 36px; }
+.hs-tab:hover { color: var(--text); text-decoration: none; }
+.hs-tab-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+/* Center: action buttons */
+.hs-center { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+.hs-action-btn {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  padding: 0.2rem 0.65rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.hs-action-btn:hover { background: var(--border); }
+/* Right: RSS and external links */
+.hs-right { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; }
+.hs-ext { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+.hs-ext:hover { color: var(--text); }
+.hs-rss {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+}
+.hs-rss:hover { color: var(--text); border-color: var(--text); text-decoration: none; }
 
 /* Hamburger toggle — hidden on desktop */
 .nav-toggle {
