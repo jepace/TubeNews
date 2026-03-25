@@ -330,7 +330,7 @@
       <tr><td>g i</td><td>Go to inbox</td></tr>
       <tr><td>g a</td><td>Go to archive</td></tr>
       <tr><td>?</td><td>Show / hide this help</td></tr>
-      <tr><td>Esc</td><td>Close this help</td></tr>
+      <tr><td>Esc / Enter</td><td>Close this help</td></tr>
     </table>
     <button id="kb-help-close">Close</button>
   </div>
@@ -347,6 +347,21 @@
     return Array.from(document.querySelectorAll('article.story'));
   }
 
+  function stickyHeaderHeight() {
+    var h = 0;
+    document.querySelectorAll('header, .header-sub').forEach(function (el) {
+      var pos = window.getComputedStyle(el).position;
+      if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
+    });
+    return h;
+  }
+
+  function scrollToStory(el) {
+    var offset = stickyHeaderHeight() + 8;
+    var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
+    window.scrollTo({ top: top, behavior: 'smooth' });
+  }
+
   function setFocus(idx) {
     var articles = getArticles();
     if (!articles.length) return;
@@ -356,7 +371,7 @@
     var el = articles[focusIdx];
     if (el) {
       el.classList.add('story-focused');
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      scrollToStory(el);
     }
   }
 
@@ -376,7 +391,7 @@
 
     var key = e.key;
 
-    if (key === 'Escape') { hideHelp(); return; }
+    if (key === 'Escape' || (key === 'Enter' && helpEl.style.display === 'flex')) { hideHelp(); return; }
     if (key === '?') { e.preventDefault(); helpEl.style.display === 'flex' ? hideHelp() : showHelp(); return; }
 
     if (pendingG) {
