@@ -481,6 +481,17 @@ button[type="submit"]:hover,
 
 .danger-zone { border-color: #fca5a5; background: #fff8f8; }
 
+.alert-danger {
+  background: #fff0f0;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+html.dark .alert-danger { background: #2d1515; }
+
 /* Badges / pills */
 .badge {
   display: inline-flex;

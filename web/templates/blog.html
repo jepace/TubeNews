@@ -70,15 +70,15 @@
            {% if story.channel_slug and story.meeting_id %}
            data-transcript="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}"
            {% endif %}>
-        <button type="button" class="share-copy-text" title="Copy article text">&#128203; Copy article</button>
-        <button type="button" class="share-copy-link" title="Copy link to this article">&#128279; Copy link</button>
+        <button type="button" class="share-copy-text" title="Copy article text">&#128203; Copy Article</button>
+        <button type="button" class="share-copy-link" title="Copy link to this article">&#128279; Copy Link</button>
         <a class="share-email" href="#" title="Share via email">&#128231; Email</a>
         <button type="button" class="share-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
         {% if current_user.is_authenticated and not channel_id %}
           {% if is_archive %}
           <button type="button" class="share-unread" title="Mark as unread">&#10003; Mark Unread</button>
           {% else %}
-          <button type="button" class="share-read" title="Mark as read">&#10003; Mark read</button>
+          <button type="button" class="share-read" title="Mark as read">&#10003; Mark Read</button>
           {% endif %}
         {% endif %}
         {% if current_user.is_authenticated and current_user.is_admin and story.story_filename %}
@@ -226,10 +226,24 @@
       .catch(function () { alert('Action failed. Check your connection.'); });
   }
 
+  function scrollToFocused() {
+    var el = document.querySelector('.story-focused');
+    if (!el) return;
+    var headerH = 0;
+    document.querySelectorAll('header, .header-sub').forEach(function (h) {
+      var s = window.getComputedStyle(h).position;
+      if (s === 'sticky' || s === 'fixed') headerH += h.getBoundingClientRect().height;
+    });
+    var rect = el.getBoundingClientRect();
+    if (rect.top < headerH + 8) {
+      window.scrollBy({ top: rect.top - headerH - 8, behavior: 'smooth' });
+    }
+  }
+
   function fadeRemove(article) {
     article.style.transition = 'opacity 0.3s';
     article.style.opacity = '0';
-    setTimeout(function () { article.remove(); }, 300);
+    setTimeout(function () { article.remove(); scrollToFocused(); }, 300);
   }
 
   function attachReadBtn(btn) {
@@ -261,7 +275,7 @@
           btn.removeEventListener('click', handler);
           btn.className = 'share-read';
           btn.title = 'Mark as read';
-          btn.textContent = '\u2713 Mark read';
+          btn.textContent = '\u2713 Mark Read';
           attachReadBtn(btn);
         } else {
           fadeRemove(btn.closest('article'));
