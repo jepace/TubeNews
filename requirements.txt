@@ -1,7 +1,6 @@
 requests
 feedgen
 supadata
-pytest
 flask
 flask-login
 flask-wtf
