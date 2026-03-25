@@ -172,7 +172,11 @@ Defined in `web/app.py`:
 ### Install Dependencies
 
 ```bash
+# Production
 pip install -r requirements.txt
+
+# Development (adds pytest)
+pip install -r requirements-dev.txt
 ```
 
 Packages install globally — no virtual environment is used.
