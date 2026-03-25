@@ -16,6 +16,20 @@
     {% endif %}
   </div>
   <div class="hs-right">
+    {% if current_user.is_authenticated and not channel_id and stories %}
+      {% if not is_archive %}
+      <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="hs-action-btn">Mark all read</button>
+      </form>
+      {% endif %}
+      {% if is_archive or is_all %}
+      <form method="post" action="{{ url_for('account_mark_all_unread') }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="hs-action-btn">Mark all unread</button>
+      </form>
+      {% endif %}
+    {% endif %}
     {% if channel_id %}
     <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
     {% endif %}
@@ -28,14 +42,6 @@
 
 {% block content %}
 <div class="blog-page">
-  {% if current_user.is_authenticated and not channel_id and not is_archive and not is_all and stories %}
-  <div class="blog-toolbar">
-    <form method="post" action="{{ url_for('account_mark_all_read') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="blog-toolbar-btn">Mark all as read</button>
-    </form>
-  </div>
-  {% endif %}
 
   {% if stories %}
     {% for story in stories %}
@@ -204,41 +210,66 @@
   var csrfToken = {{ csrf_token() | tojson }};
   var markReadUrl   = {{ url_for('account_mark_read')   | tojson }};
   var markUnreadUrl = {{ url_for('account_mark_unread') | tojson }};
+  var isAll = {{ (is_all or False) | tojson }};
 
-  function postHash(url, hash, btn, article) {
+  function postHash(url, hash, onSuccess) {
     var fd = new FormData();
     fd.append('csrf_token', csrfToken);
     fd.append('content_hash', hash);
     fetch(url, { method: 'POST', body: fd })
       .then(function (r) {
-        if (r.ok) {
-          article.style.transition = 'opacity 0.3s';
-          article.style.opacity = '0';
-          setTimeout(function () { article.remove(); }, 300);
-        } else {
-          alert('Action failed (' + r.status + ').');
-        }
+        if (r.ok) { onSuccess(); }
+        else { alert('Action failed (' + r.status + ').'); }
       })
       .catch(function () { alert('Action failed. Check your connection.'); });
   }
 
-  document.querySelectorAll('.share-read').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var bar     = btn.closest('.story-share');
-      var article = btn.closest('article');
-      var hash    = bar.dataset.contentHash;
-      if (hash) postHash(markReadUrl, hash, btn, article);
-    });
-  });
+  function fadeRemove(article) {
+    article.style.transition = 'opacity 0.3s';
+    article.style.opacity = '0';
+    setTimeout(function () { article.remove(); }, 300);
+  }
 
-  document.querySelectorAll('.share-unread').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var bar     = btn.closest('.story-share');
-      var article = btn.closest('article');
-      var hash    = bar.dataset.contentHash;
-      if (hash) postHash(markUnreadUrl, hash, btn, article);
+  function attachReadBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-share');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markReadUrl, hash, function () {
+        if (isAll) {
+          btn.removeEventListener('click', handler);
+          btn.className = 'share-unread';
+          btn.title = 'Move back to inbox';
+          btn.textContent = '\u2190 Move to inbox';
+          attachUnreadBtn(btn);
+        } else {
+          fadeRemove(btn.closest('article'));
+        }
+      });
     });
-  });
+  }
+
+  function attachUnreadBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-share');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markUnreadUrl, hash, function () {
+        if (isAll) {
+          btn.removeEventListener('click', handler);
+          btn.className = 'share-read';
+          btn.title = 'Mark as read';
+          btn.textContent = '\u2713 Mark read';
+          attachReadBtn(btn);
+        } else {
+          fadeRemove(btn.closest('article'));
+        }
+      });
+    });
+  }
+
+  document.querySelectorAll('.share-read').forEach(attachReadBtn);
+  document.querySelectorAll('.share-unread').forEach(attachUnreadBtn);
 })();
 {% endif %}
 

@@ -1083,6 +1083,15 @@ def account_mark_all_read():
     return redirect(url_for("serve_blog"))
 
 
+@app.route("/account/mark-all-unread", methods=["POST"])
+@login_required
+def account_mark_all_unread():
+    """Clear all read articles, then redirect to the inbox."""
+    current_user._data["read_articles"] = []
+    current_user._save()
+    return redirect(url_for("serve_blog"))
+
+
 # ---------------------------------------------------------------------------
 # Admin routes
 # ---------------------------------------------------------------------------

@@ -398,7 +398,7 @@ archive/users/
 - `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3); old installs may store a plain string — both are handled transparently. Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
-- `read_articles` — sorted list of `content_hash` strings for articles the user has archived (marked as read). `/blog` (inbox) hides stories whose hash is in this list; `/read` (archive) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, and `account_mark_all_read` routes.
+- `read_articles` — sorted list of `content_hash` strings for articles the user has archived (marked as read). `/blog` (inbox) hides stories whose hash is in this list; `/read` (archive) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes.
 
 ### Token Model
 
@@ -484,6 +484,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/account/mark-read` | `account_mark_read` | Add a `content_hash` to the user's `read_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-unread` | `account_mark_unread` | Remove a `content_hash` from `read_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-all-read` | `account_mark_all_read` | Mark all current stories as read; redirects to `/blog` |
+| POST | `/account/mark-all-unread` | `account_mark_all_unread` | Clear all read articles (mark everything unread); redirects to `/blog` |
 
 **Admin required (`admin_users` in config):**
 
