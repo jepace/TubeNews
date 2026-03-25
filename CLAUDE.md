@@ -398,7 +398,7 @@ archive/users/
 - `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3); old installs may store a plain string — both are handled transparently. Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
-- `read_articles` — sorted list of `content_hash` strings for articles the user has archived (marked as read). `/blog` (inbox) hides stories whose hash is in this list; `/read` (archive) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes.
+- `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes.
 
 ### Token Model
 
@@ -474,7 +474,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
 | GET | `/logout` | `logout` | Clears session |
 | GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories |
-| GET | `/read` | `serve_read` | Serves the logged-in user's read (archived) stories |
+| GET | `/read` | `serve_read` | Serves the logged-in user's read stories (the "Read" tab) |
 | GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status |
 | GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
 | GET/POST | `/account` | `account` | Self-service account settings: change name/email (requires current password) |
@@ -513,7 +513,11 @@ the web app does **not** call either — the web UI uses dynamic generation only
 `base.html` exposes a `header_sub` Jinja block. When a child template overrides the block with content, a 36 px sticky band (`position: sticky; top: 52px; z-index: 190`) appears immediately below the main navigation header and stays visible while scrolling. When the block is left empty (the default), nothing is rendered and no space is reserved.
 
 **Current uses:**
-- `blog.html` always renders a sub-header containing the feed/page name. When the template receives a `channel_id` variable (set only by `channel_blog()`), a "▶ YouTube channel" link is added.
+- `blog.html` always renders a sub-header with the feed/page name, three navigation tabs (Unread / Read / All), optional bulk-action buttons, and an RSS pill link on the right.
+  - **Tabs** are shown only for authenticated users not on a channel page. The active tab is highlighted. On channel pages, the tabs appear but All is always active.
+  - **Bulk-action buttons** (Mark All Read, Mark All Unread) appear in a centered `hs-center` zone between the tabs and the RSS link. Unread tab shows Mark All Read; Read tab shows Mark All Unread; All tab shows both. Hidden when the story list is empty. Rendered as `<button class="btn-sm">` inside `<form style="display:contents">` to bypass the global `button[type="submit"]` style rule.
+  - **RSS link** (`hs-rss` pill) appears on the right for authenticated personal pages and channel pages.
+  - When the template receives a `channel_id` variable (set only by `channel_blog()`), a "▶ YouTube channel" link is also added to the right.
 
 **Sizing note:** The sub-header's `top: 52px` assumes the main header is exactly 52 px tall (set by `header { height: 52px }` in `style.css`). The transcript banner uses the same `top: 52px` on a page that has no sub-header, so there is no conflict. If the main header height ever changes, update both `top` values together.
 

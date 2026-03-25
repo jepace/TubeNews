@@ -7,11 +7,11 @@
     <span class="hs-feed-name">{{ blog_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
       <a class="hs-tab{% if not is_archive and not is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread</a>
-      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Archive</a>
+      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Read</a>
       <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}">All</a>
     {% elif channel_id %}
       <a class="hs-tab" href="{{ url_for('serve_blog') }}">Unread</a>
-      <a class="hs-tab" href="{{ url_for('serve_read') }}">Archive</a>
+      <a class="hs-tab" href="{{ url_for('serve_read') }}">Read</a>
       <span class="hs-tab hs-tab-active">All</span>
     {% endif %}
   </div>
@@ -20,13 +20,13 @@
       {% if not is_archive %}
       <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:contents">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn-sm">Mark all read</button>
+        <button type="submit" class="btn-sm">Mark All Read</button>
       </form>
       {% endif %}
       {% if is_archive or is_all %}
       <form method="post" action="{{ url_for('account_mark_all_unread') }}" style="display:contents">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn-sm">Mark all unread</button>
+        <button type="submit" class="btn-sm">Mark All Unread</button>
       </form>
       {% endif %}
     {% endif %}
@@ -76,7 +76,7 @@
         <button type="button" class="share-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
         {% if current_user.is_authenticated and not channel_id %}
           {% if is_archive %}
-          <button type="button" class="share-unread" title="Move back to inbox">&#8592; Move to inbox</button>
+          <button type="button" class="share-unread" title="Mark as unread">&#10003; Mark Unread</button>
           {% else %}
           <button type="button" class="share-read" title="Mark as read">&#10003; Mark read</button>
           {% endif %}
@@ -241,8 +241,8 @@
         if (isAll) {
           btn.removeEventListener('click', handler);
           btn.className = 'share-unread';
-          btn.title = 'Move back to inbox';
-          btn.textContent = '\u2190 Move to inbox';
+          btn.title = 'Mark as unread';
+          btn.textContent = '\u2713 Mark Unread';
           attachUnreadBtn(btn);
         } else {
           fadeRemove(btn.closest('article'));
@@ -357,16 +357,16 @@
       <tr><td>t</td><td>Read transcript</td></tr>
       {% if current_user.is_authenticated and not channel_id %}
         {% if is_archive %}
-      <tr><td>u</td><td>Move story to inbox</td></tr>
+      <tr><td>u</td><td>Mark story unread</td></tr>
         {% else %}
-      <tr><td>e</td><td>Archive story (mark as read)</td></tr>
+      <tr><td>e</td><td>Mark story as read</td></tr>
         {% endif %}
       {% endif %}
       {% if current_user.is_authenticated and current_user.is_admin %}
       <tr><td>#</td><td>Delete story (admin)</td></tr>
       {% endif %}
       <tr><td>g i</td><td>Go to inbox</td></tr>
-      <tr><td>g a</td><td>Go to archive</td></tr>
+      <tr><td>g a</td><td>Go to read</td></tr>
       <tr><td>?</td><td>Show / hide this help</td></tr>
       <tr><td>Esc / Enter</td><td>Close this help</td></tr>
     </table>
@@ -411,6 +411,21 @@
       el.classList.add('story-focused');
       scrollToStory(el);
     }
+  }
+
+  // Immediately move the focus ring off the departing article and onto the
+  // next one (or previous if at the end), then adjust focusIdx so j/k still
+  // works correctly after the article is removed from the DOM.
+  function advanceFocus(articles, idx) {
+    articles[idx].classList.remove('story-focused');
+    if (articles.length === 1) { focusIdx = -1; return; }
+    var goNext = idx < articles.length - 1;
+    var target = goNext ? articles[idx + 1] : articles[idx - 1];
+    target.classList.add('story-focused');
+    scrollToStory(target);
+    // After removal, the article at (idx+1) slides down to idx, so focusIdx
+    // stays the same. If we moved backward, decrement by 1.
+    if (!goNext) focusIdx = idx - 1;
   }
 
   function showHelp() { helpEl.style.display = 'flex'; }
@@ -469,24 +484,16 @@
       if (focusIdx >= 0 && articles[focusIdx]) {
         var readBtn = articles[focusIdx].querySelector('.share-read');
         if (readBtn) {
-          var nextIdx = focusIdx;
+          advanceFocus(articles, focusIdx);
           readBtn.click();
-          setTimeout(function () {
-            var remaining = getArticles();
-            if (remaining.length) { focusIdx = -1; setFocus(Math.min(nextIdx, remaining.length - 1)); }
-          }, 350);
         }
       }
     } else if (key === 'u') {
       if (focusIdx >= 0 && articles[focusIdx]) {
         var unreadBtn = articles[focusIdx].querySelector('.share-unread');
         if (unreadBtn) {
-          var nextIdx = focusIdx;
+          advanceFocus(articles, focusIdx);
           unreadBtn.click();
-          setTimeout(function () {
-            var remaining = getArticles();
-            if (remaining.length) { focusIdx = -1; setFocus(Math.min(nextIdx, remaining.length - 1)); }
-          }, 350);
         }
       }
     } else if (key === '#') {
