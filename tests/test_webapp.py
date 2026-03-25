@@ -1810,6 +1810,28 @@ def test_mark_all_read_redirects_to_blog(logged_in_client, archive, monkeypatch)
     assert r.headers["Location"].endswith("/blog")
 
 
+def test_mark_all_unread_clears_read_articles_and_redirects(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-all-unread must clear read_articles and redirect to /blog."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    # Pre-populate read_articles so we can verify they are cleared.
+    user_dir = archive / "users"
+    for user_json in user_dir.glob("*/user.json"):
+        import json as _json
+        data = _json.loads(user_json.read_text())
+        data["read_articles"] = ["abc123", "def456"]
+        user_json.write_text(_json.dumps(data))
+    r = logged_in_client.post("/account/mark-all-unread")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/blog")
+    # Verify read_articles is now empty for the logged-in user.
+    for user_json in user_dir.glob("*/user.json"):
+        import json as _json
+        data = _json.loads(user_json.read_text())
+        assert data.get("read_articles") == []
+
+
 def test_serve_read_requires_login(client, archive):
     """/read must redirect unauthenticated requests to login."""
     r = client.get("/read")
