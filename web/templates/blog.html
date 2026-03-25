@@ -436,10 +436,10 @@
     var goNext = idx < articles.length - 1;
     var target = goNext ? articles[idx + 1] : articles[idx - 1];
     target.classList.add('story-focused');
-    scrollToStory(target);
-    // After removal, the article at (idx+1) slides down to idx, so focusIdx
-    // stays the same. If we moved backward, decrement by 1.
-    if (!goNext) focusIdx = idx - 1;
+    // Only scroll when moving backward — the next article is already visible
+    // below the current one and will slide naturally into place after removal.
+    // Scrolling forward causes a double-bounce when the removed article collapses.
+    if (!goNext) { scrollToStory(target); focusIdx = idx - 1; }
   }
 
   function showHelp() { helpEl.style.display = 'flex'; }
