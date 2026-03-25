@@ -28,6 +28,7 @@ from flask import (
     Response,
     abort,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -199,6 +200,7 @@ class StoryDict(TypedDict):
     meeting_id: str
     story_filename: str
     processed_at: float
+    content_hash: str
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +637,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "meeting_id": entry.get("meeting_id", ""),
                 "story_filename": entry["file"].name,
                 "processed_at": entry["meta"].get("processed_at", 0),
+                "content_hash": s.get("content_hash", ""),
             })
         except Exception as exc:
             logger.debug(f"Skipping {entry['file']}: {exc}")
@@ -846,15 +849,33 @@ def serve_blog_public(token: str):
 @app.route("/blog")
 @login_required
 def serve_blog():
-    """Render the logged-in user's blog inside the app template."""
+    """Render the logged-in user's unread (inbox) stories."""
     if not current_user.channel_ids:
         flash("Subscribe to channels to start reading your blog.", "info")
         return redirect(url_for("account"))
-    cfg = _load_config()
-    stories = _get_user_stories(current_user._data, current_user.get_id())
+    read_set = set(current_user._data.get("read_articles", []))
+    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    stories = [s for s in all_stories if s.get("content_hash", "") not in read_set]
+    read_count = len(all_stories) - len(stories)
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
-                           feed_path=f"/feed/{current_user.feed_token}.xml")
+                           feed_path=f"/feed/{current_user.feed_token}.xml",
+                           read_count=read_count)
+
+
+@app.route("/read")
+@login_required
+def serve_read():
+    """Render the logged-in user's read (archived) stories."""
+    if not current_user.channel_ids:
+        return redirect(url_for("account"))
+    read_set = set(current_user._data.get("read_articles", []))
+    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
+    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    return render_template("blog.html", stories=stories, blog_name=blog_name,
+                           feed_path=f"/feed/{current_user.feed_token}.xml",
+                           is_archive=True)
 
 
 @app.route("/channel/<channel_id>")
@@ -1004,6 +1025,49 @@ def account_delete():
     user_dir.rmdir()
     flash("Your account has been deleted.", "success")
     return redirect(url_for("login"))
+
+
+@app.route("/account/mark-read", methods=["POST"])
+@login_required
+def account_mark_read():
+    """Mark a story as read (add content_hash to read_articles). Returns JSON."""
+    content_hash = request.form.get("content_hash", "").strip()
+    if not content_hash:
+        return jsonify({"ok": False, "error": "missing content_hash"}), 400
+    read_set = set(current_user._data.get("read_articles", []))
+    read_set.add(content_hash)
+    current_user._data["read_articles"] = sorted(read_set)
+    current_user._save()
+    return jsonify({"ok": True})
+
+
+@app.route("/account/mark-unread", methods=["POST"])
+@login_required
+def account_mark_unread():
+    """Mark a story as unread (remove content_hash from read_articles). Returns JSON."""
+    content_hash = request.form.get("content_hash", "").strip()
+    if not content_hash:
+        return jsonify({"ok": False, "error": "missing content_hash"}), 400
+    read_set = set(current_user._data.get("read_articles", []))
+    read_set.discard(content_hash)
+    current_user._data["read_articles"] = sorted(read_set)
+    current_user._save()
+    return jsonify({"ok": True})
+
+
+@app.route("/account/mark-all-read", methods=["POST"])
+@login_required
+def account_mark_all_read():
+    """Mark all of the user's current stories as read, then redirect to /blog."""
+    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    read_set = set(current_user._data.get("read_articles", []))
+    for s in all_stories:
+        h = s.get("content_hash", "")
+        if h:
+            read_set.add(h)
+    current_user._data["read_articles"] = sorted(read_set)
+    current_user._save()
+    return redirect(url_for("serve_blog"))
 
 
 # ---------------------------------------------------------------------------
