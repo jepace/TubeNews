@@ -21,6 +21,20 @@ The `web/app.py` Flask app serves both the web interface and the archive files.
 
 ### 1. Install dependencies
 
+> **FreeBSD note:** `feedgen` depends on `lxml`, a C extension that requires
+> libxml2/libxslt and is too large to compile inside a minimal jail.
+> Install the pre-built package first, then run pip:
+>
+> ```bash
+> pkg install py311-lxml   # adjust py311 to match your Python version
+> pip install --no-cache-dir -r requirements.txt
+> ```
+>
+> If your Python version is different, check with `python3 --version` and use
+> the matching package name (e.g. `py312-lxml`).
+
+All other platforms:
+
 ```bash
 pip install -r requirements.txt
 ```
