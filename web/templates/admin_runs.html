@@ -30,7 +30,7 @@
     {% else %}
       <form method="post" action="{{ url_for('admin_run_now') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn-save">Run Now</button>
+        <button type="submit" class="btn-sm">Run Now</button>
       </form>
     {% endif %}
     {% if current_run_pid %}

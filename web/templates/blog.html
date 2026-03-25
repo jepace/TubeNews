@@ -18,15 +18,15 @@
   <div class="hs-center">
     {% if current_user.is_authenticated and not channel_id and stories %}
       {% if not is_archive %}
-      <form method="post" action="{{ url_for('account_mark_all_read') }}">
+      <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:contents">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="hs-action-btn">Mark all read</button>
+        <button type="submit" class="btn-sm">Mark all read</button>
       </form>
       {% endif %}
       {% if is_archive or is_all %}
-      <form method="post" action="{{ url_for('account_mark_all_unread') }}">
+      <form method="post" action="{{ url_for('account_mark_all_unread') }}" style="display:contents">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="hs-action-btn">Mark all unread</button>
+        <button type="submit" class="btn-sm">Mark all unread</button>
       </form>
       {% endif %}
     {% endif %}
