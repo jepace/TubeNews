@@ -15,21 +15,23 @@
       <span class="hs-tab hs-tab-active">All</span>
     {% endif %}
   </div>
-  <div class="hs-right">
+  <div class="hs-center">
     {% if current_user.is_authenticated and not channel_id and stories %}
       {% if not is_archive %}
-      <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:inline">
+      <form method="post" action="{{ url_for('account_mark_all_read') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="hs-action-btn">Mark all read</button>
       </form>
       {% endif %}
       {% if is_archive or is_all %}
-      <form method="post" action="{{ url_for('account_mark_all_unread') }}" style="display:inline">
+      <form method="post" action="{{ url_for('account_mark_all_unread') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="hs-action-btn">Mark all unread</button>
       </form>
       {% endif %}
     {% endif %}
+  </div>
+  <div class="hs-right">
     {% if channel_id %}
     <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
     {% endif %}
