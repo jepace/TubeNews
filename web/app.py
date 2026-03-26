@@ -47,6 +47,7 @@ from flask_login import (
     logout_user,
 )
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,9 @@ TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+# Trust one level of X-Forwarded-For / X-Forwarded-Proto from the reverse
+# proxy (nginx/Caddy) so rate limiting and IP logging see real client IPs.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 logger = logging.getLogger(__name__)
 
 try:
@@ -594,7 +598,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     subscribed = set(user_data.get("channel_ids", []))
     raw: list[dict] = []
     channels_cfg = _load_channels()
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
         channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
         if not channel_info or channel_info.get("channel_id") not in subscribed:
             continue
@@ -663,8 +667,10 @@ def serve_archive(filename=""):
     """Serve static files from the archive directory (feeds, stories, etc.)."""
     if not filename:
         abort(404)
-    # Never expose user account data stored under archive/users/
+    # Never expose user account data or internal reserved directories.
     if filename == "users" or filename.startswith("users/"):
+        abort(404)
+    if filename.startswith("_"):
         abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None
     return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
@@ -796,7 +802,7 @@ def register():
     return render_template("register.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
@@ -833,7 +839,6 @@ def serve_blog_public(token: str):
         try:
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
-                cfg = _load_config()
                 uid = user_json.parent.name
                 stories = _get_user_stories(data, uid)
                 blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
@@ -1472,7 +1477,7 @@ def admin_story_delete():
         pass
 
     flash(f'Story deleted: \u201c{story_title}\u201d', "info")
-    return redirect(request.referrer or url_for("admin_all_stories"))
+    return redirect(url_for("admin_all_stories"))
 
 
 @app.route("/admin/feeds")
@@ -1678,4 +1683,4 @@ def not_found(e):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", debug=True, port=_port)
+    app.run(host="0.0.0.0", debug=False, port=_port)

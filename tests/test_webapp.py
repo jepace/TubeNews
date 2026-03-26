@@ -360,6 +360,18 @@ def test_admin_story_delete_removes_file(admin_client, archive, monkeypatch):
     assert not story_path.exists()
 
 
+def test_admin_story_delete_redirects_to_admin_all_stories(admin_client, archive, monkeypatch):
+    """Delete must redirect to admin_all_stories, never to request.referrer."""
+    monkeypatch.setattr(webapp, "rebuild_feed",           lambda *a, **kw: None)
+    monkeypatch.setattr(webapp, "rebuild_aggregate_feed", lambda *a, **kw: None)
+    r = admin_client.post("/admin/story/delete", data=_DELETE_FORM,
+                          headers={"Referer": "http://evil.com/"},
+                          follow_redirects=False)
+    assert r.status_code == 302
+    assert "evil.com" not in r.headers["Location"]
+    assert "/admin/blog" in r.headers["Location"]
+
+
 def test_admin_story_delete_404_for_missing_file(admin_client, archive, monkeypatch):
     monkeypatch.setattr(webapp, "rebuild_feed",           lambda *a, **kw: None)
     monkeypatch.setattr(webapp, "rebuild_aggregate_feed", lambda *a, **kw: None)
@@ -428,9 +440,17 @@ def test_login_unknown_email_shows_error(client, archive):
     assert b"Invalid email or password" in r.data
 
 
-def test_logout_redirects_to_login(logged_in_client):
+def test_logout_requires_post(logged_in_client):
+    """GET /logout must be rejected now that logout is POST-only."""
     r = logged_in_client.get("/logout", follow_redirects=False)
+    assert r.status_code == 405
+
+
+def test_logout_post_redirects_to_login(logged_in_client):
+    """POST /logout must clear the session and redirect to login."""
+    r = logged_in_client.post("/logout", follow_redirects=False)
     assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
 
 
 # ---------------------------------------------------------------------------
@@ -1080,6 +1100,21 @@ def test_serve_archive_allows_rss_feed(client, archive):
     (archive / "rss.xml").write_text("<rss/>")
     r = client.get("/archive/rss.xml")
     assert r.status_code == 200
+
+
+def test_serve_archive_blocks_run_logs(client, archive):
+    """/archive/_run_logs/ must return 404 — internal logs are not public."""
+    run_logs = archive / "_run_logs"
+    run_logs.mkdir()
+    (run_logs / "run-1234.log").write_text("secret log output")
+    r = client.get("/archive/_run_logs/run-1234.log")
+    assert r.status_code == 404
+
+
+def test_serve_archive_blocks_any_underscore_dir(client, archive):
+    """/archive/_anything/ must return 404."""
+    r = client.get("/archive/_internal/secret")
+    assert r.status_code == 404
 
 
 # ---------------------------------------------------------------------------

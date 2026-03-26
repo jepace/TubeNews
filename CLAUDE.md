@@ -467,7 +467,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET | `/` | `index` | Redirects to dashboard or login |
 | GET/POST | `/login` | `login` | Login form (rate-limited: 10/min) |
 | GET/POST | `/register` | `register` | Registration form (rate-limited: 5/min) |
-| GET | `/archive/<path>` | `serve_archive` | Serves files from `archive/` directory |
+| GET | `/archive/<path>` | `serve_archive` | Serves files from `archive/` directory; blocks `users/` and any path starting with `_` (e.g. `_run_logs/`) |
 | GET | `/feed/<token>.xml` | `serve_feed` | Personal RSS feed by token |
 | GET | `/blog/<token>.html` | `serve_blog_public` | Personal blog page by token |
 
@@ -476,7 +476,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | Method | Route | Handler | Description |
 |---|---|---|---|
 | GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
-| GET | `/logout` | `logout` | Clears session |
+| POST | `/logout` | `logout` | Clears session (POST + CSRF to prevent logout CSRF) |
 | GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories |
 | GET | `/read` | `serve_read` | Serves the logged-in user's read stories (the "Read" tab) |
 | GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status |
@@ -528,7 +528,10 @@ the web app does **not** call either — the web UI uses dynamic generation only
 ### Security Notes
 
 - All state-changing routes use CSRF tokens (flask-wtf).
-- Login and register routes are rate-limited (flask-limiter).
+- Login and register routes are rate-limited (flask-limiter). Rate limiting uses per-worker in-memory storage; with 4 gunicorn workers the effective limit is 4× the configured value. Upgrading to Redis storage would enforce a true global limit.
+- `ProxyFix` middleware (`werkzeug.middleware.proxy_fix.ProxyFix`) is applied with `x_for=1, x_proto=1, x_host=1` so rate limiting and IP logging see real client IPs when running behind nginx/Caddy. Only one proxy level is trusted — do not increase `x_for` unless there are multiple proxy hops.
+- `/logout` is POST-only with CSRF protection to prevent logout CSRF attacks.
+- `serve_archive` blocks both `users/` (account data) and any path starting with `_` (internal dirs like `_run_logs/`).
 - `SESSION_COOKIE_SECURE` is only set when `TUBENEWS_HTTPS=true` is in the
   environment, so local dev works without HTTPS.
 - Admins are determined solely by email match against `admin_users` in

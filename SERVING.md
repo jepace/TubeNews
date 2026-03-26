@@ -237,18 +237,66 @@ Edit your crontab with `crontab -e`.
 
 ## Keeping the Server Running: System Service
 
-Use the ready-to-use service files in `contrib/` to run TubeNews as a
-managed system service that starts at boot and restarts on crash.
+### FreeBSD (rc.d)
 
-| OS | System | Files |
-|---|---|---|
-| FreeBSD | rc.d | `contrib/freebsd/tubenews` |
-| Linux | systemd | `contrib/linux/tubenews-web.service` |
-| macOS | launchd | `contrib/macos/com.tubenews.web.plist` |
+Create `/usr/local/etc/rc.d/tubenews` with mode `0555`:
 
-See `contrib/README.md` for step-by-step installation instructions for
-each platform. The Linux files also include a systemd timer
-(`tubenews-run.timer`) as an alternative to cron for the scraper.
+```sh
+#!/bin/sh
+# PROVIDE: tubenews
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="tubenews"
+rcvar="tubenews_enable"
+tubenews_user="${tubenews_user:-www}"
+tubenews_dir="${tubenews_dir:-/var/www/TubeNews}"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+command_args="-P ${pidfile} -r -f ${tubenews_dir}/serve.sh"
+
+load_rc_config $name
+run_rc_command "$1"
+```
+
+Enable and start:
+
+```sh
+sysrc tubenews_enable=YES
+sysrc tubenews_dir=/var/www/TubeNews   # adjust to your install path
+service tubenews start
+```
+
+### Linux (systemd)
+
+Create `/etc/systemd/system/tubenews.service`:
+
+```ini
+[Unit]
+Description=TubeNews web server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/TubeNews
+ExecStart=/var/www/TubeNews/serve.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```sh
+systemctl daemon-reload
+systemctl enable --now tubenews
+```
+
+For the scraper on a schedule, add a systemd timer or use cron (see above).
 
 ---
 

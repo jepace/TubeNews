@@ -155,7 +155,10 @@
   <!-- ── Log out ───────────────────────────────────────────── -->
   <section class="admin-section">
     <h2>Log out</h2>
-    <a href="{{ url_for('logout') }}" class="btn-danger-sm">Log out of TubeNews</a>
+    <form method="post" action="{{ url_for('logout') }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-danger-sm">Log out of TubeNews</button>
+    </form>
   </section>
 
   <!-- ── Delete account ────────────────────────────────────── -->
