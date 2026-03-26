@@ -1,12 +1,27 @@
 #!/usr/bin/env python3
-"""Dump the raw ytInitialData JSON from a channel's /videos page.
+"""Dump the raw ``ytInitialData`` JSON from a channel's ``/videos`` page.
 
-Run this on a machine that can reach YouTube:
+Use this when the YouTube scraper in ``TubeNews.py`` stops discovering
+videos or stops extracting titles and dates correctly.  YouTube embeds
+a ``ytInitialData`` JSON blob in every channel page; the TubeNews scraper
+parses that blob to find video IDs, titles, and upload dates.  When YouTube
+changes the blob structure, this script lets you inspect the new layout so
+you can update ``_parse_channel_page_metadata()`` accordingly.
 
-    python helpers/dump_channel_html.py
+Usage::
 
-Reads the first channel_id from TubeNews.json and writes the full
-ytInitialData blob to /tmp/yt_data.json so you can inspect the structure.
+    python3 helpers/dump_channel_html.py
+
+Reads the first channel from ``TubeNews.json`` and writes two files:
+
+* ``/tmp/yt_data.json`` — the full ``ytInitialData`` blob (pretty-printed).
+  Open this in a text editor or ``jq`` to explore the structure.
+* ``/tmp/yt_raw.html`` — the raw page HTML, written only if the blob is not
+  found (e.g. YouTube served a bot-detection interstitial instead).
+
+The script also prints a quick summary of the first video renderer it finds
+so you can immediately see which JSON keys are present without opening the
+full dump.
 """
 
 import json
@@ -23,35 +38,23 @@ HEADERS = {
     )
 }
 
-config_path = Path(__file__).parent.parent / "TubeNews.json"
-if not config_path.exists():
-    sys.exit("TubeNews.json not found — run from the repo root or copy the sample first.")
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "TubeNews.json"
 
-config = json.loads(config_path.read_text())
-channel_id = config["feeds"][0]["channel_id"]
-print(f"Using channel: {config['feeds'][0]['channel_name']}  ({channel_id})")
 
-url = f"https://www.youtube.com/channel/{channel_id}/videos"
-print(f"Fetching {url} …")
-r = requests.get(url, headers=HEADERS, timeout=15)
-print(f"HTTP {r.status_code}  ({len(r.text):,} bytes)")
+def find_video_renderers(obj: object, found: list | None = None) -> list[dict]:
+    """Recursively collect every dict that has both ``videoId`` and ``title`` keys.
 
-# Pull out the ytInitialData JSON blob
-m = re.search(r"var ytInitialData\s*=\s*(\{.*?\});\s*(?:var |</script>)", r.text, re.DOTALL)
-if not m:
-    print("ytInitialData NOT FOUND in page — YouTube may be serving a bot-detection page.")
-    out = Path("/tmp/yt_raw.html")
-    out.write_text(r.text)
-    print(f"Raw HTML saved to {out} for inspection.")
-    sys.exit(1)
+    This mirrors the shape of a ``videoRenderer`` object in ``ytInitialData``.
+    The function walks the entire JSON tree so it works regardless of where
+    YouTube nests the renderers.
 
-data = json.loads(m.group(1))
-out = Path("/tmp/yt_data.json")
-out.write_text(json.dumps(data, indent=2))
-print(f"ytInitialData written to {out}  ({out.stat().st_size:,} bytes)")
+    Args:
+        obj:   Any JSON-decoded value (dict, list, or scalar).
+        found: Accumulator list; pass ``None`` on the initial call.
 
-# Quick preview: show first videoRenderer keys so we know what's available
-def find_video_renderers(obj, found=None):
+    Returns:
+        List of dicts that contain at least ``videoId`` and ``title``.
+    """
     if found is None:
         found = []
     if isinstance(obj, dict):
@@ -64,11 +67,81 @@ def find_video_renderers(obj, found=None):
             find_video_renderers(item, found)
     return found
 
-renderers = find_video_renderers(data)
-print(f"\nFound {len(renderers)} videoRenderer-like objects with both 'videoId' and 'title'.")
-if renderers:
-    first = renderers[0]
-    print("\nFirst renderer top-level keys:", list(first.keys()))
-    for key in ("videoId", "title", "publishedTimeText", "dateText", "badges", "thumbnailOverlays"):
-        if key in first:
-            print(f"  {key}: {json.dumps(first[key])[:200]}")
+
+def main() -> None:
+    try:
+        config = json.loads(CONFIG_FILE.read_text())
+    except FileNotFoundError:
+        sys.exit(f"Error: {CONFIG_FILE} not found — copy TubeNews.json.sample first.")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
+
+    feeds = config.get("feeds", [])
+    if not feeds:
+        sys.exit("No feeds configured in TubeNews.json — nothing to fetch.")
+
+    channel_id = feeds[0]["channel_id"]
+    channel_name = feeds[0]["channel_name"]
+    print(f"Channel : {channel_name}  ({channel_id})")
+
+    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    print(f"Fetching {url} …")
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+    except Exception as exc:
+        sys.exit(f"Request failed: {exc}")
+
+    print(f"HTTP {r.status_code}  ({len(r.text):,} bytes)")
+
+    # Extract the ytInitialData JSON blob embedded in the page.
+    m = re.search(
+        r"var ytInitialData\s*=\s*(\{.*?\});\s*(?:var |</script>)",
+        r.text,
+        re.DOTALL,
+    )
+    if not m:
+        raw_out = Path("/tmp/yt_raw.html")
+        raw_out.write_text(r.text)
+        print(
+            "ytInitialData NOT FOUND in page.\n"
+            "YouTube may be serving a bot-detection interstitial.\n"
+            f"Raw HTML saved to {raw_out} for inspection."
+        )
+        sys.exit(1)
+
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"Found ytInitialData but could not parse it as JSON: {exc}")
+
+    out = Path("/tmp/yt_data.json")
+    out.write_text(json.dumps(data, indent=2))
+    print(f"ytInitialData written to {out}  ({out.stat().st_size:,} bytes)")
+
+    # Print a quick preview of the first video renderer so you can see which
+    # keys are present without opening the full dump.
+    renderers = find_video_renderers(data)
+    print(f"\nFound {len(renderers)} videoRenderer-like objects.")
+    if renderers:
+        first = renderers[0]
+        print("First renderer top-level keys:", list(first.keys()))
+        for key in (
+            "videoId",
+            "title",
+            "publishedTimeText",
+            "dateText",
+            "badges",
+            "thumbnailOverlays",
+        ):
+            if key in first:
+                print(f"  {key}: {json.dumps(first[key])[:200]}")
+    else:
+        print(
+            "No renderers found — the JSON structure may have changed.\n"
+            f"Open {out} and search for 'videoId' to find the new location."
+        )
+
+
+if __name__ == "__main__":
+    main()
