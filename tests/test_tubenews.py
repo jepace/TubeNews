@@ -1201,6 +1201,20 @@ def test_parse_story_file_users_line_not_in_body(tmp_path):
     assert "Users" not in result["body_html"]
 
 
+def test_parse_story_file_escapes_html_in_body(tmp_path):
+    """HTML special characters in the story body must be escaped (XSS prevention)."""
+    story = tmp_path / "01_Xss.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\n"
+        "Council approved <script>alert(1)</script> the budget.\n\n"
+        "---\n**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert "<script>" not in result["body_html"]
+    assert "&lt;script&gt;" in result["body_html"]
+
+
 # ---------------------------------------------------------------------------
 # _story_matches_focus — list input (multiple focuses)
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ Configuration lives in TubeNews.json (see TubeNews.json.sample).
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import html
 import json
 import logging
 import os
@@ -239,7 +240,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         l for l in lines[2:]
         if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**")
     ]
-    body_html = "<br>".join(body_lines).replace("\n", "<br>")
+    body_html = "<br>".join(html.escape(l) for l in body_lines)
 
     timestamp_match = re.search(r"\*\*Segment Start:\*\* (\d+)s", text)
     start_seconds = int(timestamp_match.group(1)) if timestamp_match else 0

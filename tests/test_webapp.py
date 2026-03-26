@@ -1619,12 +1619,13 @@ def test_account_get_shows_name_and_email(logged_in_client, archive):
 
 
 def test_account_info_update_saves_name(logged_in_client, archive):
-    """POST /account must update display name without requiring a password."""
+    """POST /account with correct password must update the display name."""
     import web.app as _wa
     r = logged_in_client.post("/account", data={
         "action": "info",
         "name": "New Name",
         "email": "test@example.com",
+        "current_password": "testpassword123",
     }, follow_redirects=True)
     assert r.status_code == 200
     users_dir = _wa.STORAGE_ROOT / "users"
@@ -1634,6 +1635,27 @@ def test_account_info_update_saves_name(logged_in_client, archive):
             d = json.loads(uj.read_text())
             if d.get("email") == "test@example.com":
                 assert d["name"] == "New Name"
+                return
+    pytest.fail("User not found")
+
+
+def test_account_info_wrong_password_rejected(logged_in_client, archive):
+    """POST /account with wrong password must not update account info."""
+    import web.app as _wa
+    r = logged_in_client.post("/account", data={
+        "action": "info",
+        "name": "Should Not Save",
+        "email": "test@example.com",
+        "current_password": "wrongpassword!",
+    }, follow_redirects=True)
+    assert b"incorrect" in r.data.lower()
+    users_dir = _wa.STORAGE_ROOT / "users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if uj.exists():
+            d = json.loads(uj.read_text())
+            if d.get("email") == "test@example.com":
+                assert d.get("name") != "Should Not Save"
                 return
     pytest.fail("User not found")
 
@@ -1654,6 +1676,7 @@ def test_account_info_email_change_updates_index(logged_in_client, archive, monk
         "action": "info",
         "name": "Test User",
         "email": "newemail@example.com",
+        "current_password": "testpassword123",
     })
 
     index = _wa._read_email_index()

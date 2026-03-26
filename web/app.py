@@ -13,6 +13,7 @@ Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -345,7 +346,9 @@ def _load_config() -> dict:
 def _save_feeds(feeds: list[FeedConfig]) -> None:
     cfg = _load_config()
     cfg["feeds"] = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    tmp.replace(CONFIG_FILE)
 
 
 def _load_channels() -> list[FeedConfig]:
@@ -938,6 +941,10 @@ def account():
             return redirect(url_for("account"))
 
         if action == "info":
+            current_pw = request.form.get("current_password", "")
+            if not check_password_hash(current_user._data["password_hash"], current_pw):
+                flash("Current password is incorrect.", "error")
+                return redirect(url_for("account"))
             new_name = request.form.get("name", "").strip()
             new_email = request.form.get("email", "").strip().lower()
             if not new_name or not new_email or "@" not in new_email:
@@ -1038,9 +1045,7 @@ def account_delete():
     user_dir = USERS_ROOT / uid
     logout_user()
     _index_remove(deleted_email)
-    for f in user_dir.iterdir():
-        f.unlink()
-    user_dir.rmdir()
+    shutil.rmtree(user_dir, ignore_errors=True)
     flash("Your account has been deleted.", "success")
     return redirect(url_for("login"))
 
@@ -1256,7 +1261,9 @@ def admin_user_promote(uid: str):
         admin_users.append(user.email)
         flash(f"{user.email} is now an admin.", "success")
     cfg["admin_users"] = admin_users
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    tmp.replace(CONFIG_FILE)
     return redirect(url_for("admin_user", uid=uid))
 
 
@@ -1289,9 +1296,7 @@ def admin_user_delete(uid: str):
         return redirect(url_for("admin_user", uid=uid))
     deleted_email = user.email
     _index_remove(deleted_email)
-    for f in user._dir.iterdir():
-        f.unlink()
-    user._dir.rmdir()
+    shutil.rmtree(user._dir, ignore_errors=True)
     _web_ntfy("TubeNews: user deleted", f"{current_user.email} deleted account for {deleted_email}.")
     flash(f"Account for {deleted_email} deleted.", "success")
     return redirect(url_for("admin_users"))

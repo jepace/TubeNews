@@ -118,7 +118,7 @@ Defined in `web/app.py`:
 |---|---|
 | `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore). Defined in `tubenews_utils.py`; re-exported by `TubeNews.py`. |
 | `_fmt_no_leading_zeros(dt, fmt)` | Formats a `datetime` with `fmt` and strips POSIX-style leading zeros from day/hour fields. Portable replacement for `%-d`/`%-I`. |
-| `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory` |
+| `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory`. Body lines are HTML-escaped with `html.escape()` before joining, so `body_html` is safe for `{{ ... \| safe }}` rendering. |
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* may be a single string (legacy) or a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
 | `_collect_channel_focuses(channel_id, feed_focus)` | Reads `archive/users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses carry the UUIDs of all subscribers who set that focus; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
@@ -326,7 +326,7 @@ pytest tests/ -v
 
 | File | Covers |
 |---|---|
-| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics` and `user_ids`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
 | `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 
@@ -444,7 +444,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | Function | Description |
 |---|---|
 | `_load_config()` | Reads `TubeNews.json`; returns `{}` on failure |
-| `_save_feeds(feeds)` | Writes updated `feeds` list back to `TubeNews.json` |
+| `_save_feeds(feeds)` | Atomically writes updated `feeds` list back to `TubeNews.json` (write-then-rename) |
 | `_load_channels()` | Returns the `feeds` list from config |
 | `_base_url()` | Returns `base_url` from config (empty string if not set) |
 | `_feed_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
@@ -538,6 +538,10 @@ the web app does **not** call either — the web UI uses dynamic generation only
   `TubeNews.json` — there is no `is_admin` flag stored in `user.json`.
 - Locked accounts (`"locked": true`) fail `is_active` and are rejected by
   flask-login on every request without needing to log out.
+- Changing account name or email (the `/account` info action) requires the current password, just like the password-change and delete flows.
+- `body_html` in `ParsedStory` contains HTML-escaped text joined with `<br>` tags. HTML special characters are escaped in `parse_story_file()` so the `{{ story.body_html | safe }}` in templates is safe to render.
+- User directories are deleted with `shutil.rmtree()` (not a manual file loop) so deletion works even when subdirectories are present.
+- `_save_feeds()` and `admin_user_promote()` write `TubeNews.json` atomically via write-then-rename (same pattern as `_write_email_index`), preventing a partial write from corrupting the config file.
 
 ---
 
