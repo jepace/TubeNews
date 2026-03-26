@@ -34,13 +34,20 @@ echo "Deploying $SRC → $DEST"
 rsync -av --delete \
     --exclude='TubeNews.json' \
     --exclude='content/' \
+    --exclude='deploy.sh' \
     --exclude='.git/' \
+    --exclude='.gitignore' \
     --exclude='.claude/' \
     --exclude='.pytest_cache/' \
     --exclude='__pycache__/' \
     --exclude='*.pyc' \
     --exclude='tests/' \
     --exclude='requirements-dev.txt' \
+    --exclude='README.md' \
+    --exclude='CLAUDE.md' \
+    --exclude='SERVING.md' \
+    --exclude='TODO.md' \
+    --exclude='contrib/' \
     "$SRC/" "$DEST/"
 
 echo ""
