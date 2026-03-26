@@ -30,6 +30,7 @@ from TubeNews import (
     _release_lock,
     _story_matches_focus,
     _check_supadata_quota,
+    _fmt_no_leading_zeros,
     fetch_transcript,
 )
 
@@ -55,6 +56,52 @@ def test_slugify_empty_string():
 
 def test_slugify_only_specials():
     assert slugify("---") == ""
+
+
+# ---------------------------------------------------------------------------
+# _fmt_no_leading_zeros
+# ---------------------------------------------------------------------------
+
+def test_fmt_no_leading_zeros_single_digit_day():
+    """A day < 10 must have its leading zero stripped."""
+    dt = datetime(2026, 1, 5, 9, 30)
+    result = _fmt_no_leading_zeros(dt, "%B %d, %Y")
+    assert result == "January 5, 2026"
+
+
+def test_fmt_no_leading_zeros_double_digit_day_unchanged():
+    """A day >= 10 must not be altered."""
+    dt = datetime(2026, 3, 14, 9, 30)
+    result = _fmt_no_leading_zeros(dt, "%B %d, %Y")
+    assert result == "March 14, 2026"
+
+
+def test_fmt_no_leading_zeros_single_digit_hour():
+    """A 12-hour clock hour < 10 must have its leading zero stripped."""
+    dt = datetime(2026, 1, 5, 9, 30)
+    result = _fmt_no_leading_zeros(dt, "%B %d, %Y at %I:%M %p")
+    assert result == "January 5, 2026 at 9:30 AM"
+
+
+def test_fmt_no_leading_zeros_double_digit_hour_unchanged():
+    """A 12-hour clock hour >= 10 must not be altered."""
+    dt = datetime(2026, 1, 5, 10, 30)
+    result = _fmt_no_leading_zeros(dt, "%I:%M %p")
+    assert result == "10:30 AM"
+
+
+def test_fmt_no_leading_zeros_noon():
+    """Noon (12:00 PM) must not be mangled."""
+    dt = datetime(2026, 3, 14, 12, 0)
+    result = _fmt_no_leading_zeros(dt, "%I:%M %p")
+    assert result == "12:00 PM"
+
+
+def test_fmt_no_leading_zeros_full_timestamp():
+    """Full date+time string matches the docstring example exactly."""
+    dt = datetime(2026, 1, 5, 9, 30)
+    result = _fmt_no_leading_zeros(dt, "%B %d, %Y at %I:%M %p")
+    assert result == "January 5, 2026 at 9:30 AM"
 
 
 # ---------------------------------------------------------------------------

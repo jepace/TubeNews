@@ -500,6 +500,8 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/admin/user/<uid>/subscriptions` | `admin_user_subscriptions` | Update channel subscriptions |
 | POST | `/admin/user/<uid>/password` | `admin_user_password` | Reset password |
 | POST | `/admin/user/<uid>/lock` | `admin_user_lock` | Toggle account lock |
+| POST | `/admin/user/<uid>/prefs` | `admin_user_prefs` | Update display preferences (font size, dark mode) for the target user |
+| POST | `/admin/user/<uid>/promote` | `admin_user_promote` | Toggle admin status for the target user (adds/removes email from `admin_users` in `TubeNews.json`); self-promotion is blocked |
 | POST | `/admin/user/<uid>/rotate-token` | `admin_rotate_token` | Issue new feed token (invalidates old URLs) |
 | POST | `/admin/user/<uid>/delete` | `admin_user_delete` | Delete account (requires email confirmation) |
 | GET | `/admin/feeds` | `admin_feeds` | Feed (channel) list |
