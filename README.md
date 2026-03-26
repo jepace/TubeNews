@@ -73,10 +73,10 @@ See `SERVING.md` for production deployment (gunicorn, nginx, HTTPS, cron).
 
 ## Output
 
-RSS feeds and stories are written to `archive/`:
+RSS feeds and stories are written to `content/`:
 
 ```
-archive/
+content/
 ├── my_youtube_channel/
 │   ├── 2026-03-14_VIDEO-ID/
 │   │   ├── transcript.txt
@@ -85,7 +85,7 @@ archive/
 │   │   └── 02_Another_Story.md
 │   ├── channel.json      ← channel ID/name mapping
 │   └── rss.xml           ← subscribe to this
-├── users/
+├── _users/
 │   └── <uuid>/           ← one directory per registered user
 │       └── user.json
 ├── run_log.json          ← last 30 run summaries

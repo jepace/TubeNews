@@ -22,6 +22,7 @@ Configuration lives in TubeNews.json (see TubeNews.json.sample).
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import html
 import json
 import logging
 import os
@@ -55,26 +56,27 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]
 
     Args:
         config_file: Path to TubeNews.json.
-        base_dir:    Directory used to resolve relative ``archive_dir`` paths.
+        base_dir:    Directory used to resolve relative ``content_dir`` paths.
     """
     try:
         cfg = json.loads(config_file.read_text())
 
-        # archive_dir — where processed content is stored.
+        # content_dir — where processed content is stored.
         # Absolute paths are used as-is; relative paths resolve from base_dir.
-        archive_dir = cfg.get("archive_dir", "")
-        if archive_dir:
-            p = Path(archive_dir)
+        # Also accepts the legacy key "archive_dir" for existing installs.
+        content_dir = cfg.get("content_dir") or cfg.get("archive_dir", "")
+        if content_dir:
+            p = Path(content_dir)
             storage_root = p if p.is_absolute() else (base_dir / p).resolve()
         else:
-            storage_root = base_dir / "archive"
+            storage_root = base_dir / "content"
 
         # request_timeout — seconds before giving up on YouTube / Supadata calls.
         request_timeout = int(cfg.get("request_timeout", 15))
 
     except Exception as exc:
         logging.warning(f"Failed to load config; using defaults: {exc}")
-        storage_root = base_dir / "archive"
+        storage_root = base_dir / "content"
         request_timeout = 15
 
     return storage_root, request_timeout
@@ -239,7 +241,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         l for l in lines[2:]
         if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**")
     ]
-    body_html = "<br>".join(body_lines).replace("\n", "<br>")
+    body_html = "<br>".join(html.escape(l) for l in body_lines)
 
     timestamp_match = re.search(r"\*\*Segment Start:\*\* (\d+)s", text)
     start_seconds = int(timestamp_match.group(1)) if timestamp_match else 0
@@ -844,7 +846,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
     feed.link(href=base_url if base_url else "https://www.youtube.com", rel="alternate")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and not d.name.startswith("_")]:
         channel_json = channel_dir / "channel.json"
         if not channel_json.exists():
             continue
@@ -921,7 +923,7 @@ def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str 
         user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
-    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
+    user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"TubeNews: Rebuilding user feed for {name}")
     xml_bytes = build_user_feed_xml(user, base_url=base_url, user_id=user_id)
@@ -942,13 +944,13 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
-    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
+    user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"TubeNews: Rebuilding blog for {name}")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and not d.name.startswith("_")]:
         channel_json = channel_dir / "channel.json"
         if not channel_json.exists():
             continue
@@ -1137,7 +1139,7 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str
         focus_map[f] = []  # feed-level: no user restriction
         focus_order.append(f)
 
-    users_dir = STORAGE_ROOT / "users"
+    users_dir = STORAGE_ROOT / "_users"
     if users_dir.is_dir():
         for uid_dir in sorted(users_dir.iterdir()):
             if not uid_dir.is_dir():
@@ -1622,7 +1624,7 @@ def _main_body(args) -> None:
         except Exception:
             logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
 
-    users_dir = STORAGE_ROOT / "users"
+    users_dir = STORAGE_ROOT / "_users"
     if users_dir.is_dir():
         for user_json in sorted(users_dir.glob("*/user.json")):
             try:

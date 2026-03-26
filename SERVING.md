@@ -1,6 +1,6 @@
 # Serving TubeNews
 
-TubeNews writes its output to the `archive/` directory. To make feeds
+TubeNews writes its output to the `content/` directory. To make feeds
 subscribable over the network you need to serve them over HTTP and set
 `base_url` in `TubeNews.json` to the public root URL.
 
@@ -20,6 +20,20 @@ The `web/app.py` Flask app serves both the web interface and the archive files.
 `TubeNews.json` automatically.
 
 ### 1. Install dependencies
+
+> **FreeBSD note:** `feedgen` depends on `lxml`, a C extension that requires
+> libxml2/libxslt and is too large to compile inside a minimal jail.
+> Install the pre-built package first, then run pip:
+>
+> ```bash
+> pkg install py311-lxml   # adjust py311 to match your Python version
+> pip install --no-cache-dir -r requirements.txt
+> ```
+>
+> If your Python version is different, check with `python3 --version` and use
+> the matching package name (e.g. `py312-lxml`).
+
+All other platforms:
 
 ```bash
 pip install -r requirements.txt
@@ -93,8 +107,8 @@ Set `base_url` in `TubeNews.json` to the public root of your server
 | `/` | Login / dashboard |
 | `/dashboard` | Subscribe to channels, copy your feed and blog URLs |
 | `/admin` | Manage users and channels |
-| `/archive/rss.xml` | Regional aggregate feed |
-| `/archive/<channel>/rss.xml` | Per-channel feed |
+| `/content/rss.xml` | Regional aggregate feed |
+| `/content/<channel>/rss.xml` | Per-channel feed |
 | `/feed/<token>.xml` | Your personal RSS feed (token shown on dashboard) |
 | `/blog/<token>.html` | Your personal blog page (shareable, no login required) |
 
@@ -107,7 +121,7 @@ Use this if you don't need user accounts and just want to publish feeds.
 ### Quick test (Python built-in server)
 
 ```bash
-cd archive
+cd content
 python3 -m http.server 8080
 ```
 
@@ -120,7 +134,7 @@ server {
     listen 80;
     server_name feeds.example.com;
 
-    root /path/to/TubeNews/archive;
+    root /path/to/TubeNews/content;
     autoindex on;
 
     location / {
@@ -139,7 +153,7 @@ server {
 ```apache
 <VirtualHost *:80>
     ServerName feeds.example.com
-    DocumentRoot /path/to/TubeNews/archive
+    DocumentRoot /path/to/TubeNews/content
     Options Indexes FollowSymLinks
     AllowOverride None
     Require all granted
@@ -223,18 +237,66 @@ Edit your crontab with `crontab -e`.
 
 ## Keeping the Server Running: System Service
 
-Use the ready-to-use service files in `contrib/` to run TubeNews as a
-managed system service that starts at boot and restarts on crash.
+### FreeBSD (rc.d)
 
-| OS | System | Files |
-|---|---|---|
-| FreeBSD | rc.d | `contrib/freebsd/tubenews` |
-| Linux | systemd | `contrib/linux/tubenews-web.service` |
-| macOS | launchd | `contrib/macos/com.tubenews.web.plist` |
+Create `/usr/local/etc/rc.d/tubenews` with mode `0555`:
 
-See `contrib/README.md` for step-by-step installation instructions for
-each platform. The Linux files also include a systemd timer
-(`tubenews-run.timer`) as an alternative to cron for the scraper.
+```sh
+#!/bin/sh
+# PROVIDE: tubenews
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="tubenews"
+rcvar="tubenews_enable"
+tubenews_user="${tubenews_user:-www}"
+tubenews_dir="${tubenews_dir:-/var/www/TubeNews}"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+command_args="-P ${pidfile} -r -f ${tubenews_dir}/serve.sh"
+
+load_rc_config $name
+run_rc_command "$1"
+```
+
+Enable and start:
+
+```sh
+sysrc tubenews_enable=YES
+sysrc tubenews_dir=/var/www/TubeNews   # adjust to your install path
+service tubenews start
+```
+
+### Linux (systemd)
+
+Create `/etc/systemd/system/tubenews.service`:
+
+```ini
+[Unit]
+Description=TubeNews web server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/TubeNews
+ExecStart=/var/www/TubeNews/serve.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```sh
+systemctl daemon-reload
+systemctl enable --now tubenews
+```
+
+For the scraper on a schedule, add a systemd timer or use cron (see above).
 
 ---
 
@@ -256,6 +318,35 @@ old URLs immediately).
 live archive each time and returns fresh content. No static files are
 pre-built; there is nothing to invalidate or manually rebuild after a new
 TubeNews run.
+
+---
+
+## Upgrading an Existing Install
+
+### Renaming `archive/` to `content/`
+
+The content directory was renamed from `archive/` to `content/`. If you have an
+existing install, move the directory once:
+
+```bash
+mv archive content
+```
+
+Then restart the server. If you have `"archive_dir"` set in `TubeNews.json`,
+rename the key to `"content_dir"` (or leave it as `"archive_dir"` — both are
+accepted for backward compatibility).
+
+### Renaming `archive/users/` to `content/_users/`
+
+If upgrading from a very early install that pre-dates the `_`-prefix convention
+(user data was at `archive/users/`), rename in two steps:
+
+```bash
+mv archive/users archive/_users   # if not already done
+mv archive content                 # rename the whole directory
+```
+
+No other changes are needed — all user data is intact at the new path.
 
 ---
 

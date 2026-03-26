@@ -13,6 +13,7 @@ Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -47,6 +48,7 @@ from flask_login import (
     logout_user,
 )
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---------------------------------------------------------------------------
@@ -68,7 +70,7 @@ from TubeNews import (  # noqa: E402
 )
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
-USERS_ROOT = STORAGE_ROOT / "users"
+USERS_ROOT = STORAGE_ROOT / "_users"
 LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
 TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 
@@ -77,6 +79,9 @@ TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+# Trust one level of X-Forwarded-For / X-Forwarded-Proto from the reverse
+# proxy (nginx/Caddy) so rate limiting and IP logging see real client IPs.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 logger = logging.getLogger(__name__)
 
 try:
@@ -341,7 +346,9 @@ def _load_config() -> dict:
 def _save_feeds(feeds: list[FeedConfig]) -> None:
     cfg = _load_config()
     cfg["feeds"] = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    tmp.replace(CONFIG_FILE)
 
 
 def _load_channels() -> list[FeedConfig]:
@@ -594,7 +601,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     subscribed = set(user_data.get("channel_ids", []))
     raw: list[dict] = []
     channels_cfg = _load_channels()
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users"]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
         channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
         if not channel_info or channel_info.get("channel_id") not in subscribed:
             continue
@@ -657,14 +664,14 @@ def index():
     return redirect(url_for("login"))
 
 
-@app.route("/archive/")
-@app.route("/archive/<path:filename>")
-def serve_archive(filename=""):
-    """Serve static files from the archive directory (feeds, stories, etc.)."""
+@app.route("/content/")
+@app.route("/content/<path:filename>")
+def serve_content(filename=""):
+    """Serve static files from the content directory (feeds, stories, etc.)."""
     if not filename:
         abort(404)
-    # Never expose user account data stored under archive/users/
-    if filename == "users" or filename.startswith("users/"):
+    # Never expose internal reserved directories (including _users/).
+    if filename.startswith("_"):
         abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None
     return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
@@ -796,7 +803,7 @@ def register():
     return render_template("register.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
@@ -833,7 +840,6 @@ def serve_blog_public(token: str):
         try:
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
-                cfg = _load_config()
                 uid = user_json.parent.name
                 stories = _get_user_stories(data, uid)
                 blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
@@ -903,7 +909,7 @@ def channel_blog(channel_id: str):
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
     archive_dir = _find_archive_dir_for_channel(channel_id)
-    feed_path = f"/archive/{archive_dir.name}/rss.xml" if archive_dir else None
+    feed_path = f"/content/{archive_dir.name}/rss.xml" if archive_dir else None
     return render_template("blog.html", stories=stories, blog_name=display_name,
                            feed_path=feed_path, channel_id=channel_id)
 
@@ -933,6 +939,10 @@ def account():
             return redirect(url_for("account"))
 
         if action == "info":
+            current_pw = request.form.get("current_password", "")
+            if not check_password_hash(current_user._data["password_hash"], current_pw):
+                flash("Current password is incorrect.", "error")
+                return redirect(url_for("account"))
             new_name = request.form.get("name", "").strip()
             new_email = request.form.get("email", "").strip().lower()
             if not new_name or not new_email or "@" not in new_email:
@@ -1033,9 +1043,7 @@ def account_delete():
     user_dir = USERS_ROOT / uid
     logout_user()
     _index_remove(deleted_email)
-    for f in user_dir.iterdir():
-        f.unlink()
-    user_dir.rmdir()
+    shutil.rmtree(user_dir, ignore_errors=True)
     flash("Your account has been deleted.", "success")
     return redirect(url_for("login"))
 
@@ -1251,7 +1259,9 @@ def admin_user_promote(uid: str):
         admin_users.append(user.email)
         flash(f"{user.email} is now an admin.", "success")
     cfg["admin_users"] = admin_users
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    tmp.replace(CONFIG_FILE)
     return redirect(url_for("admin_user", uid=uid))
 
 
@@ -1284,9 +1294,7 @@ def admin_user_delete(uid: str):
         return redirect(url_for("admin_user", uid=uid))
     deleted_email = user.email
     _index_remove(deleted_email)
-    for f in user._dir.iterdir():
-        f.unlink()
-    user._dir.rmdir()
+    shutil.rmtree(user._dir, ignore_errors=True)
     _web_ntfy("TubeNews: user deleted", f"{current_user.email} deleted account for {deleted_email}.")
     flash(f"Account for {deleted_email} deleted.", "success")
     return redirect(url_for("admin_users"))
@@ -1472,7 +1480,7 @@ def admin_story_delete():
         pass
 
     flash(f'Story deleted: \u201c{story_title}\u201d', "info")
-    return redirect(request.referrer or url_for("admin_all_stories"))
+    return redirect(url_for("admin_all_stories"))
 
 
 @app.route("/admin/feeds")
@@ -1531,7 +1539,7 @@ def admin_all_stories():
                     continue
     stories.sort(key=lambda s: s["processed_at"], reverse=True)
     return render_template("blog.html", stories=stories, blog_name="All Channels",
-                           feed_path="/archive/rss.xml")
+                           feed_path="/content/rss.xml")
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])
@@ -1678,4 +1686,4 @@ def not_found(e):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", debug=True, port=_port)
+    app.run(host="0.0.0.0", debug=False, port=_port)

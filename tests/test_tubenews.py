@@ -534,31 +534,31 @@ def user_archive(tmp_path, monkeypatch):
 def test_rebuild_user_feed_creates_rss(user_archive):
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
     rebuild_user_feed(user)
-    assert (user_archive / "users" / "Jane_Doe" / "rss.xml").exists()
+    assert (user_archive / "_users" / "Jane_Doe" / "rss.xml").exists()
 
 def test_rebuild_user_feed_includes_subscribed_channel(user_archive):
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
     rebuild_user_feed(user)
-    content = (user_archive / "users" / "Jane_Doe" / "rss.xml").read_text()
+    content = (user_archive / "_users" / "Jane_Doe" / "rss.xml").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_feed_excludes_unsubscribed_channel(user_archive):
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
     rebuild_user_feed(user)
-    content = (user_archive / "users" / "Jane_Doe" / "rss.xml").read_text()
+    content = (user_archive / "_users" / "Jane_Doe" / "rss.xml").read_text()
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_no_subscriptions_empty_feed(user_archive):
     user = {"name": "No Subs", "channel_ids": []}
     rebuild_user_feed(user)
-    content = (user_archive / "users" / "No_Subs" / "rss.xml").read_text()
+    content = (user_archive / "_users" / "No_Subs" / "rss.xml").read_text()
     assert "Alpha City Council" not in content
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_multiple_channels(user_archive):
     user = {"name": "Both", "channel_ids": ["UC_ALPHA_ID", "UC_BETA__ID"]}
     rebuild_user_feed(user)
-    content = (user_archive / "users" / "Both" / "rss.xml").read_text()
+    content = (user_archive / "_users" / "Both" / "rss.xml").read_text()
     assert "Alpha City Council" in content
     assert "Beta City Council" in content
 
@@ -570,18 +570,18 @@ def test_rebuild_user_feed_multiple_channels(user_archive):
 def test_rebuild_user_blog_creates_html(user_archive):
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
     rebuild_user_blog(user)
-    assert (user_archive / "users" / "Jane_Doe" / "index.html").exists()
+    assert (user_archive / "_users" / "Jane_Doe" / "index.html").exists()
 
 def test_rebuild_user_blog_includes_subscribed_stories(user_archive):
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
     rebuild_user_blog(user)
-    content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
+    content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_blog_excludes_unsubscribed_stories(user_archive):
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
     rebuild_user_blog(user)
-    content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
+    content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
     assert "Beta City Council" not in content
 
 def test_rebuild_user_blog_includes_old_stories(tmp_path, monkeypatch):
@@ -606,7 +606,7 @@ def test_rebuild_user_blog_includes_old_stories(tmp_path, monkeypatch):
 
     user = {"name": "Test User", "channel_ids": ["UC_OLD_ID"], "feed_token": "test-token-2"}
     rebuild_user_blog(user)
-    content = (tmp_path / "users" / "Test_User" / "index.html").read_text()
+    content = (tmp_path / "_users" / "Test_User" / "index.html").read_text()
     assert "Very Old Story" in content
 
 
@@ -698,7 +698,7 @@ def test_build_user_feed_xml_does_not_write_to_disk(user_archive):
     """Key contract: build_user_feed_xml must never touch the filesystem."""
     user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
     build_user_feed_xml(user)
-    assert not (user_archive / "users" / "Jane_Doe" / "rss.xml").exists()
+    assert not (user_archive / "_users" / "Jane_Doe" / "rss.xml").exists()
 
 def test_build_user_feed_xml_skips_ignored_too_old(tmp_path, monkeypatch):
     """Stories from ignored_too_old meetings must not appear in the feed."""
@@ -734,7 +734,7 @@ def test_rebuild_user_feed_writes_same_stories_as_build_user_feed_xml(user_archi
 
     xml_bytes = build_user_feed_xml(user)
     rebuild_user_feed(user)
-    written = (user_archive / "users" / "Compare" / "rss.xml").read_bytes()
+    written = (user_archive / "_users" / "Compare" / "rss.xml").read_bytes()
 
     # Both must include Alpha stories …
     assert b"Story 1 from Alpha City Council" in xml_bytes
@@ -768,7 +768,7 @@ def test_feed_and_blog_contain_same_story_titles(parity_archive):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_blog(user)
-    blog_html = (parity_archive / "users" / "Parity" / "index.html").read_text()
+    blog_html = (parity_archive / "_users" / "Parity" / "index.html").read_text()
 
     expected_titles = [
         "Story 1 from Channel A",
@@ -791,7 +791,7 @@ def test_feed_and_blog_exclude_same_unsubscribed_stories(parity_archive):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_blog(user)
-    blog_html = (parity_archive / "users" / "Selective" / "index.html").read_text()
+    blog_html = (parity_archive / "_users" / "Selective" / "index.html").read_text()
 
     assert "Story 1 from Channel A" in feed_xml
     assert "Story 1 from Channel A" in blog_html
@@ -809,7 +809,7 @@ def test_feed_and_blog_empty_when_no_subscriptions(parity_archive):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_blog(user)
-    blog_html = (parity_archive / "users" / "Empty" / "index.html").read_text()
+    blog_html = (parity_archive / "_users" / "Empty" / "index.html").read_text()
 
     assert "Channel A" not in feed_xml
     assert "Channel B" not in feed_xml
@@ -841,47 +841,56 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_blog(user)
-    blog_html = (tmp_path / "users" / "Time" / "index.html").read_text()
+    blog_html = (tmp_path / "_users" / "Time" / "index.html").read_text()
 
     assert "Ancient Story" in feed_xml,  "Old stories must appear in RSS feed"
     assert "Ancient Story" in blog_html, "Old stories must appear in blog — no date filter"
 
 
 # ---------------------------------------------------------------------------
-# _resolve_early_config — archive_dir and request_timeout
+# _resolve_early_config — content_dir and request_timeout
 # ---------------------------------------------------------------------------
 
-def test_resolve_archive_dir_absolute(tmp_path):
-    """An absolute archive_dir is used as-is for STORAGE_ROOT."""
-    custom = tmp_path / "my_archive"
+def test_resolve_content_dir_absolute(tmp_path):
+    """An absolute content_dir is used as-is for STORAGE_ROOT."""
+    custom = tmp_path / "my_content"
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
+    cfg.write_text(json.dumps({"content_dir": str(custom)}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == custom
 
 
-def test_resolve_archive_dir_relative(tmp_path):
-    """A relative archive_dir is resolved against base_dir."""
+def test_resolve_content_dir_relative(tmp_path):
+    """A relative content_dir is resolved against base_dir."""
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": "subdir/archive"}))
+    cfg.write_text(json.dumps({"content_dir": "subdir/content"}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == (tmp_path / "subdir" / "archive").resolve()
+    assert storage_root == (tmp_path / "subdir" / "content").resolve()
 
 
-def test_resolve_archive_dir_absent_defaults_to_base_archive(tmp_path):
-    """When archive_dir is omitted, STORAGE_ROOT defaults to base_dir/archive."""
+def test_resolve_content_dir_absent_defaults_to_base_content(tmp_path):
+    """When content_dir is omitted, STORAGE_ROOT defaults to base_dir/content."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
 
 
-def test_resolve_archive_dir_empty_string_defaults_to_base_archive(tmp_path):
-    """An explicit empty string for archive_dir is treated the same as absent."""
+def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
+    """An explicit empty string for content_dir is treated the same as absent."""
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": ""}))
+    cfg.write_text(json.dumps({"content_dir": ""}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
+
+
+def test_resolve_legacy_archive_dir_still_works(tmp_path):
+    """The legacy config key 'archive_dir' is accepted for existing installs."""
+    custom = tmp_path / "my_old_archive"
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == custom
 
 
 def test_resolve_request_timeout_custom(tmp_path):
@@ -904,7 +913,7 @@ def test_resolve_falls_back_on_missing_config_file(tmp_path):
     """If TubeNews.json does not exist both defaults are returned without raising."""
     missing = tmp_path / "no_such_file.json"
     storage_root, timeout = _resolve_early_config(missing, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
     assert timeout == 15
 
 
@@ -913,7 +922,7 @@ def test_resolve_falls_back_on_invalid_json(tmp_path):
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text("{ NOT VALID JSON }")
     storage_root, timeout = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
     assert timeout == 15
 
 
@@ -1201,6 +1210,20 @@ def test_parse_story_file_users_line_not_in_body(tmp_path):
     assert "Users" not in result["body_html"]
 
 
+def test_parse_story_file_escapes_html_in_body(tmp_path):
+    """HTML special characters in the story body must be escaped (XSS prevention)."""
+    story = tmp_path / "01_Xss.md"
+    story.write_text(
+        "# Title\n*Dateline*\n\n"
+        "Council approved <script>alert(1)</script> the budget.\n\n"
+        "---\n**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    result = parse_story_file(story)
+    assert "<script>" not in result["body_html"]
+    assert "&lt;script&gt;" in result["body_html"]
+
+
 # ---------------------------------------------------------------------------
 # _story_matches_focus — list input (multiple focuses)
 # ---------------------------------------------------------------------------
@@ -1328,7 +1351,7 @@ def test_collect_channel_focuses_feed_only(tmp_path, monkeypatch):
 def test_collect_channel_focuses_user_focus_added(tmp_path, monkeypatch):
     """User focus for the channel is appended after feed_focus with the user's ID."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     uid_dir = _make_user_dir(users, "UCxxx", ["transit, roads"])
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
@@ -1341,7 +1364,7 @@ def test_collect_channel_focuses_user_focus_added(tmp_path, monkeypatch):
 def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypatch):
     """A user not subscribed to the channel must not contribute focuses."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     _make_user_dir(users, "UCxxx", ["transit"], channel_ids=["UCother"])
     result = _collect_channel_focuses("UCxxx", "housing")
@@ -1350,7 +1373,7 @@ def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypa
 def test_collect_channel_focuses_deduplication(tmp_path, monkeypatch):
     """Same focus from two users → one entry with both user IDs."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     uid1 = _make_user_dir(users, "UCxxx", ["housing, zoning"])
     uid2 = _make_user_dir(users, "UCxxx", ["housing, zoning"])
@@ -1363,7 +1386,7 @@ def test_collect_channel_focuses_deduplication(tmp_path, monkeypatch):
 def test_collect_channel_focuses_cap(tmp_path, monkeypatch):
     """Total focuses are capped at MAX_FOCUSES_PER_CHANNEL."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     for i in range(MAX_FOCUSES_PER_CHANNEL + 3):
         _make_user_dir(users, "UCxxx", [f"focus_{i}"])
@@ -1379,7 +1402,7 @@ def test_collect_channel_focuses_fallback_empty(tmp_path, monkeypatch):
 def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
     """Old user.json with string channel_focus is handled gracefully."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     _make_user_dir(users, "UCxxx", "housing, zoning")  # string, not list
     result = _collect_channel_focuses("UCxxx", "")
@@ -1389,7 +1412,7 @@ def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
 def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path, monkeypatch):
     """When a user focus matches the feed-level focus it stays unrestricted."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     _make_user_dir(users, "UCxxx", ["housing, zoning"])
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
@@ -1398,7 +1421,7 @@ def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path
 def test_collect_channel_focuses_user_ids_merged_across_users(tmp_path, monkeypatch):
     """Two users sharing a focus get their IDs merged into one entry."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "users"
+    users = tmp_path / "_users"
     users.mkdir()
     uid1 = _make_user_dir(users, "UCxxx", ["roads"])
     uid2 = _make_user_dir(users, "UCxxx", ["roads"])
@@ -1602,7 +1625,7 @@ def test_rebuild_user_blog_skips_corrupt_story_file(tmp_path, monkeypatch):
     user = {"name": "Alice", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-xyz"}
     rebuild_user_blog(user)  # must not raise
 
-    html = (tmp_path / "users" / "Alice" / "index.html").read_text()
+    html = (tmp_path / "_users" / "Alice" / "index.html").read_text()
     assert "Story 1 from Alpha City Council" in html
 
 
