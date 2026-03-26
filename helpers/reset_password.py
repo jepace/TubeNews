@@ -16,7 +16,7 @@ from pathlib import Path
 from werkzeug.security import generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-USERS_ROOT = BASE_DIR / "archive" / "users"
+USERS_ROOT = BASE_DIR / "archive" / "_users"
 
 
 def find_user(email: str):

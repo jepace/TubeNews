@@ -35,7 +35,9 @@ TubeNews/
 │   └── test_tubenews.py     # pytest unit tests
 ├── helpers/
 │   ├── catchup.py           # Mark all existing videos as "too old" (first-run util)
-│   └── check_quota.py       # Test Gemini API key quota across models
+│   ├── check_quota.py       # Test Gemini API key quota across models
+│   ├── dump_channel_html.py # Dump raw ytInitialData JSON for debugging YouTube scraper changes
+│   └── reset_password.py    # Emergency CLI password reset (for locked-out admins)
 └── web/
     ├── app.py               # Flask web UI (user accounts, subscriptions, admin)
     └── templates/           # Jinja2 HTML templates
@@ -321,6 +323,8 @@ Story body text in AP inverted pyramid style...
 |---|---|---|
 | `helpers/catchup.py` | Marks all visible videos as ignored | Before first run on a channel with existing videos |
 | `helpers/check_quota.py` | Tests Gemini API key quota across models | When AI calls fail with 429 errors |
+| `helpers/dump_channel_html.py` | Dumps raw `ytInitialData` JSON for the first configured channel | When YouTube scraper stops finding videos/titles — inspect structure changes |
+| `helpers/reset_password.py` | Resets a user's password from the CLI | When the admin is locked out and can't log in to use the admin panel |
 
 ---
 
