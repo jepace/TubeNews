@@ -1,9 +1,5 @@
 TubeNews.json
-TubeNews.db
+content/
 venv/
-cookies.*
-cache/
-meeting_news/
-archive/
-News
 __pycache__/
+.pytest_cache/
