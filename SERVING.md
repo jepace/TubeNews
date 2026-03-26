@@ -1,21 +1,14 @@
 # Serving TubeNews
 
-TubeNews writes its output to the `content/` directory. To make feeds
-subscribable over the network you need to serve them over HTTP and set
-`base_url` in `TubeNews.json` to the public root URL.
-
-There are two ways to serve TubeNews:
-
-| Approach | Good for |
-|---|---|
-| **gunicorn** (recommended) | User accounts, subscriptions, admin panel, and feeds — all in one process |
-| **Static file server** (nginx/Apache) | Feeds only, no UI |
+TubeNews is served via gunicorn. The `web/app.py` Flask app handles user
+accounts, subscriptions, the admin panel, and serves the generated feeds and
+stories. Set `base_url` in `TubeNews.json` to the public root URL so RSS
+feed links resolve correctly.
 
 ---
 
-## Option A: gunicorn Web UI (Recommended)
+## Deploying with gunicorn
 
-The `web/app.py` Flask app serves both the web interface and the archive files.
 `serve.sh` wraps gunicorn with the right settings and reads the port from
 `TubeNews.json` automatically.
 
@@ -111,54 +104,6 @@ Set `base_url` in `TubeNews.json` to the public root of your server
 | `/content/<channel>/rss.xml` | Per-channel feed |
 | `/feed/<token>.xml` | Your personal RSS feed (token shown on dashboard) |
 | `/blog/<token>.html` | Your personal blog page (shareable, no login required) |
-
----
-
-## Option B: Static File Server (Feeds Only)
-
-Use this if you don't need user accounts and just want to publish feeds.
-
-### Quick test (Python built-in server)
-
-```bash
-cd content
-python3 -m http.server 8080
-```
-
-Feeds are then at `http://localhost:8080/rss.xml`, etc.
-
-### nginx
-
-```nginx
-server {
-    listen 80;
-    server_name feeds.example.com;
-
-    root /path/to/TubeNews/content;
-    autoindex on;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    location ~* \.xml$ {
-        try_files $uri =404;
-        add_header Content-Type application/rss+xml;
-    }
-}
-```
-
-### Apache
-
-```apache
-<VirtualHost *:80>
-    ServerName feeds.example.com
-    DocumentRoot /path/to/TubeNews/content
-    Options Indexes FollowSymLinks
-    AllowOverride None
-    Require all granted
-</VirtualHost>
-```
 
 ---
 

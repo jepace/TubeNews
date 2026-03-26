@@ -1,14 +1,14 @@
 # TubeNews
 
-Automated local news extraction from YouTube government meeting videos.
+Turn any YouTube channel into an AI-generated news feed.
 
-TubeNews monitors YouTube channels for new videos, fetches transcripts via [Supadata](https://supadata.ai), analyzes them with Google Gemini AI using a journalistic prompt, and publishes per-channel RSS feeds plus an aggregated regional aggregate feed.
+TubeNews monitors YouTube channels for new videos, fetches transcripts via [Supadata](https://supadata.ai), analyzes them with Google Gemini AI using a journalistic prompt, and publishes per-channel RSS feeds plus an aggregated feed.
 
 ## What It Does
 
 1. Discovers new videos on configured YouTube channels
 2. Fetches full transcripts (with timestamps) via the Supadata API
-3. Sends transcripts to Gemini AI with an investigative-reporter prompt focused on your configured topics
+3. Sends transcripts to Gemini AI with a journalistic prompt focused on your configured topics
 4. Saves professional AP-style news stories as Markdown files
 5. Generates RSS feeds you can subscribe to in any feed reader
 
@@ -94,7 +94,7 @@ content/
 
 ## Documentation
 
-- `SERVING.md` — how to serve feeds over HTTP, configure nginx/Apache, and set up cron
+- `SERVING.md` — production deployment: gunicorn, HTTPS, cron scheduling
 - `CLAUDE.md` — full architecture guide for developers and AI assistants
 - `TODO.md` — known issues and maintainability backlog
 - `helpers/` — utility scripts for setup, debugging, and migration

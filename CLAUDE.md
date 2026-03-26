@@ -2,15 +2,13 @@
 
 ## Project Summary
 
-**TubeNews** is a Python automation tool that turns YouTube government meeting videos into RSS news feeds. It:
+**TubeNews** is a Python automation tool that turns YouTube videos into RSS news feeds. It:
 
 1. Discovers new videos on configured YouTube channels
 2. Fetches transcripts via the Supadata API
 3. Sends transcripts to Google Gemini AI with a journalistic prompt
 4. Saves AI-generated news stories as Markdown files
-5. Publishes per-channel RSS feeds and an aggregated regional aggregate feed
-
-**Target use case:** Helping citizens stay informed about local government decisions without watching hours of footage.
+5. Publishes per-channel RSS feeds and an aggregated feed
 
 **Author:** James E. Pace | **License:** BSD 2-Clause
 
