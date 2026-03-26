@@ -603,7 +603,8 @@ def test_admin_runs_run_history_links_to_browse(admin_client, archive):
             {"channel_id": "UC_BETA__ID", "channel_name": "Beta City Council",  "stories_written": 0},
         ],
     }]
-    (archive / "run_log.json").write_text(_json.dumps(run_log))
+    (archive / "_run_logs").mkdir(exist_ok=True)
+    (archive / "_run_logs" / "run_log.json").write_text(_json.dumps(run_log))
     r = admin_client.get("/admin/runs")
     assert r.status_code == 200
     # Both channels should appear as links in the expandable run detail
@@ -748,7 +749,8 @@ def test_admin_runs_shows_log_link_for_run_with_log(admin_client, archive):
         "total_stories": 0, "ai_rate_limited": False,
         "transcript_quota_exhausted": False, "feeds": [], "pid": pid,
     }]
-    (archive / "run_log.json").write_text(json.dumps(run_log))
+    (archive / "_run_logs").mkdir(exist_ok=True)
+    (archive / "_run_logs" / "run_log.json").write_text(json.dumps(run_log))
     r = admin_client.get("/admin/runs")
     assert f"/admin/run-log/{pid}".encode() in r.data
 
@@ -1987,7 +1989,7 @@ def test_admin_user_prefs_requires_admin(logged_in_client, archive):
 def test_admin_user_prefs_404_for_unknown_uid(admin_client, archive, monkeypatch):
     """/admin/user/<uid>/prefs must return 404 when the user doesn't exist."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     r = admin_client.post("/admin/user/nonexistent-uid/prefs", data={"font_size": "large"})
     assert r.status_code == 404
 
@@ -1995,10 +1997,10 @@ def test_admin_user_prefs_404_for_unknown_uid(admin_client, archive, monkeypatch
 def test_admin_user_prefs_saves_dark_mode(admin_client, archive, monkeypatch):
     """POSTing dark_mode=on must set dark_mode=True in the user's preferences."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
-    target = _make_user(archive / "users", "Target", "target@example.com", [])
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    target = _make_user(archive / "_users", "Target", "target@example.com", [])
     target_uid = next(
-        p.name for p in (archive / "users").iterdir()
+        p.name for p in (archive / "_users").iterdir()
         if p.is_dir() and (p / "user.json").exists()
         and json.loads((p / "user.json").read_text())["email"] == "target@example.com"
     )
@@ -2008,7 +2010,7 @@ def test_admin_user_prefs_saves_dark_mode(admin_client, archive, monkeypatch):
         follow_redirects=False,
     )
     assert r.status_code == 302
-    saved = json.loads((archive / "users" / target_uid / "user.json").read_text())
+    saved = json.loads((archive / "_users" / target_uid / "user.json").read_text())
     assert saved["preferences"]["dark_mode"] is True
     assert saved["preferences"]["font_size"] == "large"
 
@@ -2016,10 +2018,10 @@ def test_admin_user_prefs_saves_dark_mode(admin_client, archive, monkeypatch):
 def test_admin_user_prefs_rejects_invalid_font_size(admin_client, archive, monkeypatch):
     """Invalid font_size values must be silently coerced to 'normal'."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
-    target = _make_user(archive / "users", "Target2", "target2@example.com", [])
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    target = _make_user(archive / "_users", "Target2", "target2@example.com", [])
     target_uid = next(
-        p.name for p in (archive / "users").iterdir()
+        p.name for p in (archive / "_users").iterdir()
         if p.is_dir() and (p / "user.json").exists()
         and json.loads((p / "user.json").read_text())["email"] == "target2@example.com"
     )
@@ -2028,17 +2030,17 @@ def test_admin_user_prefs_rejects_invalid_font_size(admin_client, archive, monke
         data={"font_size": "INVALID"},
         follow_redirects=False,
     )
-    saved = json.loads((archive / "users" / target_uid / "user.json").read_text())
+    saved = json.loads((archive / "_users" / target_uid / "user.json").read_text())
     assert saved["preferences"]["font_size"] == "normal"
 
 
 def test_admin_user_prefs_without_dark_mode_sets_false(admin_client, archive, monkeypatch):
     """Omitting dark_mode from the form must store dark_mode=False."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
-    target = _make_user(archive / "users", "Target3", "target3@example.com", [])
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    target = _make_user(archive / "_users", "Target3", "target3@example.com", [])
     target_uid = next(
-        p.name for p in (archive / "users").iterdir()
+        p.name for p in (archive / "_users").iterdir()
         if p.is_dir() and (p / "user.json").exists()
         and json.loads((p / "user.json").read_text())["email"] == "target3@example.com"
     )
@@ -2047,7 +2049,7 @@ def test_admin_user_prefs_without_dark_mode_sets_false(admin_client, archive, mo
         data={"font_size": "normal"},
         follow_redirects=False,
     )
-    saved = json.loads((archive / "users" / target_uid / "user.json").read_text())
+    saved = json.loads((archive / "_users" / target_uid / "user.json").read_text())
     assert saved["preferences"]["dark_mode"] is False
 
 
@@ -2071,7 +2073,7 @@ def test_admin_user_promote_requires_admin(logged_in_client, archive):
 def test_admin_user_promote_404_for_unknown_uid(admin_client, archive, monkeypatch):
     """/admin/user/<uid>/promote must return 404 when the user doesn't exist."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     r = admin_client.post("/admin/user/nonexistent-uid/promote")
     assert r.status_code == 404
 
@@ -2079,10 +2081,10 @@ def test_admin_user_promote_404_for_unknown_uid(admin_client, archive, monkeypat
 def test_admin_user_promote_grants_admin(admin_client, archive, monkeypatch):
     """Promoting a non-admin user must add their email to admin_users in the config."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
-    target = _make_user(archive / "users", "Promotee", "promotee@example.com", [])
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    target = _make_user(archive / "_users", "Promotee", "promotee@example.com", [])
     target_uid = next(
-        p.name for p in (archive / "users").iterdir()
+        p.name for p in (archive / "_users").iterdir()
         if p.is_dir() and (p / "user.json").exists()
         and json.loads((p / "user.json").read_text())["email"] == "promotee@example.com"
     )
@@ -2095,14 +2097,14 @@ def test_admin_user_promote_grants_admin(admin_client, archive, monkeypatch):
 def test_admin_user_promote_revokes_admin(admin_client, archive, monkeypatch):
     """Promoting an existing admin must remove their email from admin_users."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     # Add target as an existing admin in the config.
     cfg = json.loads(webapp.CONFIG_FILE.read_text())
     cfg["admin_users"].append("demotee@example.com")
     webapp.CONFIG_FILE.write_text(json.dumps(cfg))
-    target = _make_user(archive / "users", "Demotee", "demotee@example.com", [])
+    target = _make_user(archive / "_users", "Demotee", "demotee@example.com", [])
     target_uid = next(
-        p.name for p in (archive / "users").iterdir()
+        p.name for p in (archive / "_users").iterdir()
         if p.is_dir() and (p / "user.json").exists()
         and json.loads((p / "user.json").read_text())["email"] == "demotee@example.com"
     )
@@ -2115,10 +2117,10 @@ def test_admin_user_promote_revokes_admin(admin_client, archive, monkeypatch):
 def test_admin_user_promote_blocks_self_promotion(admin_client, archive, monkeypatch):
     """An admin must not be able to change their own admin status."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     # Find the admin user's UID.
     admin_uid = next(
-        p.name for p in (archive / "users").iterdir()
+        p.name for p in (archive / "_users").iterdir()
         if p.is_dir() and (p / "user.json").exists()
         and json.loads((p / "user.json").read_text())["email"] == "admin@example.com"
     )

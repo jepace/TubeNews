@@ -1344,7 +1344,7 @@ def admin_user_add():
 @login_required
 @admin_required
 def admin_runs():
-    run_log_path = STORAGE_ROOT / "run_log.json"
+    run_log_path = STORAGE_ROOT / "_run_logs" / "run_log.json"
     try:
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
     except Exception:

@@ -1564,7 +1564,8 @@ def _main_body(args) -> None:
     quota_ok, cached_balance = _check_supadata_quota(config)
     started_at = time.time()
     if not quota_ok:
-        run_log_path = STORAGE_ROOT / "run_log.json"
+        run_log_path = STORAGE_ROOT / "_run_logs" / "run_log.json"
+        run_log_path.parent.mkdir(exist_ok=True)
         try:
             runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
         except Exception:
@@ -1637,7 +1638,8 @@ def _main_body(args) -> None:
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
 
-    run_log_path = STORAGE_ROOT / "run_log.json"
+    run_log_path = STORAGE_ROOT / "_run_logs" / "run_log.json"
+    run_log_path.parent.mkdir(exist_ok=True)
     try:
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
     except Exception as exc:

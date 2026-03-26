@@ -22,12 +22,8 @@ pip install -r requirements.txt
 cp TubeNews.json.sample TubeNews.json
 # Edit TubeNews.json with your API keys and channel list
 
-# (Optional) On first run with existing channels — skip the backlog
-python3 helpers/catchup.py
-
 # Run
 python3 TubeNews.py
-python3 TubeNews.py --debug   # verbose output
 ```
 
 ## Requirements
@@ -85,11 +81,13 @@ content/
 │   │   └── 02_Another_Story.md
 │   ├── channel.json      ← channel ID/name mapping
 │   └── rss.xml           ← subscribe to this
+├── _run_logs/            ← per-run logs and summaries (internal)
+│   ├── run_log.json      ← last 30 run summaries
+│   └── run-<pid>.log     ← full output for each run
 ├── _users/
 │   └── <uuid>/           ← one directory per registered user
 │       └── user.json
-├── run_log.json          ← last 30 run summaries
-└── rss.xml               ← aggregated regional feed
+└── rss.xml               ← aggregated feed
 ```
 
 ## Documentation

@@ -98,7 +98,7 @@ Defined at the top of `TubeNews.py` (and importable into `web/app.py`):
 | `GeminiStory` | `title`, `dateline`, `content` (`str`), `start_time_seconds` (`int`), `topics` (`list[str]`) | `call_gemini_api()` return type; `write_story_files()` input |
 | `ParsedStory` | `title`, `dateline`, `body_html` (`str`), `start_seconds` (`int`), `topics` (`list[str]`), `content_hash` (`str`), `user_ids` (`list[str]`) | `parse_story_file()` return type; imported by `web/app.py` |
 | `MetadataDict` | `video_id`, `video_title`, `status`, `processed_at`, `processed_focuses` (`total=False`) | Internal; represents `metadata.json` content |
-| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter. Each run record written to `run_log.json` also includes a top-level `"pid"` field (`int`, `os.getpid()`) so the web UI can link to `content/_run_logs/run-<pid>.log`. |
+| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter. Each run record written to `content/_run_logs/run_log.json` also includes a top-level `"pid"` field (`int`, `os.getpid()`) so the web UI can link to `content/_run_logs/run-<pid>.log`. |
 
 Defined in `web/app.py`:
 
@@ -245,8 +245,9 @@ content/
 │   ├── 2000-01-01_XXXXXXXXXXX/ # ignored_too_old stubs use 2000 date prefix
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
-├── _run_logs/                  # Per-run stdout/stderr logs (reserved — leading _ prevents slug collision)
-│   └── run-<pid>.log           # Log file for a single TubeNews.py run (named by PID)
+├── _run_logs/                  # All run data (reserved — leading _ prevents slug collision)
+│   ├── run_log.json            # Rolling summary of last 30 runs (written by TubeNews.py)
+│   └── run-<pid>.log           # Full stdout/stderr for a single run (written by admin_run_now)
 ├── _users/                     # User account data (reserved — never served publicly)
 │   ├── index.json              # email→UUID index for O(1) login lookup
 │   └── <uuid>/
