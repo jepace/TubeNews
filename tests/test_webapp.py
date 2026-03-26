@@ -325,7 +325,7 @@ def test_admin_blog_shows_all_channel_stories(admin_client, archive):
 def test_admin_blog_links_to_aggregate_feed(admin_client, archive):
     """All-stories view must link to the aggregate RSS feed."""
     r = admin_client.get("/admin/blog")
-    assert b"/archive/rss.xml" in r.data
+    assert b"/content/rss.xml" in r.data
 
 
 # ---------------------------------------------------------------------------
@@ -1078,42 +1078,42 @@ def test_nav_badge_hidden_after_account_visit(client, archive):
 
 
 # ---------------------------------------------------------------------------
-# Security: serve_archive must not expose user data
+# Security: serve_content must not expose user data
 # ---------------------------------------------------------------------------
 
-def test_serve_archive_blocks_users_root(client, archive):
-    """/archive/_users/ must return 404 (underscore prefix is blocked)."""
-    r = client.get("/archive/_users")
+def test_serve_content_blocks_users_root(client, archive):
+    """/content/_users/ must return 404 (underscore prefix is blocked)."""
+    r = client.get("/content/_users")
     assert r.status_code == 404
 
 
-def test_serve_archive_blocks_users_subpath(client, archive, registered_user):
-    """/archive/_users/<uuid>/user.json must return 404."""
+def test_serve_content_blocks_users_subpath(client, archive, registered_user):
+    """/content/_users/<uuid>/user.json must return 404."""
     users_dir = webapp.STORAGE_ROOT / "_users"
     user_uuid = next(users_dir.iterdir()).name
-    r = client.get(f"/archive/_users/{user_uuid}/user.json")
+    r = client.get(f"/content/_users/{user_uuid}/user.json")
     assert r.status_code == 404
 
 
-def test_serve_archive_allows_rss_feed(client, archive):
-    """/archive/rss.xml is still accessible (if the file exists)."""
+def test_serve_content_allows_rss_feed(client, archive):
+    """/content/rss.xml is still accessible (if the file exists)."""
     (archive / "rss.xml").write_text("<rss/>")
-    r = client.get("/archive/rss.xml")
+    r = client.get("/content/rss.xml")
     assert r.status_code == 200
 
 
-def test_serve_archive_blocks_run_logs(client, archive):
-    """/archive/_run_logs/ must return 404 — internal logs are not public."""
+def test_serve_content_blocks_run_logs(client, archive):
+    """/content/_run_logs/ must return 404 — internal logs are not public."""
     run_logs = archive / "_run_logs"
     run_logs.mkdir()
     (run_logs / "run-1234.log").write_text("secret log output")
-    r = client.get("/archive/_run_logs/run-1234.log")
+    r = client.get("/content/_run_logs/run-1234.log")
     assert r.status_code == 404
 
 
-def test_serve_archive_blocks_any_underscore_dir(client, archive):
-    """/archive/_anything/ must return 404."""
-    r = client.get("/archive/_internal/secret")
+def test_serve_content_blocks_any_underscore_dir(client, archive):
+    """/content/_anything/ must return 404."""
+    r = client.get("/content/_internal/secret")
     assert r.status_code == 404
 
 

@@ -56,26 +56,27 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]
 
     Args:
         config_file: Path to TubeNews.json.
-        base_dir:    Directory used to resolve relative ``archive_dir`` paths.
+        base_dir:    Directory used to resolve relative ``content_dir`` paths.
     """
     try:
         cfg = json.loads(config_file.read_text())
 
-        # archive_dir — where processed content is stored.
+        # content_dir — where processed content is stored.
         # Absolute paths are used as-is; relative paths resolve from base_dir.
-        archive_dir = cfg.get("archive_dir", "")
-        if archive_dir:
-            p = Path(archive_dir)
+        # Also accepts the legacy key "archive_dir" for existing installs.
+        content_dir = cfg.get("content_dir") or cfg.get("archive_dir", "")
+        if content_dir:
+            p = Path(content_dir)
             storage_root = p if p.is_absolute() else (base_dir / p).resolve()
         else:
-            storage_root = base_dir / "archive"
+            storage_root = base_dir / "content"
 
         # request_timeout — seconds before giving up on YouTube / Supadata calls.
         request_timeout = int(cfg.get("request_timeout", 15))
 
     except Exception as exc:
         logging.warning(f"Failed to load config; using defaults: {exc}")
-        storage_root = base_dir / "archive"
+        storage_root = base_dir / "content"
         request_timeout = 15
 
     return storage_root, request_timeout

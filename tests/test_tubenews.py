@@ -848,40 +848,49 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _resolve_early_config — archive_dir and request_timeout
+# _resolve_early_config — content_dir and request_timeout
 # ---------------------------------------------------------------------------
 
-def test_resolve_archive_dir_absolute(tmp_path):
-    """An absolute archive_dir is used as-is for STORAGE_ROOT."""
-    custom = tmp_path / "my_archive"
+def test_resolve_content_dir_absolute(tmp_path):
+    """An absolute content_dir is used as-is for STORAGE_ROOT."""
+    custom = tmp_path / "my_content"
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
+    cfg.write_text(json.dumps({"content_dir": str(custom)}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == custom
 
 
-def test_resolve_archive_dir_relative(tmp_path):
-    """A relative archive_dir is resolved against base_dir."""
+def test_resolve_content_dir_relative(tmp_path):
+    """A relative content_dir is resolved against base_dir."""
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": "subdir/archive"}))
+    cfg.write_text(json.dumps({"content_dir": "subdir/content"}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == (tmp_path / "subdir" / "archive").resolve()
+    assert storage_root == (tmp_path / "subdir" / "content").resolve()
 
 
-def test_resolve_archive_dir_absent_defaults_to_base_archive(tmp_path):
-    """When archive_dir is omitted, STORAGE_ROOT defaults to base_dir/archive."""
+def test_resolve_content_dir_absent_defaults_to_base_content(tmp_path):
+    """When content_dir is omitted, STORAGE_ROOT defaults to base_dir/content."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
 
 
-def test_resolve_archive_dir_empty_string_defaults_to_base_archive(tmp_path):
-    """An explicit empty string for archive_dir is treated the same as absent."""
+def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
+    """An explicit empty string for content_dir is treated the same as absent."""
     cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": ""}))
+    cfg.write_text(json.dumps({"content_dir": ""}))
     storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
+
+
+def test_resolve_legacy_archive_dir_still_works(tmp_path):
+    """The legacy config key 'archive_dir' is accepted for existing installs."""
+    custom = tmp_path / "my_old_archive"
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
+    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    assert storage_root == custom
 
 
 def test_resolve_request_timeout_custom(tmp_path):
@@ -904,7 +913,7 @@ def test_resolve_falls_back_on_missing_config_file(tmp_path):
     """If TubeNews.json does not exist both defaults are returned without raising."""
     missing = tmp_path / "no_such_file.json"
     storage_root, timeout = _resolve_early_config(missing, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
     assert timeout == 15
 
 
@@ -913,7 +922,7 @@ def test_resolve_falls_back_on_invalid_json(tmp_path):
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text("{ NOT VALID JSON }")
     storage_root, timeout = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == tmp_path / "archive"
+    assert storage_root == tmp_path / "content"
     assert timeout == 15
 
 

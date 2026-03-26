@@ -664,10 +664,10 @@ def index():
     return redirect(url_for("login"))
 
 
-@app.route("/archive/")
-@app.route("/archive/<path:filename>")
-def serve_archive(filename=""):
-    """Serve static files from the archive directory (feeds, stories, etc.)."""
+@app.route("/content/")
+@app.route("/content/<path:filename>")
+def serve_content(filename=""):
+    """Serve static files from the content directory (feeds, stories, etc.)."""
     if not filename:
         abort(404)
     # Never expose internal reserved directories (including _users/).
@@ -909,7 +909,7 @@ def channel_blog(channel_id: str):
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
     archive_dir = _find_archive_dir_for_channel(channel_id)
-    feed_path = f"/archive/{archive_dir.name}/rss.xml" if archive_dir else None
+    feed_path = f"/content/{archive_dir.name}/rss.xml" if archive_dir else None
     return render_template("blog.html", stories=stories, blog_name=display_name,
                            feed_path=feed_path, channel_id=channel_id)
 
@@ -1539,7 +1539,7 @@ def admin_all_stories():
                     continue
     stories.sort(key=lambda s: s["processed_at"], reverse=True)
     return render_template("blog.html", stories=stories, blog_name="All Channels",
-                           feed_path="/archive/rss.xml")
+                           feed_path="/content/rss.xml")
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])

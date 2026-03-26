@@ -1,6 +1,6 @@
 # Serving TubeNews
 
-TubeNews writes its output to the `archive/` directory. To make feeds
+TubeNews writes its output to the `content/` directory. To make feeds
 subscribable over the network you need to serve them over HTTP and set
 `base_url` in `TubeNews.json` to the public root URL.
 
@@ -107,8 +107,8 @@ Set `base_url` in `TubeNews.json` to the public root of your server
 | `/` | Login / dashboard |
 | `/dashboard` | Subscribe to channels, copy your feed and blog URLs |
 | `/admin` | Manage users and channels |
-| `/archive/rss.xml` | Regional aggregate feed |
-| `/archive/<channel>/rss.xml` | Per-channel feed |
+| `/content/rss.xml` | Regional aggregate feed |
+| `/content/<channel>/rss.xml` | Per-channel feed |
 | `/feed/<token>.xml` | Your personal RSS feed (token shown on dashboard) |
 | `/blog/<token>.html` | Your personal blog page (shareable, no login required) |
 
@@ -121,7 +121,7 @@ Use this if you don't need user accounts and just want to publish feeds.
 ### Quick test (Python built-in server)
 
 ```bash
-cd archive
+cd content
 python3 -m http.server 8080
 ```
 
@@ -134,7 +134,7 @@ server {
     listen 80;
     server_name feeds.example.com;
 
-    root /path/to/TubeNews/archive;
+    root /path/to/TubeNews/content;
     autoindex on;
 
     location / {
@@ -153,7 +153,7 @@ server {
 ```apache
 <VirtualHost *:80>
     ServerName feeds.example.com
-    DocumentRoot /path/to/TubeNews/archive
+    DocumentRoot /path/to/TubeNews/content
     Options Indexes FollowSymLinks
     AllowOverride None
     Require all granted
@@ -323,19 +323,30 @@ TubeNews run.
 
 ## Upgrading an Existing Install
 
-### Renaming `archive/users/` to `archive/_users/`
+### Renaming `archive/` to `content/`
 
-User account data was moved from `archive/users/` to `archive/_users/` so it
-follows the reserved-directory convention (all `_`-prefixed dirs are internal
-and blocked by the web server). If you have an existing install, rename the
-directory once:
+The content directory was renamed from `archive/` to `content/`. If you have an
+existing install, move the directory once:
 
 ```bash
-mv archive/users archive/_users
+mv archive content
 ```
 
-Then restart the server. No other changes are needed — all user data is intact
-at the new path.
+Then restart the server. If you have `"archive_dir"` set in `TubeNews.json`,
+rename the key to `"content_dir"` (or leave it as `"archive_dir"` — both are
+accepted for backward compatibility).
+
+### Renaming `archive/users/` to `content/_users/`
+
+If upgrading from a very early install that pre-dates the `_`-prefix convention
+(user data was at `archive/users/`), rename in two steps:
+
+```bash
+mv archive/users archive/_users   # if not already done
+mv archive content                 # rename the whole directory
+```
+
+No other changes are needed — all user data is intact at the new path.
 
 ---
 

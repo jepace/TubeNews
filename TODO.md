@@ -16,7 +16,7 @@ merge would halve discovery time per channel. Zero shared mutable state —
 no race risk.
 
 **2. Parallel channel processing (`main` loop, lines ~803–810)**
-Each channel writes to its own `archive/<slug>/` directory, so the per-channel
+Each channel writes to its own `content/<slug>/` directory, so the per-channel
 pipeline (discovery → transcript fetch → Gemini → per-channel `rss.xml`) is
 largely independent. Running channels concurrently is the highest-value target:
 most wall-clock time is spent blocked on HTTP responses, and a 5-channel config
@@ -24,10 +24,10 @@ would run roughly 5× faster in theory.
 
 ### Race conditions to address before parallelizing
 
-**`archive/rss.xml` — the aggregate feed (line ~809)**
+**`content/rss.xml` — the aggregate feed (line ~809)**
 `rebuild_aggregate_feed()` is called inside the per-feed loop as soon as a channel
 produces content. It reads *all* channel directories, then overwrites the
-single shared `archive/rss.xml`. Two threads finishing simultaneously would
+single shared `content/rss.xml`. Two threads finishing simultaneously would
 both invoke it concurrently, potentially interleaving reads with a partial
 write or clobbering each other's output.
 Fix: collect a `content_changed` flag per thread, then call
@@ -79,26 +79,33 @@ The current storage model is intentionally simple:
 
 - **Feeds** are stored as a JSON array in `TubeNews.json` under `feeds`.
   This is the operator config file — read directly by the CLI tool at startup.
-- **Users** are stored as individual `archive/_users/<uuid>/user.json` files.
-  Discovery happens by globbing `archive/_users/*/user.json` at runtime.
+- **Users** are stored as individual `content/_users/<uuid>/user.json` files.
+  Discovery happens by globbing `content/_users/*/user.json` at runtime.
 
 These two patterns are deliberately different: feeds are configuration (small,
 operator-managed, read at startup), users are application state (runtime-created,
 individually owned).
 
-**User data should eventually move outside `archive/`.**  The current location
-(`archive/_users/`) is a half-step: the `_` prefix makes the directory
-invisible to all archive scanners and blocked by `serve_archive` with a single
+**User data should eventually move outside `content/`.**  The current location
+(`content/_users/`) is a half-step: the `_` prefix makes the directory
+invisible to all content scanners and blocked by `serve_content` with a single
 rule, but user account data (password hashes, email addresses, tokens) still
 lives inside the same tree as public RSS and story content.  The right long-term
 fix is to move user storage to a sibling directory (e.g. a top-level `users/`
-or `data/users/` next to `archive/`) so the separation is structural, not just
+or `data/users/` next to `content/`) so the separation is structural, not just
 naming convention.  This requires updating `USERS_ROOT` in `web/app.py`,
 `STORAGE_ROOT / "_users"` in `TubeNews.py`, and the corresponding paths in all
 tests, plus a one-time migration script for existing installs.
 
+**`_run_logs/` can also move outside `content/`** once user data moves out.
+All three references to it are in `web/app.py` only (`admin_runs`,
+`admin_run_now`, `admin_run_log`) — `TubeNews.py` does not write there — so
+moving `_run_logs/` to a sibling directory only requires updating those three
+references together. The admin Runs page will continue to work as long as all
+three are updated in the same change.
+
 ~~**If the user count grows large enough that glob-scanning on every login/lookup
-becomes a bottleneck**, consider adding a lightweight `archive/_users/index.json`
+becomes a bottleneck**, consider adding a lightweight `content/_users/index.json`
 that maps email → uuid. The per-user files stay as-is; the index just speeds up
 `_find_user_by_email()`. Rebuild the index on registration, deletion, and email
 change. No schema migration needed for existing user directories.~~ **Done — see Completed Items.**
@@ -121,9 +128,9 @@ check `feeds.json` into version control (no secrets) while keeping
 
 ### Email index for O(1) user lookup (March 2026)
 
-`_find_user_by_email()` previously globbed `archive/_users/*/user.json` on every
+`_find_user_by_email()` previously globbed `content/_users/*/user.json` on every
 login, duplicate-email check, and admin info update — O(n) in the number of
-users. An `archive/_users/index.json` file (email → UUID dict) now provides O(1)
+users. A `content/_users/index.json` file (email → UUID dict) now provides O(1)
 lookup. The index is written atomically (write-then-rename) and is kept in sync
 on registration, admin-created accounts, account deletion, and email changes.
 `_find_user_by_email()` still falls back to a glob scan if the index is missing

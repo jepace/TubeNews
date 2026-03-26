@@ -37,14 +37,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 
 try:
-    _archive_dir = json.loads(CONFIG_FILE.read_text()).get("archive_dir", "")
-    if _archive_dir:
-        _p = Path(_archive_dir)
+    _cfg = json.loads(CONFIG_FILE.read_text())
+    # "content_dir" is the current key; "archive_dir" is accepted for existing installs.
+    _content_dir = _cfg.get("content_dir") or _cfg.get("archive_dir", "")
+    if _content_dir:
+        _p = Path(_content_dir)
         STORAGE_ROOT = _p if _p.is_absolute() else (BASE_DIR / _p).resolve()
     else:
-        STORAGE_ROOT = BASE_DIR / "archive"
+        STORAGE_ROOT = BASE_DIR / "content"
 except Exception:
-    STORAGE_ROOT = BASE_DIR / "archive"
+    STORAGE_ROOT = BASE_DIR / "content"
 
 HEADERS = {
     "User-Agent": (
