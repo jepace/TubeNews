@@ -157,7 +157,7 @@ Defined in `web/app.py`:
 |---|---|
 | `process_video(video_id, ..., focuses=None, transcript_rate_limit_event=None)` | Fetch + analyse one video. *focuses* is a list of `(focus_string, user_ids)` pairs; calls Gemini once per pair and writes `**Users:**` metadata for each story. Falls back to `[(feed["focus"], [])]` (unrestricted) when omitted. Deduplicates stories by title across focus passes, merging user_ids. Returns `("content_written", n)`, `("ai_rate_limited", 0)`, `("transcript_quota_exhausted", 0)`, or `("skipped", 0)`. Skips the transcript API call immediately if `transcript_rate_limit_event` is already set. |
 | `process_feed(feed, ..., ai_rate_limit_event=None, transcript_rate_limit_event=None)` | Collects focuses via `_collect_channel_focuses`, processes all videos needing work for any focus; returns `(content_changed, ai_rate_limited, stories_written)`. Breaks out of the video loop immediately when `transcript_rate_limit_event` is set. |
-| `_check_supadata_quota(config)` | Reads `content/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
+| `_check_supadata_quota(config)` | Reads `content/_run_logs/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
 ---
@@ -247,6 +247,7 @@ content/
 │   └── rss.xml                 # Per-channel RSS feed
 ├── _run_logs/                  # All run data (reserved — leading _ prevents slug collision)
 │   ├── run_log.json            # Rolling summary of last 30 runs (written by TubeNews.py)
+│   ├── supadata_balance.json   # Cached Supadata credit usage (written by TubeNews.py)
 │   └── run-<pid>.log           # Full stdout/stderr for a single run (written by admin_run_now)
 ├── _users/                     # User account data (reserved — never served publicly)
 │   ├── index.json              # email→UUID index for O(1) login lookup

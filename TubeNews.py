@@ -1670,7 +1670,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
     """Check Supadata credit balance before starting a run.
 
     Reads the balance cached at the end of the previous run
-    (``archive/supadata_balance.json``) — no live API call is made here so no
+    (``content/_run_logs/supadata_balance.json``) — no live API call is made here so no
     credits are consumed.  If the file is absent (first run) we proceed
     optimistically; the end-of-run cache will populate it for next time.
 
@@ -1680,7 +1680,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
         cached dict or None.  When *ok* is False the caller should abort
         and record ``transcript_quota_exhausted`` in the run log.
     """
-    balance_path = STORAGE_ROOT / "supadata_balance.json"
+    balance_path = STORAGE_ROOT / "_run_logs" / "supadata_balance.json"
     if not balance_path.exists():
         return True, None
     try:
@@ -1708,7 +1708,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
 
 
 def _cache_supadata_balance(config: dict) -> None:
-    """Fetch Supadata credit usage and cache it to ``archive/supadata_balance.json``.
+    """Fetch Supadata credit usage and cache it to ``content/_run_logs/supadata_balance.json``.
 
     Called once at the end of each ``main()`` run so the web UI can read the
     cached result instantly instead of making a live API call on every page load.
@@ -1724,7 +1724,7 @@ def _cache_supadata_balance(config: dict) -> None:
             timeout=10,
         )
         if resp.status_code == 200:
-            (STORAGE_ROOT / "supadata_balance.json").write_text(
+            (STORAGE_ROOT / "_run_logs" / "supadata_balance.json").write_text(
                 json.dumps(resp.json())
             )
             logger.debug("Supadata balance cached successfully.")

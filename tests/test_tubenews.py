@@ -1693,7 +1693,8 @@ def test_check_supadata_quota_credits_remaining(tmp_path, monkeypatch):
     """When credits are available, quota check returns ok=True."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "supadata_balance.json").write_text(json.dumps({
+    (tmp_path / "_run_logs").mkdir()
+    (tmp_path / "_run_logs" / "supadata_balance.json").write_text(json.dumps({
         "maxCredits": 1000, "usedCredits": 500, "plan": "starter",
     }))
     ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
@@ -1705,7 +1706,8 @@ def test_check_supadata_quota_exhausted(tmp_path, monkeypatch):
     """When usedCredits == maxCredits, quota check returns ok=False."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "supadata_balance.json").write_text(json.dumps({
+    (tmp_path / "_run_logs").mkdir()
+    (tmp_path / "_run_logs" / "supadata_balance.json").write_text(json.dumps({
         "maxCredits": 1000, "usedCredits": 1000, "plan": "starter",
         "resetDate": "2026-04-01",
     }))
@@ -1718,7 +1720,8 @@ def test_check_supadata_quota_over_limit(tmp_path, monkeypatch):
     """When usedCredits exceeds maxCredits, quota check returns ok=False."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "supadata_balance.json").write_text(json.dumps({
+    (tmp_path / "_run_logs").mkdir()
+    (tmp_path / "_run_logs" / "supadata_balance.json").write_text(json.dumps({
         "maxCredits": 1000, "usedCredits": 1001, "plan": "starter",
     }))
     ok, _ = _check_supadata_quota({"supadata_api_key": "key"})
@@ -1729,7 +1732,8 @@ def test_check_supadata_quota_corrupt_file_proceeds(tmp_path, monkeypatch):
     """A corrupt balance file is treated as 'unknown' — proceed optimistically."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "supadata_balance.json").write_bytes(b"\xff\xfe not json")
+    (tmp_path / "_run_logs").mkdir()
+    (tmp_path / "_run_logs" / "supadata_balance.json").write_bytes(b"\xff\xfe not json")
     ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
     assert ok is True
     assert balance is None

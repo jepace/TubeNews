@@ -1414,13 +1414,13 @@ def admin_run_log(pid: int):
 
 
 def _get_supadata_balance() -> dict | None:
-    """Read cached Supadata credit usage from ``archive/supadata_balance.json``.
+    """Read cached Supadata credit usage from ``content/_run_logs/supadata_balance.json``.
 
     The file is written by ``TubeNews._cache_supadata_balance()`` at the end of
     each scraper run, so the web UI never blocks on a live API call.
     Returns ``None`` if the file does not exist or cannot be parsed.
     """
-    balance_path = STORAGE_ROOT / "supadata_balance.json"
+    balance_path = STORAGE_ROOT / "_run_logs" / "supadata_balance.json"
     if not balance_path.exists():
         return None
     try:
