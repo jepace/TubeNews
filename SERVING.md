@@ -321,6 +321,24 @@ TubeNews run.
 
 ---
 
+## Upgrading an Existing Install
+
+### Renaming `archive/users/` to `archive/_users/`
+
+User account data was moved from `archive/users/` to `archive/_users/` so it
+follows the reserved-directory convention (all `_`-prefixed dirs are internal
+and blocked by the web server). If you have an existing install, rename the
+directory once:
+
+```bash
+mv archive/users archive/_users
+```
+
+Then restart the server. No other changes are needed — all user data is intact
+at the new path.
+
+---
+
 ## Per-Channel Focus Filtering
 
 By default a user's feed and blog show all stories from their subscribed

@@ -845,7 +845,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
     feed.link(href=base_url if base_url else "https://www.youtube.com", rel="alternate")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and not d.name.startswith("_")]:
         channel_json = channel_dir / "channel.json"
         if not channel_json.exists():
             continue
@@ -922,7 +922,7 @@ def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str 
         user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
-    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
+    user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"TubeNews: Rebuilding user feed for {name}")
     xml_bytes = build_user_feed_xml(user, base_url=base_url, user_id=user_id)
@@ -943,13 +943,13 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
     """
     name = user["name"]
     subscribed = set(user.get("channel_ids", []))
-    user_dir = STORAGE_ROOT / "users" / (user_id or slugify(name))
+    user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"TubeNews: Rebuilding blog for {name}")
 
     all_stories: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and not d.name.startswith("_")]:
         channel_json = channel_dir / "channel.json"
         if not channel_json.exists():
             continue
@@ -1138,7 +1138,7 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str
         focus_map[f] = []  # feed-level: no user restriction
         focus_order.append(f)
 
-    users_dir = STORAGE_ROOT / "users"
+    users_dir = STORAGE_ROOT / "_users"
     if users_dir.is_dir():
         for uid_dir in sorted(users_dir.iterdir()):
             if not uid_dir.is_dir():
@@ -1623,7 +1623,7 @@ def _main_body(args) -> None:
         except Exception:
             logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
 
-    users_dir = STORAGE_ROOT / "users"
+    users_dir = STORAGE_ROOT / "_users"
     if users_dir.is_dir():
         for user_json in sorted(users_dir.glob("*/user.json")):
             try:

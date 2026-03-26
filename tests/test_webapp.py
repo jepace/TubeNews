@@ -113,7 +113,7 @@ def archive(tmp_path, monkeypatch):
     """Temp archive with two channels; patches every STORAGE_ROOT reference."""
     import TubeNews
     monkeypatch.setattr(webapp,    "STORAGE_ROOT", tmp_path)
-    monkeypatch.setattr(webapp,    "USERS_ROOT",   tmp_path / "users")
+    monkeypatch.setattr(webapp,    "USERS_ROOT",   tmp_path / "_users")
     monkeypatch.setattr(TubeNews,  "STORAGE_ROOT", tmp_path)
 
     _make_channel(tmp_path, "alpha_city", "UC_ALPHA_ID", "Alpha City Council",
@@ -121,7 +121,7 @@ def archive(tmp_path, monkeypatch):
     _make_channel(tmp_path, "beta_city",  "UC_BETA__ID", "Beta City Council",
                   story_title="Beta Council Discusses Zoning")
 
-    (tmp_path / "users").mkdir()
+    (tmp_path / "_users").mkdir()
     return tmp_path
 
 
@@ -129,7 +129,7 @@ def archive(tmp_path, monkeypatch):
 def registered_user(archive):
     """A user subscribed to Alpha only, with a fixed known feed token."""
     return _make_user(
-        archive / "users",
+        archive / "_users",
         name="Test User",
         email="test@example.com",
         channel_ids=["UC_ALPHA_ID"],
@@ -497,7 +497,7 @@ def admin_user(archive, monkeypatch):
     # Also patch LOCK_FILE so admin routes never touch the real filesystem.
     monkeypatch.setattr(webapp, "LOCK_FILE", archive / ".tubenews.lock")
     return _make_user(
-        archive / "users",
+        archive / "_users",
         name="Admin",
         email="admin@example.com",
         channel_ids=[],
@@ -928,8 +928,8 @@ def test_account_saves_focuses_as_list(logged_in_client, archive):
     }, follow_redirects=True)
     assert r.status_code == 200
 
-    # Find the user in archive/users and check channel_focus
-    users_dir = webapp.STORAGE_ROOT / "users"
+    # Find the user in archive/_users and check channel_focus
+    users_dir = webapp.STORAGE_ROOT / "_users"
     user_data = None
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
@@ -956,7 +956,7 @@ def test_account_caps_focuses_at_three(logged_in_client, archive):
     }, follow_redirects=True)
     assert r.status_code == 200
 
-    users_dir = webapp.STORAGE_ROOT / "users"
+    users_dir = webapp.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if uj.exists():
@@ -978,7 +978,7 @@ def test_account_get_initialises_seen_channel_ids(logged_in_client, archive):
 
     logged_in_client.get("/account")
 
-    users_dir = webapp.STORAGE_ROOT / "users"
+    users_dir = webapp.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if not uj.exists():
@@ -998,7 +998,7 @@ def test_account_post_sets_seen_channel_ids(logged_in_client, archive):
     logged_in_client.post("/account", data={"channel_ids": ["UC_ALPHA_ID"]},
                           follow_redirects=True)
 
-    users_dir = webapp.STORAGE_ROOT / "users"
+    users_dir = webapp.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if not uj.exists():
@@ -1016,7 +1016,7 @@ def test_nav_badge_shown_when_unseen_channel_exists(client, archive):
     import web.app as webapp
 
     # Create user subscribed to Alpha who has only "seen" Alpha (Beta is new to them)
-    users_dir = webapp.STORAGE_ROOT / "users"
+    users_dir = webapp.STORAGE_ROOT / "_users"
     _make_user(
         users_dir, name="Partial User", email="partial@example.com",
         channel_ids=["UC_ALPHA_ID"], token="partial-token-xyz",
@@ -1050,7 +1050,7 @@ def test_nav_badge_hidden_after_account_visit(client, archive):
     import web.app as webapp
 
     # Set up user with only Alpha seen
-    users_dir = webapp.STORAGE_ROOT / "users"
+    users_dir = webapp.STORAGE_ROOT / "_users"
     _make_user(users_dir, name="Watcher", email="watcher@example.com",
                channel_ids=["UC_ALPHA_ID"], token="watcher-token")
     for uid_dir in users_dir.iterdir():
@@ -1082,16 +1082,16 @@ def test_nav_badge_hidden_after_account_visit(client, archive):
 # ---------------------------------------------------------------------------
 
 def test_serve_archive_blocks_users_root(client, archive):
-    """/archive/users/ must return 404, not expose the directory."""
-    r = client.get("/archive/users")
+    """/archive/_users/ must return 404 (underscore prefix is blocked)."""
+    r = client.get("/archive/_users")
     assert r.status_code == 404
 
 
 def test_serve_archive_blocks_users_subpath(client, archive, registered_user):
-    """/archive/users/<uuid>/user.json must return 404."""
-    users_dir = webapp.STORAGE_ROOT / "users"
+    """/archive/_users/<uuid>/user.json must return 404."""
+    users_dir = webapp.STORAGE_ROOT / "_users"
     user_uuid = next(users_dir.iterdir()).name
-    r = client.get(f"/archive/users/{user_uuid}/user.json")
+    r = client.get(f"/archive/_users/{user_uuid}/user.json")
     assert r.status_code == 404
 
 
@@ -1222,7 +1222,7 @@ def test_run_now_sends_ntfy(archive, monkeypatch):
     from werkzeug.security import generate_password_hash as _gph
 
     # Create an admin user
-    users_dir = archive / "users"
+    users_dir = archive / "_users"
     uid = str(uuid.uuid4())
     (users_dir / uid).mkdir()
     (users_dir / uid / "user.json").write_text(_json.dumps({
@@ -1389,11 +1389,11 @@ def test_blog_route_filters_by_user_id(archive, monkeypatch):
     import TubeNews
 
     monkeypatch.setattr(webapp, "STORAGE_ROOT", archive)
-    monkeypatch.setattr(webapp, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(webapp, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", archive)
 
     # Create user so we know their UUID before writing story files
-    users_root = archive / "users"
+    users_root = archive / "_users"
     _make_user(users_root, name="Alice", email="alice@example.com",
                channel_ids=["UC_ALPHA_ID"], token="alice-token-xyz789",
                password="alicepassword123")
@@ -1425,7 +1425,7 @@ def test_blog_route_untagged_shows_to_all(archive, monkeypatch):
     import TubeNews
 
     monkeypatch.setattr(webapp, "STORAGE_ROOT", archive)
-    monkeypatch.setattr(webapp, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(webapp, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", archive)
 
     alpha_dir = archive / "alpha_city"
@@ -1435,7 +1435,7 @@ def test_blog_route_untagged_shows_to_all(archive, monkeypatch):
     _write_story_with_users(meeting_dir, "03_Housing_Story.md", "Housing Project Approved")
 
     _make_user(
-        archive / "users",
+        archive / "_users",
         name="Any User",
         email="anyuser@example.com",
         channel_ids=["UC_ALPHA_ID"],
@@ -1461,7 +1461,7 @@ def test_blog_route_untagged_shows_to_all(archive, monkeypatch):
 def test_email_index_round_trip(archive, monkeypatch):
     """_index_add writes an entry; _read_email_index reads it back."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
 
     _wa._index_add("alice@example.com", "uuid-alice")
     index = _wa._read_email_index()
@@ -1471,7 +1471,7 @@ def test_email_index_round_trip(archive, monkeypatch):
 def test_index_remove_deletes_entry(archive, monkeypatch):
     """_index_remove must remove only the targeted entry."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
 
     _wa._index_add("alice@example.com", "uuid-alice")
     _wa._index_add("bob@example.com", "uuid-bob")
@@ -1484,7 +1484,7 @@ def test_index_remove_deletes_entry(archive, monkeypatch):
 def test_find_user_by_email_uses_index(archive, monkeypatch):
     """_find_user_by_email must resolve via the index without touching individual user.json files."""
     import web.app as _wa
-    users_root = archive / "users"
+    users_root = archive / "_users"
     monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
 
     user_data = _make_user(users_root, "Alice", "alice@example.com", [])
@@ -1502,7 +1502,7 @@ def test_find_user_by_email_uses_index(archive, monkeypatch):
 def test_find_user_by_email_falls_back_to_glob_when_no_index(archive, monkeypatch):
     """Without an index file, _find_user_by_email must still work via glob scan."""
     import web.app as _wa
-    users_root = archive / "users"
+    users_root = archive / "_users"
     monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
 
     _make_user(users_root, "Bob", "bob@example.com", [])
@@ -1519,7 +1519,7 @@ def test_find_user_by_email_falls_back_to_glob_when_no_index(archive, monkeypatc
 def test_find_user_by_email_glob_fallback_repairs_index(archive, monkeypatch):
     """Glob fallback must write a new index entry so the next call is O(1)."""
     import web.app as _wa
-    users_root = archive / "users"
+    users_root = archive / "_users"
     monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
 
     _make_user(users_root, "Carol", "carol@example.com", [])
@@ -1537,7 +1537,7 @@ def test_find_user_by_email_glob_fallback_repairs_index(archive, monkeypatch):
 def test_register_route_writes_index(archive, monkeypatch):
     """Successful registration must add the new user to the email index."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
 
     flask_app.config["TESTING"] = True
@@ -1557,9 +1557,9 @@ def test_register_route_writes_index(archive, monkeypatch):
 def test_admin_delete_removes_index_entry(archive, monkeypatch, admin_client):
     """Deleting a user via the admin route must remove them from the index."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
 
-    users_root = archive / "users"
+    users_root = archive / "_users"
     _make_user(users_root, "Victim", "victim@example.com", [])
     uid = next(p.name for p in users_root.iterdir()
                if (p / "user.json").exists() and
@@ -1576,9 +1576,9 @@ def test_admin_delete_removes_index_entry(archive, monkeypatch, admin_client):
 def test_admin_email_change_updates_index(archive, monkeypatch, admin_client):
     """Changing a user's email via the admin route must update the index."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
 
-    users_root = archive / "users"
+    users_root = archive / "_users"
     _make_user(users_root, "Rename Me", "old@example.com", [])
     uid = next(p.name for p in users_root.iterdir()
                if (p / "user.json").exists() and
@@ -1628,7 +1628,7 @@ def test_account_info_update_saves_name(logged_in_client, archive):
         "current_password": "testpassword123",
     }, follow_redirects=True)
     assert r.status_code == 200
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if uj.exists():
@@ -1649,7 +1649,7 @@ def test_account_info_wrong_password_rejected(logged_in_client, archive):
         "current_password": "wrongpassword!",
     }, follow_redirects=True)
     assert b"incorrect" in r.data.lower()
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if uj.exists():
@@ -1663,8 +1663,8 @@ def test_account_info_wrong_password_rejected(logged_in_client, archive):
 def test_account_info_email_change_updates_index(logged_in_client, archive, monkeypatch):
     """Changing email via /account must update the email index."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
-    users_dir = _wa.STORAGE_ROOT / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    users_dir = _wa.STORAGE_ROOT / "_users"
     uid = next(
         p.name for p in users_dir.iterdir()
         if (p / "user.json").exists() and
@@ -1693,7 +1693,7 @@ def test_account_password_change_succeeds(logged_in_client, archive):
         "new_password": "newpassword456",
     }, follow_redirects=True)
     assert r.status_code == 200
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if uj.exists():
@@ -1727,7 +1727,7 @@ def test_account_rotate_token_issues_new_token(logged_in_client, archive):
     import web.app as _wa
     old_token = "known-test-feed-token-abc123"
     logged_in_client.post("/account/rotate-token")
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if uj.exists():
@@ -1756,7 +1756,7 @@ def test_account_delete_wrong_password_rejected(logged_in_client, archive):
         "confirm_email": "test@example.com",
     }, follow_redirects=True)
     assert b"incorrect" in r.data.lower()
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     emails = [
         json.loads((p / "user.json").read_text()).get("email")
         for p in users_dir.iterdir()
@@ -1773,7 +1773,7 @@ def test_account_delete_wrong_email_confirmation_rejected(logged_in_client, arch
         "confirm_email": "wrong@example.com",
     }, follow_redirects=True)
     assert b"did not match" in r.data.lower() or b"confirmation" in r.data.lower()
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     emails = [
         json.loads((p / "user.json").read_text()).get("email")
         for p in users_dir.iterdir()
@@ -1785,13 +1785,13 @@ def test_account_delete_wrong_email_confirmation_rejected(logged_in_client, arch
 def test_account_delete_success_removes_user(logged_in_client, archive, monkeypatch):
     """POST /account/delete with correct credentials must delete the user directory."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     r = logged_in_client.post("/account/delete", data={
         "current_password": "testpassword123",
         "confirm_email": "test@example.com",
     }, follow_redirects=True)
     assert r.status_code == 200
-    users_dir = _wa.STORAGE_ROOT / "users"
+    users_dir = _wa.STORAGE_ROOT / "_users"
     emails = [
         json.loads((p / "user.json").read_text()).get("email")
         for p in users_dir.iterdir()
@@ -1807,13 +1807,13 @@ def test_account_delete_success_removes_user(logged_in_client, archive, monkeypa
 def test_mark_read_adds_to_read_articles(logged_in_client, archive, monkeypatch):
     """POST /account/mark-read must persist content_hash in user.json."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     r = logged_in_client.post("/account/mark-read", data={"content_hash": "abc123"})
     assert r.status_code == 200
     data = json.loads(r.data)
     assert data["ok"] is True
     # Find the test user's user.json and verify the hash was saved.
-    users_dir = archive / "users"
+    users_dir = archive / "_users"
     user_data = None
     for p in users_dir.iterdir():
         f = p / "user.json"
@@ -1835,14 +1835,14 @@ def test_mark_read_missing_hash_returns_400(logged_in_client, archive):
 def test_mark_unread_removes_from_read_articles(logged_in_client, archive, monkeypatch):
     """POST /account/mark-unread must remove content_hash from user.json."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     # First mark as read.
     logged_in_client.post("/account/mark-read", data={"content_hash": "abc123"})
     # Then mark as unread.
     r = logged_in_client.post("/account/mark-unread", data={"content_hash": "abc123"})
     assert r.status_code == 200
     assert json.loads(r.data)["ok"] is True
-    users_dir = archive / "users"
+    users_dir = archive / "_users"
     for p in users_dir.iterdir():
         f = p / "user.json"
         if f.exists():
@@ -1861,7 +1861,7 @@ def test_mark_unread_missing_hash_returns_400(logged_in_client, archive):
 def test_mark_all_read_redirects_to_blog(logged_in_client, archive, monkeypatch):
     """POST /account/mark-all-read must redirect to /blog."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     r = logged_in_client.post("/account/mark-all-read")
     assert r.status_code == 302
@@ -1871,10 +1871,10 @@ def test_mark_all_read_redirects_to_blog(logged_in_client, archive, monkeypatch)
 def test_mark_all_unread_clears_read_articles_and_redirects(logged_in_client, archive, monkeypatch):
     """POST /account/mark-all-unread must clear read_articles and redirect to /blog."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     # Pre-populate read_articles so we can verify they are cleared.
-    user_dir = archive / "users"
+    user_dir = archive / "_users"
     for user_json in user_dir.glob("*/user.json"):
         import json as _json
         data = _json.loads(user_json.read_text())
@@ -1901,7 +1901,7 @@ def test_serve_read_shows_archived_stories(logged_in_client, archive, monkeypatc
     """/read must show only stories whose content_hash is in read_articles."""
     import hashlib
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     # The story body written by _make_channel is "Story body."
     # Parse the actual hash so the test doesn't duplicate the hash logic.
@@ -1920,7 +1920,7 @@ def test_serve_read_shows_archived_stories(logged_in_client, archive, monkeypatc
 def test_serve_blog_hides_read_stories(logged_in_client, archive, monkeypatch):
     """/blog (inbox) must hide stories whose content_hash is in read_articles."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     import TubeNews as _tn
     monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
@@ -1953,7 +1953,7 @@ def test_serve_all_returns_200(logged_in_client):
 def test_serve_all_shows_both_read_and_unread_stories(logged_in_client, archive, monkeypatch):
     """/all must show stories regardless of read status."""
     import web.app as _wa
-    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "users")
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     import TubeNews as _tn
     monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)

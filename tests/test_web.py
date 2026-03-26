@@ -265,7 +265,7 @@ def flask_env(tmp_path, monkeypatch):
     - WTF_CSRF_ENABLED disabled so POST forms work without tokens.
     - CONFIG_FILE points to a temp TubeNews.json with no base_url set,
       so _feed_url/_blog_url must return root-relative paths.
-    - USERS_ROOT points to tmp_path/users.
+    - USERS_ROOT points to tmp_path/_users.
     - Admin is logged in via the real /login route before yielding.
     """
     _web_app.app.config["TESTING"] = True
@@ -281,7 +281,7 @@ def flask_env(tmp_path, monkeypatch):
     }))
     monkeypatch.setattr(_web_app, "CONFIG_FILE", config_file)
 
-    users_root = tmp_path / "users"
+    users_root = tmp_path / "_users"
     users_root.mkdir()
     monkeypatch.setattr(_web_app, "USERS_ROOT", users_root)
 

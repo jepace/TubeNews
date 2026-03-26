@@ -79,16 +79,26 @@ The current storage model is intentionally simple:
 
 - **Feeds** are stored as a JSON array in `TubeNews.json` under `feeds`.
   This is the operator config file — read directly by the CLI tool at startup.
-- **Users** are stored as individual `archive/users/<uuid>/user.json` files
-  with no central index. Discovery happens by globbing `archive/users/*/user.json`
-  at runtime.
+- **Users** are stored as individual `archive/_users/<uuid>/user.json` files.
+  Discovery happens by globbing `archive/_users/*/user.json` at runtime.
 
 These two patterns are deliberately different: feeds are configuration (small,
 operator-managed, read at startup), users are application state (runtime-created,
 individually owned).
 
+**User data should eventually move outside `archive/`.**  The current location
+(`archive/_users/`) is a half-step: the `_` prefix makes the directory
+invisible to all archive scanners and blocked by `serve_archive` with a single
+rule, but user account data (password hashes, email addresses, tokens) still
+lives inside the same tree as public RSS and story content.  The right long-term
+fix is to move user storage to a sibling directory (e.g. a top-level `users/`
+or `data/users/` next to `archive/`) so the separation is structural, not just
+naming convention.  This requires updating `USERS_ROOT` in `web/app.py`,
+`STORAGE_ROOT / "_users"` in `TubeNews.py`, and the corresponding paths in all
+tests, plus a one-time migration script for existing installs.
+
 ~~**If the user count grows large enough that glob-scanning on every login/lookup
-becomes a bottleneck**, consider adding a lightweight `archive/users/index.json`
+becomes a bottleneck**, consider adding a lightweight `archive/_users/index.json`
 that maps email → uuid. The per-user files stay as-is; the index just speeds up
 `_find_user_by_email()`. Rebuild the index on registration, deletion, and email
 change. No schema migration needed for existing user directories.~~ **Done — see Completed Items.**
@@ -111,9 +121,9 @@ check `feeds.json` into version control (no secrets) while keeping
 
 ### Email index for O(1) user lookup (March 2026)
 
-`_find_user_by_email()` previously globbed `archive/users/*/user.json` on every
+`_find_user_by_email()` previously globbed `archive/_users/*/user.json` on every
 login, duplicate-email check, and admin info update — O(n) in the number of
-users. An `archive/users/index.json` file (email → UUID dict) now provides O(1)
+users. An `archive/_users/index.json` file (email → UUID dict) now provides O(1)
 lookup. The index is written atomically (write-then-rename) and is kept in sync
 on registration, admin-created accounts, account deletion, and email changes.
 `_find_user_by_email()` still falls back to a glob scan if the index is missing

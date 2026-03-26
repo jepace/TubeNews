@@ -70,7 +70,7 @@ from TubeNews import (  # noqa: E402
 )
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
-USERS_ROOT = STORAGE_ROOT / "users"
+USERS_ROOT = STORAGE_ROOT / "_users"
 LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
 TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 
@@ -670,9 +670,7 @@ def serve_archive(filename=""):
     """Serve static files from the archive directory (feeds, stories, etc.)."""
     if not filename:
         abort(404)
-    # Never expose user account data or internal reserved directories.
-    if filename == "users" or filename.startswith("users/"):
-        abort(404)
+    # Never expose internal reserved directories (including _users/).
     if filename.startswith("_"):
         abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None

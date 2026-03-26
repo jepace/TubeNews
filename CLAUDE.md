@@ -121,7 +121,7 @@ Defined in `web/app.py`:
 | `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory`. Body lines are HTML-escaped with `html.escape()` before joining, so `body_html` is safe for `{{ ... \| safe }}` rendering. |
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* may be a single string (legacy) or a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
-| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `archive/users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses carry the UUIDs of all subscribers who set that focus; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
+| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `archive/_users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses carry the UUIDs of all subscribers who set that focus; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
 
 ### YouTube data-gathering
 
@@ -148,8 +148,8 @@ Defined in `web/app.py`:
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `archive/<channel>/rss.xml` (all stories) |
 | `rebuild_aggregate_feed(base_url)` | Generates `archive/rss.xml` from all channels (all stories) |
 | `build_user_feed_xml(user, base_url)` | Builds and returns RSS feed XML bytes for a user's subscribed channels; does **not** write to disk |
-| `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `archive/users/<slug>/rss.xml` to disk |
-| `rebuild_user_blog(user, base_url)` | Generates `archive/users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
+| `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `archive/_users/<slug>/rss.xml` to disk |
+| `rebuild_user_blog(user, base_url)` | Generates `archive/_users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
 
 ### Processing orchestration
 
@@ -247,10 +247,16 @@ archive/
 │   └── rss.xml                 # Per-channel RSS feed
 ├── _run_logs/                  # Per-run stdout/stderr logs (reserved — leading _ prevents slug collision)
 │   └── run-<pid>.log           # Log file for a single TubeNews.py run (named by PID)
+├── _users/                     # User account data (reserved — never served publicly)
+│   ├── index.json              # email→UUID index for O(1) login lookup
+│   └── <uuid>/
+│       ├── user.json           # Account data (see schema in Web Application section)
+│       ├── rss.xml             # Pre-built personal feed (CLI only; web app generates dynamically)
+│       └── index.html          # Pre-built blog page (CLI only; web app generates dynamically)
 └── rss.xml                     # Regional aggregate feed (all channels)
 ```
 
-**Reserved directory naming convention:** Directories whose names start with `_` are reserved for internal use (e.g., `_run_logs`). Because `slugify()` strips leading underscores, no channel name can produce a slug that starts with `_`, so there is no namespace collision risk. All archive scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive_channel_stats`, etc.) skip directories whose names start with `_`.
+**Reserved directory naming convention:** Directories whose names start with `_` are reserved for internal use (e.g., `_run_logs`, `_users`). Because `slugify()` strips leading underscores, no channel name can produce a slug that starts with `_`, so there is no namespace collision risk. All archive scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive_channel_stats`, etc.) skip directories whose names start with `_`.
 
 ### Story Markdown Format
 
@@ -369,10 +375,10 @@ and `STORAGE_ROOT` directly from `TubeNews.py`.
 
 ### User Storage
 
-Each user is stored as a UUID-named directory under `archive/users/`:
+Each user is stored as a UUID-named directory under `archive/_users/`:
 
 ```
-archive/users/
+archive/_users/
 └── <uuid>/
     ├── user.json      # account data (see schema below)
     ├── rss.xml        # personal RSS feed (pre-built by CLI; not used by web app)
@@ -423,7 +429,7 @@ backwards compatibility.
 Both the feed and blog are generated fresh on each request from the live archive:
 
 **RSS feed** (`/feed/<token>.xml`):
-1. Token matched to a user in `archive/users/`
+1. Token matched to a user in `archive/_users/`
 2. `build_user_feed_xml()` scans `archive/` and builds feedgen XML in memory
 3. XML bytes returned directly as the HTTP response — nothing written to disk
 
@@ -450,8 +456,8 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_feed_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
 | `_find_archive_dir_for_channel(channel_id)` | Scans `archive/*/channel.json` and returns the `Path` whose `channel_id` matches; used by `admin_feed_edit` to locate the archive dir regardless of historical directory naming |
 | `_blog_url(token)` | Builds the full `/blog/<token>.html` URL using `base_url` or `url_for` |
-| `_read_email_index()` | Returns the email→UUID dict from `archive/users/index.json`; returns `{}` on any error |
-| `_write_email_index(index)` | Atomically writes the email→UUID dict to `archive/users/index.json` (write-then-rename) |
+| `_read_email_index()` | Returns the email→UUID dict from `archive/_users/index.json`; returns `{}` on any error |
+| `_write_email_index(index)` | Atomically writes the email→UUID dict to `archive/_users/index.json` (write-then-rename) |
 | `_index_add(email, uid)` | Adds or updates an entry in the email index |
 | `_index_remove(email)` | Removes an entry from the email index |
 | `_find_user_by_email(email)` | O(1) lookup via `index.json`; falls back to a glob scan and repairs the index if the entry is missing or stale |
@@ -467,7 +473,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET | `/` | `index` | Redirects to dashboard or login |
 | GET/POST | `/login` | `login` | Login form (rate-limited: 10/min) |
 | GET/POST | `/register` | `register` | Registration form (rate-limited: 5/min) |
-| GET | `/archive/<path>` | `serve_archive` | Serves files from `archive/` directory; blocks `users/` and any path starting with `_` (e.g. `_run_logs/`) |
+| GET | `/archive/<path>` | `serve_archive` | Serves files from `archive/` directory; blocks any path starting with `_` (covers `_users/`, `_run_logs/`, etc.) |
 | GET | `/feed/<token>.xml` | `serve_feed` | Personal RSS feed by token |
 | GET | `/blog/<token>.html` | `serve_blog_public` | Personal blog page by token |
 
@@ -531,7 +537,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 - Login and register routes are rate-limited (flask-limiter). Rate limiting uses per-worker in-memory storage; with 4 gunicorn workers the effective limit is 4× the configured value. Upgrading to Redis storage would enforce a true global limit.
 - `ProxyFix` middleware (`werkzeug.middleware.proxy_fix.ProxyFix`) is applied with `x_for=1, x_proto=1, x_host=1` so rate limiting and IP logging see real client IPs when running behind nginx/Caddy. Only one proxy level is trusted — do not increase `x_for` unless there are multiple proxy hops.
 - `/logout` is POST-only with CSRF protection to prevent logout CSRF attacks.
-- `serve_archive` blocks both `users/` (account data) and any path starting with `_` (internal dirs like `_run_logs/`).
+- `serve_archive` blocks any path starting with `_`, which covers both `_users/` (account data) and `_run_logs/` (internal logs) with a single rule.
 - `SESSION_COOKIE_SECURE` is only set when `TUBENEWS_HTTPS=true` is in the
   environment, so local dev works without HTTPS.
 - Admins are determined solely by email match against `admin_users` in
