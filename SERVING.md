@@ -278,20 +278,7 @@ mv archive content
 ```
 
 Then restart the server. If you have `"archive_dir"` set in `TubeNews.json`,
-rename the key to `"content_dir"` (or leave it as `"archive_dir"` — both are
-accepted for backward compatibility).
-
-### Renaming `archive/users/` to `content/_users/`
-
-If upgrading from a very early install that pre-dates the `_`-prefix convention
-(user data was at `archive/users/`), rename in two steps:
-
-```bash
-mv archive/users archive/_users   # if not already done
-mv archive content                 # rename the whole directory
-```
-
-No other changes are needed — all user data is intact at the new path.
+rename the key to `"content_dir"`.
 
 ---
 

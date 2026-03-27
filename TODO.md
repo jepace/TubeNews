@@ -4,70 +4,22 @@
 
 ## Potential Future Improvement: Parallelization
 
-The script currently runs everything sequentially. Below is an analysis of
-where parallelism would help and where it would introduce race conditions.
+Parallel channel processing is implemented via `ThreadPoolExecutor` in
+`_main_body`, capped by `max_parallel_feeds` (default 3). All thread-safety
+issues identified when this section was written have since been resolved
+(see Completed Items). One further opportunity remains:
 
-### High-value opportunities
+**Parallel YouTube tab scraping (`discover_videos`)**
+The `videos` and `streams` tabs are fetched sequentially inside
+`discover_videos`. Fetching them concurrently with a two-worker
+`ThreadPoolExecutor` would roughly halve per-channel discovery time with zero
+shared mutable state — no race risk. Low priority given that transcript and
+Gemini calls dominate wall-clock time.
 
-**1. Parallel YouTube tab scraping (`discover_videos`, lines ~264–279)**
-The `videos` and `streams` tabs are fetched one after the other with no
-dependency between them. Switching to `ThreadPoolExecutor` with a trivial
-merge would halve discovery time per channel. Zero shared mutable state —
-no race risk.
-
-**2. Parallel channel processing (`main` loop, lines ~803–810)**
-Each channel writes to its own `content/<slug>/` directory, so the per-channel
-pipeline (discovery → transcript fetch → Gemini → per-channel `rss.xml`) is
-largely independent. Running channels concurrently is the highest-value target:
-most wall-clock time is spent blocked on HTTP responses, and a 5-channel config
-would run roughly 5× faster in theory.
-
-### Race conditions to address before parallelizing
-
-**`content/rss.xml` — the aggregate feed (line ~809)**
-`rebuild_aggregate_feed()` is called inside the per-feed loop as soon as a channel
-produces content. It reads *all* channel directories, then overwrites the
-single shared `content/rss.xml`. Two threads finishing simultaneously would
-both invoke it concurrently, potentially interleaving reads with a partial
-write or clobbering each other's output.
-Fix: collect a `content_changed` flag per thread, then call
-`rebuild_aggregate_feed()` exactly once after all channel threads have joined.
-
-**`ai_disabled` / `ai_rate_limited` flags (lines ~711, ~769, ~800–806)**
-These are plain `bool` variables. In a threaded scenario the check-then-act
-pattern is not thread-safe. A `threading.Event` (set once when any thread hits
-429, checked by all others) would be the right primitive. Practical impact
-without the fix: a handful of extra Gemini calls before all threads observe
-the flag — wasteful but not data-corrupting.
-
-**`write_story_files()` delete-then-rewrite (lines ~415–416)**
-The function globs and unlinks stale `*.md` files, then writes new ones.
-If two threads ever processed the *same* video concurrently (e.g. duplicate
-channel entries in config, or future intra-feed parallelism), their interleaved
-deletes and writes would produce a mixed set of story files. No risk today at
-the channel-parallel level because each video's directory name is unique, but
-it becomes a TOCTOU hazard if videos within a feed are ever parallelized.
-
-**Shared API keys / quota**
-Parallelizing channels multiplies concurrent outbound API calls. The Gemini
-rate limit (already a single-point failure) is hit sooner, and Supadata quota
-drains faster. Any parallelism implementation should include a concurrency
-cap (e.g. `max_workers=2`) or a shared `threading.Semaphore` on Gemini calls.
-
-**`feed_dir.iterdir()` unprocessed check (lines ~723–729)**
-The "is this video already archived?" scan reads the directory at a moment in
-time. With two threads processing the same channel the scan is a TOCTOU issue:
-both see the same unprocessed list and both attempt the same videos. A
-per-video lock (keyed on video ID) or an atomic `mkdir` check would fix this.
-
-### What cannot be parallelized without deeper redesign
-
-- **Videos within a single feed:** `ai_rate_limited` is a local variable
-  propagated serially through the `process_feed` loop. Parallelizing
-  intra-feed videos requires restructuring this state.
-- **`rebuild_aggregate_feed()`:** Its read-all-channels + write-one-file pattern
-  makes it inherently a serial barrier operation; it should always run after
-  all other work completes.
+**Videos within a single feed cannot be parallelized without deeper redesign.**
+`ai_rate_limited` and `transcript_rate_limit_event` are shared events threaded
+serially through `process_feed`. Parallelizing intra-feed video processing
+would require restructuring that state propagation.
 
 ---
 
@@ -125,6 +77,26 @@ check `feeds.json` into version control (no secrets) while keeping
 ---
 
 ## Completed Items
+
+### Parallel channel processing with all race conditions resolved (March 2026)
+
+`_main_body` now runs channels concurrently via `ThreadPoolExecutor`, capped
+by the `max_parallel_feeds` config key (default 3). All races identified in
+the pre-parallelization analysis were addressed:
+
+- **`content/rss.xml` aggregate feed:** `rebuild_aggregate_feed()` is called
+  exactly once after `executor.map()` returns (all threads joined), using a
+  `any_content_changed` `threading.Event` as the flag. It never runs inside a
+  thread.
+- **`ai_rate_limited` / `transcript_rate_limit_event`:** Both are
+  `threading.Event` objects shared across threads; `.set()` is idempotent and
+  the check-then-skip pattern is safe.
+- **Duplicate `channel_id` TOCTOU:** `_main_body` validates the feeds list for
+  duplicate `channel_id` values before spawning any threads and exits with a
+  clear error if found, preventing two threads from processing the same channel
+  directories concurrently.
+- **Concurrency cap:** `max_parallel_feeds` (default 3) limits simultaneous
+  outbound API calls.
 
 ### Email index for O(1) user lookup (March 2026)
 

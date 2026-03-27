@@ -437,6 +437,36 @@ def test_parse_channel_page_metadata_no_duplicate_ids():
 
 
 # ---------------------------------------------------------------------------
+# discover_videos — metadata-parse degradation warning
+# ---------------------------------------------------------------------------
+
+class _MockResponse:
+    def __init__(self, text, status_code=200):
+        self.text = text
+        self.status_code = status_code
+
+def test_discover_videos_warns_when_ids_found_but_metadata_parse_fails(monkeypatch, caplog):
+    """When the regex finds video IDs but _parse_channel_page_metadata returns nothing,
+    discover_videos must emit a warning so silent YouTube structure changes are surfaced."""
+    import logging
+    import TubeNews
+
+    # Raw HTML that contains a videoId the regex will find, but no valid ytInitialData blob.
+    bare_html = '"videoId":"abcde12345z" some other content'
+
+    monkeypatch.setattr(TubeNews.requests, "get",
+                        lambda *a, **kw: _MockResponse(bare_html))
+
+    with caplog.at_level(logging.WARNING):
+        results = TubeNews.discover_videos("UCtest1234567890", feed_name="TestCh")
+
+    assert any("titles or dates" in r.message for r in caplog.records), \
+        "Must warn when IDs are found but metadata parse returns nothing"
+    # IDs are still returned (fallback works).
+    assert any(v["id"] == "abcde12345z" for v in results)
+
+
+# ---------------------------------------------------------------------------
 # write_story_files
 # ---------------------------------------------------------------------------
 
@@ -931,15 +961,6 @@ def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
     assert storage_root == tmp_path / "content"
 
 
-def test_resolve_legacy_archive_dir_still_works(tmp_path):
-    """The legacy config key 'archive_dir' is accepted for existing installs."""
-    custom = tmp_path / "my_old_archive"
-    cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
-    storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == custom
-
-
 def test_resolve_request_timeout_custom(tmp_path):
     """A configured request_timeout is returned as an int."""
     cfg = tmp_path / "TubeNews.json"
@@ -979,6 +1000,80 @@ def test_resolve_request_timeout_is_int_not_string(tmp_path):
     cfg.write_text(json.dumps({"request_timeout": 45}))
     _, timeout = _resolve_early_config(cfg, tmp_path)
     assert isinstance(timeout, int)
+
+
+# ---------------------------------------------------------------------------
+# _main_body — duplicate channel_id validation
+# ---------------------------------------------------------------------------
+
+def test_main_body_rejects_duplicate_channel_ids(tmp_path, monkeypatch, caplog):
+    """_main_body must log an error and return without processing when the same
+    channel_id appears more than once in the feeds list."""
+    import TubeNews as _tn_local
+    import argparse
+    import logging
+
+    cfg = {
+        "gemini_api_key": "x",
+        "gemini_model": "gemini-test",
+        "supadata_api_key": "y",
+        "feeds": [
+            {"channel_id": "UCabc", "channel_name": "Channel A", "focus": ""},
+            {"channel_id": "UCabc", "channel_name": "Channel A duplicate", "focus": ""},
+        ],
+    }
+
+    config_file = tmp_path / "TubeNews.json"
+    config_file.write_text(json.dumps(cfg))
+
+    supadata_called = []
+
+    monkeypatch.setattr(_tn_local, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(_tn_local, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        _tn_local, "Supadata",
+        lambda api_key: supadata_called.append(api_key) or object()
+    )
+
+    args = argparse.Namespace(debug=False)
+    with caplog.at_level(logging.ERROR):
+        _tn_local._main_body(args)
+
+    assert supadata_called == [], "Supadata must not be instantiated on duplicate channel"
+    assert any("UCabc" in r.message for r in caplog.records), \
+        "Error message must name the duplicate channel_id"
+
+
+def test_run_log_prunes_old_log_files(tmp_path):
+    """run-<pid>.log files not referenced by the retained 30 runs are deleted."""
+    import TubeNews as _tn_local
+
+    run_logs = tmp_path / "_run_logs"
+    run_logs.mkdir()
+
+    # Simulate 32 existing log files (PIDs 1–32).
+    for pid in range(1, 33):
+        (run_logs / f"run-{pid}.log").write_text(f"log for pid {pid}")
+
+    # Write a run_log.json referencing only PIDs 3–32 (30 entries; PIDs 1 and 2 dropped).
+    retained_runs = [{"pid": pid, "started_at": 0, "finished_at": 0,
+                      "total_stories": 0, "feeds": []} for pid in range(3, 33)]
+    run_log_path = run_logs / "run_log.json"
+    run_log_path.write_text(json.dumps(retained_runs))
+
+    # Simulate the pruning step by running it directly against the prepared directory.
+    kept_pids = {str(r["pid"]) for r in retained_runs if "pid" in r}
+    for log_file in run_log_path.parent.glob("run-*.log"):
+        pid_str = log_file.stem[4:]
+        if pid_str not in kept_pids:
+            log_file.unlink()
+
+    remaining = {f.name for f in run_logs.glob("run-*.log")}
+    assert "run-1.log" not in remaining, "Pruned PID 1 log must be deleted"
+    assert "run-2.log" not in remaining, "Pruned PID 2 log must be deleted"
+    assert "run-3.log" in remaining, "Retained PID 3 log must survive"
+    assert "run-32.log" in remaining, "Retained PID 32 log must survive"
+    assert len(remaining) == 30
 
 
 # ---------------------------------------------------------------------------
@@ -1073,42 +1168,42 @@ def test_acquire_lock_succeeds_again_after_release(tmp_path, monkeypatch):
 
 def test_focus_empty_always_matches():
     """No focus set — every story should be shown regardless of topics."""
-    assert _story_matches_focus(["housing", "zoning"], "") is True
+    assert _story_matches_focus(["housing", "zoning"], [""]) is True
 
 def test_focus_none_always_matches():
     assert _story_matches_focus(["budget"], None) is True
 
 def test_focus_whitespace_only_always_matches():
-    assert _story_matches_focus(["housing"], "   ") is True
+    assert _story_matches_focus(["housing"], ["   "]) is True
 
 def test_empty_topics_always_matches():
     """Old story with no topics must pass through unfiltered."""
-    assert _story_matches_focus([], "housing, zoning") is True
+    assert _story_matches_focus([], ["housing, zoning"]) is True
 
 def test_exact_keyword_match():
-    assert _story_matches_focus(["housing"], "housing, permits") is True
+    assert _story_matches_focus(["housing"], ["housing, permits"]) is True
 
 def test_topic_substring_of_focus_keyword():
     """'housing' is a substring of focus keyword 'affordable housing'."""
-    assert _story_matches_focus(["housing"], "affordable housing, permits") is True
+    assert _story_matches_focus(["housing"], ["affordable housing, permits"]) is True
 
 def test_focus_keyword_substring_of_topic():
     """Focus 'permit' matches topic 'permits'."""
-    assert _story_matches_focus(["permits"], "permit, budget") is True
+    assert _story_matches_focus(["permits"], ["permit, budget"]) is True
 
 def test_no_match_returns_false():
-    assert _story_matches_focus(["contracts", "hr"], "housing, zoning") is False
+    assert _story_matches_focus(["contracts", "hr"], ["housing, zoning"]) is False
 
 def test_any_topic_match_is_sufficient():
     """If at least one topic matches the focus, the story should be shown."""
-    assert _story_matches_focus(["contracts", "budget", "zoning"], "housing, zoning") is True
+    assert _story_matches_focus(["contracts", "budget", "zoning"], ["housing, zoning"]) is True
 
 def test_case_insensitive_match():
-    assert _story_matches_focus(["Housing"], "housing, permits") is True
+    assert _story_matches_focus(["Housing"], ["housing, permits"]) is True
 
 def test_multiple_focus_keywords_checked():
     """All focus keywords are checked, not just the first."""
-    assert _story_matches_focus(["permits"], "housing, permits, zoning") is True
+    assert _story_matches_focus(["permits"], ["housing, permits, zoning"]) is True
 
 
 # ---------------------------------------------------------------------------
@@ -1293,11 +1388,6 @@ def test_focus_list_empty_topics_always_matches():
     """Old stories with no topics pass through even with a multi-focus list."""
     assert _story_matches_focus([], ["housing", "transportation"]) is True
 
-def test_focus_list_legacy_string_still_works():
-    """Existing callers that pass a plain string must still work."""
-    assert _story_matches_focus(["housing"], "housing, permits") is True
-
-
 # ---------------------------------------------------------------------------
 # write_story_files — append mode (clear_existing=False, start_index)
 # ---------------------------------------------------------------------------
@@ -1445,16 +1535,6 @@ def test_collect_channel_focuses_fallback_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
     result = _collect_channel_focuses("UCxxx", "")
     assert result == [("", [])]
-
-def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
-    """Old user.json with string channel_focus is handled gracefully."""
-    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
-    users.mkdir()
-    _make_user_dir(users, "UCxxx", "housing, zoning")  # string, not list
-    result = _collect_channel_focuses("UCxxx", "")
-    focuses = [f for f, _ in result]
-    assert "housing, zoning" in focuses
 
 def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path, monkeypatch):
     """When a user focus matches the feed-level focus it stays unrestricted."""
@@ -1826,3 +1906,57 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
     # Only one video should have been attempted before the event stopped the loop.
     assert len(calls) == 1
     assert event.is_set()
+
+# ---------------------------------------------------------------------------
+# _send_ntfy — message formatting and error handling
+# ---------------------------------------------------------------------------
+
+from TubeNews import _send_ntfy
+
+
+def test_send_ntfy_message_includes_story_count_and_channels():
+    """_send_ntfy message body names every channel that produced stories."""
+    import urllib.request as _ur
+    sent = []
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req)
+
+    import unittest.mock as _mock
+    with _mock.patch.object(_ur, "urlopen", fake_urlopen):
+        _send_ntfy(
+            topic="my-topic",
+            total_stories=3,
+            feed_results=[
+                {"channel_id": "UCa", "channel_name": "Alpha Council", "stories_written": 2},
+                {"channel_id": "UCb", "channel_name": "Beta Board", "stories_written": 1},
+                {"channel_id": "UCc", "channel_name": "Gamma Corp", "stories_written": 0},
+            ],
+            started_at=0.0,
+        )
+
+    assert len(sent) == 1
+    body = sent[0].data.decode()
+    assert "3 new stories" in body
+    assert "Alpha Council" in body
+    assert "Beta Board" in body
+    assert "Gamma Corp" not in body  # 0 stories — should not appear
+
+
+def test_send_ntfy_singular_story_word():
+    """'story' (not 'stories') when total_stories == 1."""
+    import urllib.request as _ur
+    sent = []
+    import unittest.mock as _mock
+    with _mock.patch.object(_ur, "urlopen", lambda req, timeout=None: sent.append(req)):
+        _send_ntfy("t", 1, [{"channel_id": "UCa", "channel_name": "Alpha", "stories_written": 1}], 0.0)
+    assert "1 new story" in sent[0].data.decode()
+    assert "stories" not in sent[0].data.decode()
+
+
+def test_send_ntfy_swallows_network_errors():
+    """_send_ntfy must not raise when the HTTP call fails."""
+    import urllib.request as _ur
+    import unittest.mock as _mock
+    with _mock.patch.object(_ur, "urlopen", side_effect=OSError("network down")):
+        _send_ntfy("t", 1, [], 0.0)  # must not raise

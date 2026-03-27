@@ -38,8 +38,7 @@ CONFIG_FILE = BASE_DIR / "TubeNews.json"
 
 try:
     _cfg = json.loads(CONFIG_FILE.read_text())
-    # "content_dir" is the current key; "archive_dir" is accepted for existing installs.
-    _content_dir = _cfg.get("content_dir") or _cfg.get("archive_dir", "")
+    _content_dir = _cfg.get("content_dir", "")
     if _content_dir:
         _p = Path(_content_dir)
         STORAGE_ROOT = _p if _p.is_absolute() else (BASE_DIR / _p).resolve()
