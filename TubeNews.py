@@ -63,8 +63,7 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]
 
         # content_dir — where processed content is stored.
         # Absolute paths are used as-is; relative paths resolve from base_dir.
-        # Also accepts the legacy key "archive_dir" for existing installs.
-        content_dir = cfg.get("content_dir") or cfg.get("archive_dir", "")
+        content_dir = cfg.get("content_dir", "")
         if content_dir:
             p = Path(content_dir)
             storage_root = p if p.is_absolute() else (base_dir / p).resolve()
@@ -270,15 +269,14 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     }
 
 
-def _story_matches_focus(story_topics: list[str], focuses: str | list[str]) -> bool:
+def _story_matches_focus(story_topics: list[str], focuses: list[str]) -> bool:
     """Return True if a story should be shown for the given focus configuration.
 
-    *focuses* may be a single comma-separated string (legacy) or a list of
-    such strings (one per user-configured focus line).  A story passes if it
-    matches **any** of the focus strings.
+    *focuses* is a list of focus strings (one per user-configured focus line).
+    A story passes if it matches **any** of the focus strings.
 
     Matching rules:
-    - No focus set (empty string / empty list) → always True (show everything).
+    - No focus set (empty list) → always True (show everything).
     - Story has no topics (written before topic tagging was added) → always True
       (graceful degradation; don't hide old content).
     - Otherwise: any story topic that is a substring of a focus keyword, or vice
@@ -286,19 +284,17 @@ def _story_matches_focus(story_topics: list[str], focuses: str | list[str]) -> b
       (e.g. topic ``"housing"`` matches focus ``"affordable housing"``).
 
     Examples:
-        >>> _story_matches_focus(["housing", "zoning"], "housing, permits")
+        >>> _story_matches_focus(["housing", "zoning"], ["housing, permits"])
         True
-        >>> _story_matches_focus(["contracts"], "housing, zoning")
+        >>> _story_matches_focus(["contracts"], ["housing, zoning"])
         False
-        >>> _story_matches_focus([], "housing")
+        >>> _story_matches_focus([], ["housing"])
         True
-        >>> _story_matches_focus(["budget"], "")
+        >>> _story_matches_focus(["budget"], [])
         True
         >>> _story_matches_focus(["roads"], ["housing", "transportation, roads"])
         True
     """
-    if isinstance(focuses, str):
-        focuses = [focuses] if focuses.strip() else []
     focuses = [f for f in (focuses or []) if f and f.strip()]
     if not focuses:
         return True
@@ -1155,8 +1151,6 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str
             if channel_id not in data.get("channel_ids", []):
                 continue
             raw = data.get("channel_focus", {}).get(channel_id, [])
-            if isinstance(raw, str):
-                raw = [raw] if raw.strip() else []
             for f in raw:
                 f = f.strip()
                 if not f:

@@ -931,15 +931,6 @@ def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
     assert storage_root == tmp_path / "content"
 
 
-def test_resolve_legacy_archive_dir_still_works(tmp_path):
-    """The legacy config key 'archive_dir' is accepted for existing installs."""
-    custom = tmp_path / "my_old_archive"
-    cfg = tmp_path / "TubeNews.json"
-    cfg.write_text(json.dumps({"archive_dir": str(custom)}))
-    storage_root, _ = _resolve_early_config(cfg, tmp_path)
-    assert storage_root == custom
-
-
 def test_resolve_request_timeout_custom(tmp_path):
     """A configured request_timeout is returned as an int."""
     cfg = tmp_path / "TubeNews.json"
@@ -1073,42 +1064,42 @@ def test_acquire_lock_succeeds_again_after_release(tmp_path, monkeypatch):
 
 def test_focus_empty_always_matches():
     """No focus set — every story should be shown regardless of topics."""
-    assert _story_matches_focus(["housing", "zoning"], "") is True
+    assert _story_matches_focus(["housing", "zoning"], [""]) is True
 
 def test_focus_none_always_matches():
     assert _story_matches_focus(["budget"], None) is True
 
 def test_focus_whitespace_only_always_matches():
-    assert _story_matches_focus(["housing"], "   ") is True
+    assert _story_matches_focus(["housing"], ["   "]) is True
 
 def test_empty_topics_always_matches():
     """Old story with no topics must pass through unfiltered."""
-    assert _story_matches_focus([], "housing, zoning") is True
+    assert _story_matches_focus([], ["housing, zoning"]) is True
 
 def test_exact_keyword_match():
-    assert _story_matches_focus(["housing"], "housing, permits") is True
+    assert _story_matches_focus(["housing"], ["housing, permits"]) is True
 
 def test_topic_substring_of_focus_keyword():
     """'housing' is a substring of focus keyword 'affordable housing'."""
-    assert _story_matches_focus(["housing"], "affordable housing, permits") is True
+    assert _story_matches_focus(["housing"], ["affordable housing, permits"]) is True
 
 def test_focus_keyword_substring_of_topic():
     """Focus 'permit' matches topic 'permits'."""
-    assert _story_matches_focus(["permits"], "permit, budget") is True
+    assert _story_matches_focus(["permits"], ["permit, budget"]) is True
 
 def test_no_match_returns_false():
-    assert _story_matches_focus(["contracts", "hr"], "housing, zoning") is False
+    assert _story_matches_focus(["contracts", "hr"], ["housing, zoning"]) is False
 
 def test_any_topic_match_is_sufficient():
     """If at least one topic matches the focus, the story should be shown."""
-    assert _story_matches_focus(["contracts", "budget", "zoning"], "housing, zoning") is True
+    assert _story_matches_focus(["contracts", "budget", "zoning"], ["housing, zoning"]) is True
 
 def test_case_insensitive_match():
-    assert _story_matches_focus(["Housing"], "housing, permits") is True
+    assert _story_matches_focus(["Housing"], ["housing, permits"]) is True
 
 def test_multiple_focus_keywords_checked():
     """All focus keywords are checked, not just the first."""
-    assert _story_matches_focus(["permits"], "housing, permits, zoning") is True
+    assert _story_matches_focus(["permits"], ["housing, permits, zoning"]) is True
 
 
 # ---------------------------------------------------------------------------
@@ -1293,11 +1284,6 @@ def test_focus_list_empty_topics_always_matches():
     """Old stories with no topics pass through even with a multi-focus list."""
     assert _story_matches_focus([], ["housing", "transportation"]) is True
 
-def test_focus_list_legacy_string_still_works():
-    """Existing callers that pass a plain string must still work."""
-    assert _story_matches_focus(["housing"], "housing, permits") is True
-
-
 # ---------------------------------------------------------------------------
 # write_story_files — append mode (clear_existing=False, start_index)
 # ---------------------------------------------------------------------------
@@ -1445,16 +1431,6 @@ def test_collect_channel_focuses_fallback_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
     result = _collect_channel_focuses("UCxxx", "")
     assert result == [("", [])]
-
-def test_collect_channel_focuses_legacy_string_value(tmp_path, monkeypatch):
-    """Old user.json with string channel_focus is handled gracefully."""
-    monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
-    users.mkdir()
-    _make_user_dir(users, "UCxxx", "housing, zoning")  # string, not list
-    result = _collect_channel_focuses("UCxxx", "")
-    focuses = [f for f, _ in result]
-    assert "housing, zoning" in focuses
 
 def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path, monkeypatch):
     """When a user focus matches the feed-level focus it stays unrestricted."""

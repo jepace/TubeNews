@@ -119,7 +119,7 @@ Defined in `web/app.py`:
 | `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore). Defined in `tubenews_utils.py`; re-exported by `TubeNews.py`. |
 | `_fmt_no_leading_zeros(dt, fmt)` | Formats a `datetime` with `fmt` and strips POSIX-style leading zeros from day/hour fields. Portable replacement for `%-d`/`%-I`. |
 | `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory`. Body lines are HTML-escaped with `html.escape()` before joining, so `body_html` is safe for `{{ ... \| safe }}` rendering. |
-| `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* may be a single string (legacy) or a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
+| `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* is a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
 | `_collect_channel_focuses(channel_id, feed_focus)` | Reads `content/_users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses carry the UUIDs of all subscribers who set that focus; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
 
@@ -306,7 +306,7 @@ Story body text in AP inverted pyramid style...
 | `feeds[].channel_id` | Yes | YouTube channel ID (starts with `UC`) |
 | `feeds[].channel_name` | Yes | Human-readable name; used to create `content/` subfolder |
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
-| `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. Legacy key `archive_dir` is accepted for existing installs. |
+| `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. |
 | `request_timeout` | No | Seconds before giving up on YouTube scrape and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
@@ -409,7 +409,7 @@ content/_users/
 ```
 
 - `channel_ids` — authoritative subscription list.
-- `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3); old installs may store a plain string — both are handled transparently. Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
+- `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3). Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes.

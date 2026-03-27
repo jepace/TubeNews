@@ -438,12 +438,10 @@ def _sanitize_focus(text: str) -> str:
 
 @app.template_filter("focuses_text")
 def focuses_text(val) -> str:
-    """Render a channel_focus value (str or list[str]) as newline-separated text."""
+    """Render a channel_focus list[str] as newline-separated text."""
     if not val:
         return ""
-    if isinstance(val, list):
-        return "\n".join(val)
-    return str(val)
+    return "\n".join(val)
 
 
 def admin_required(f):
@@ -467,24 +465,13 @@ def _safe_next(url: str | None) -> str:
     return url_for("serve_blog")
 
 
-def _channel_info_for_dir(channel_dir: Path, channels_cfg: list[FeedConfig]) -> ChannelInfo | None:
-    """Return ``{channel_id, channel_name}`` for *channel_dir*.
-
-    Reads ``channel.json`` when present; falls back to matching the directory
-    name against ``slugify(channel_name)`` for each configured channel so that
-    old archive directories created before ``channel.json`` was introduced are
-    still recognised.
-    """
+def _channel_info_for_dir(channel_dir: Path) -> ChannelInfo | None:
+    """Return ``{channel_id, channel_name}`` for *channel_dir*, or None."""
     channel_json = channel_dir / "channel.json"
-    if channel_json.exists():
-        try:
-            return json.loads(channel_json.read_text())
-        except Exception:
-            pass
-    for ch in channels_cfg:
-        if slugify(ch["channel_name"]) == channel_dir.name:
-            return {"channel_id": ch["channel_id"], "channel_name": ch["channel_name"]}
-    return None
+    try:
+        return json.loads(channel_json.read_text())
+    except Exception:
+        return None
 
 
 def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
@@ -509,11 +496,10 @@ def _archive_channel_stats() -> list[ChannelStat]:
     stats = []
     if not STORAGE_ROOT.is_dir():
         return stats
-    channels_cfg = _load_channels()
     for channel_dir in STORAGE_ROOT.iterdir():
         if not channel_dir.is_dir() or channel_dir.name == "users" or channel_dir.name.startswith("_"):
             continue
-        info = _channel_info_for_dir(channel_dir, channels_cfg)
+        info = _channel_info_for_dir(channel_dir)
         if not info:
             continue
         processed = ignored = no_stories = story_count = 0
@@ -554,11 +540,10 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """
     if not STORAGE_ROOT.is_dir():
         return None, []
-    channels_cfg = _load_channels()
     for channel_dir in STORAGE_ROOT.iterdir():
         if not channel_dir.is_dir() or channel_dir.name == "users" or channel_dir.name.startswith("_"):
             continue
-        channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+        channel_info = _channel_info_for_dir(channel_dir)
         if not channel_info or channel_info.get("channel_id") != channel_id:
             continue
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
@@ -613,9 +598,8 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     """
     subscribed = set(user_data.get("channel_ids", []))
     raw: list[dict] = []
-    channels_cfg = _load_channels()
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
-        channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+        channel_info = _channel_info_for_dir(channel_dir)
         if not channel_info or channel_info.get("channel_id") not in subscribed:
             continue
         channel_id = channel_info.get("channel_id", "")
@@ -1478,7 +1462,7 @@ def admin_story_delete():
     # Rebuild the per-channel feed and the aggregate feed.
     channel_dir  = STORAGE_ROOT / channel_slug
     channels_cfg = _load_channels()
-    channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+    channel_info = _channel_info_for_dir(channel_dir)
     if channel_info:
         feed_cfg = next(
             (ch for ch in channels_cfg if ch["channel_id"] == channel_info.get("channel_id")),
@@ -1513,12 +1497,11 @@ def admin_feeds():
 def admin_all_stories():
     """Browse all stories from all channels — the blog counterpart to archive/rss.xml."""
     stories = []
-    channels_cfg = _load_channels()
     if STORAGE_ROOT.is_dir():
         for channel_dir in STORAGE_ROOT.iterdir():
             if not channel_dir.is_dir() or channel_dir.name == "users" or channel_dir.name.startswith("_"):
                 continue
-            channel_info = _channel_info_for_dir(channel_dir, channels_cfg)
+            channel_info = _channel_info_for_dir(channel_dir)
             if not channel_info:
                 continue
             channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
