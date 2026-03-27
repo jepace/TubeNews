@@ -738,17 +738,21 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
 
 
 def rebuild_aggregate_feed(base_url: str = "") -> None:
-    """Aggregate stories from all channel folders into ``archive/rss.xml``.
+    """Aggregate stories from all channel folders into ``content/rss.xml``.
 
     Collects all stories across every channel sub-directory,
     ordered by processing timestamp (newest first).  Each entry is prefixed
     with ``[Channel Name]`` in the title so readers know the source.
 
+    This function reads all channel directories and writes one shared file, so
+    it must always run as a serial barrier after all channel threads have joined.
+    ``_main_body`` calls it exactly once after ``ThreadPoolExecutor.map`` returns.
+
     Args:
         base_url: Public URL of this feed (used as the RSS ``<self>`` link).
                   Omit or pass an empty string to leave the self-link out.
     """
-    logger.info("TubeNews: Rebuilding aggregate feed (archive/rss.xml)")
+    logger.info("TubeNews: Rebuilding aggregate feed (content/rss.xml)")
 
     feed = FeedGenerator()
     feed.id("tubenews_meta_rss")
