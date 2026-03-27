@@ -140,7 +140,7 @@ class User(UserMixin):
 
     @property
     def channel_ids(self) -> list[str]:
-        return self._data.get("channel_ids", [])
+        return list(self._data.get("channels", {}).keys())
 
     @property
     def feed_token(self) -> str:
@@ -162,10 +162,6 @@ class User(UserMixin):
     @property
     def is_active(self) -> bool:
         return not self.is_locked
-
-    def set_channel_ids(self, ids: list[str]) -> None:
-        self._data["channel_ids"] = ids
-        self._save()
 
     def _save(self) -> None:
         (self._dir / "user.json").write_text(json.dumps(self._data, indent=2))
@@ -404,6 +400,11 @@ def inject_body_classes():
             unseen_count = len(all_ids - seen_ids)
         else:
             unseen_count = 0
+        # Debounced last_accessed update — at most one disk write per 5 minutes.
+        now = time.time()
+        if now - current_user._data.get("last_accessed", 0) > 300:
+            current_user._data["last_accessed"] = now
+            current_user._save()
     else:
         classes = ""
         unseen_count = 0
@@ -596,7 +597,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     present, it is shown only to the listed users.  Stories without a
     ``**Users:**`` line (feed-level or legacy) are shown to everyone.
     """
-    subscribed = set(user_data.get("channel_ids", []))
+    subscribed = set(user_data.get("channels", {}).keys())
     raw: list[dict] = []
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
         channel_info = _channel_info_for_dir(channel_dir)
@@ -786,9 +787,10 @@ def register():
                 "name": name,
                 "email": email,
                 "password_hash": generate_password_hash(password),
-                "channel_ids": [],
+                "channels": {},
                 "feed_token": str(uuid.uuid4()),
                 "created_at": int(datetime.now(timezone.utc).timestamp()),
+                "last_accessed": int(datetime.now(timezone.utc).timestamp()),
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
             _index_add(email, user_uuid)
@@ -964,17 +966,15 @@ def account():
         selected = set(request.form.getlist("channel_ids"))
         valid_ids = {ch["channel_id"] for ch in channels}
         new_ids = sorted(selected & valid_ids)
-        current_user.set_channel_ids(new_ids)
-        blog_name = request.form.get("blog_name", "").strip()
-        current_user._data["blog_name"] = blog_name
-        channel_focus = {}
+        channels_data = {}
         for ch_id in new_ids:
             raw = request.form.get(f"focus_{ch_id}", "")
             lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
             lines = [ln for ln in lines if ln]
-            if lines:
-                channel_focus[ch_id] = lines
-        current_user._data["channel_focus"] = channel_focus
+            channels_data[ch_id] = lines
+        current_user._data["channels"] = channels_data
+        blog_name = request.form.get("blog_name", "").strip()
+        current_user._data["blog_name"] = blog_name
         current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
         current_user._save()
         flash("Subscriptions updated.", "success")
@@ -989,7 +989,7 @@ def account():
         "account.html",
         channels=channels,
         subscribed=set(current_user.channel_ids),
-        channel_focus=current_user._data.get("channel_focus", {}),
+        channel_focus=current_user._data.get("channels", {}),
         feed_url=_feed_url(current_user.feed_token),
         blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
         prefs=prefs,
@@ -1175,15 +1175,13 @@ def admin_user_subscriptions(uid: str):
     channels = _load_channels()
     valid_ids = {ch["channel_id"] for ch in channels}
     new_ids = sorted(set(request.form.getlist("channel_ids")) & valid_ids)
-    user.set_channel_ids(new_ids)
-    channel_focus = {}
+    channels_data = {}
     for ch_id in new_ids:
         raw = request.form.get(f"focus_{ch_id}", "")
         lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
         lines = [ln for ln in lines if ln]
-        if lines:
-            channel_focus[ch_id] = lines
-    user._data["channel_focus"] = channel_focus
+        channels_data[ch_id] = lines
+    user._data["channels"] = channels_data
     user._save()
     flash("Subscriptions updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
@@ -1328,9 +1326,10 @@ def admin_user_add():
             "name": name,
             "email": email,
             "password_hash": generate_password_hash(password),
-            "channel_ids": [],
+            "channels": {},
             "feed_token": str(uuid.uuid4()),
             "created_at": int(datetime.now(timezone.utc).timestamp()),
+            "last_accessed": int(datetime.now(timezone.utc).timestamp()),
         }
         (user_dir / "user.json").write_text(json.dumps(data, indent=2))
         _index_add(email, user_uuid)

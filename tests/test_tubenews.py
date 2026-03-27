@@ -609,31 +609,31 @@ def user_archive(tmp_path, monkeypatch):
 
 
 def test_rebuild_user_feed_creates_rss(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     rebuild_user_feed(user)
     assert (user_archive / "_users" / "Jane_Doe" / "rss.xml").exists()
 
 def test_rebuild_user_feed_includes_subscribed_channel(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     rebuild_user_feed(user)
     content = (user_archive / "_users" / "Jane_Doe" / "rss.xml").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_feed_excludes_unsubscribed_channel(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     rebuild_user_feed(user)
     content = (user_archive / "_users" / "Jane_Doe" / "rss.xml").read_text()
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_no_subscriptions_empty_feed(user_archive):
-    user = {"name": "No Subs", "channel_ids": []}
+    user = {"name": "No Subs", "channels": {}}
     rebuild_user_feed(user)
     content = (user_archive / "_users" / "No_Subs" / "rss.xml").read_text()
     assert "Alpha City Council" not in content
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_multiple_channels(user_archive):
-    user = {"name": "Both", "channel_ids": ["UC_ALPHA_ID", "UC_BETA__ID"]}
+    user = {"name": "Both", "channels": {"UC_ALPHA_ID": [], "UC_BETA__ID": []}}
     rebuild_user_feed(user)
     content = (user_archive / "_users" / "Both" / "rss.xml").read_text()
     assert "Alpha City Council" in content
@@ -645,18 +645,18 @@ def test_rebuild_user_feed_multiple_channels(user_archive):
 # ---------------------------------------------------------------------------
 
 def test_rebuild_user_blog_creates_html(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
     rebuild_user_blog(user)
     assert (user_archive / "_users" / "Jane_Doe" / "index.html").exists()
 
 def test_rebuild_user_blog_includes_subscribed_stories(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
     rebuild_user_blog(user)
     content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_blog_excludes_unsubscribed_stories(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-1"}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
     rebuild_user_blog(user)
     content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
     assert "Beta City Council" not in content
@@ -681,7 +681,7 @@ def test_rebuild_user_blog_includes_old_stories(tmp_path, monkeypatch):
         json.dumps({"channel_id": "UC_OLD_ID", "channel_name": "Old Channel"})
     )
 
-    user = {"name": "Test User", "channel_ids": ["UC_OLD_ID"], "feed_token": "test-token-2"}
+    user = {"name": "Test User", "channels": {"UC_OLD_ID": []}, "feed_token": "test-token-2"}
     rebuild_user_blog(user)
     content = (tmp_path / "_users" / "Test_User" / "index.html").read_text()
     assert "Very Old Story" in content
@@ -739,41 +739,41 @@ def test_process_feed_empty_videos_no_content_changed_when_rss_exists(tmp_path, 
 # ---------------------------------------------------------------------------
 
 def test_build_user_feed_xml_returns_bytes(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     result = build_user_feed_xml(user)
     assert isinstance(result, bytes)
 
 def test_build_user_feed_xml_is_valid_rss(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     result = build_user_feed_xml(user)
     assert b"<rss" in result
     assert b"</rss>" in result
 
 def test_build_user_feed_xml_includes_subscribed(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     result = build_user_feed_xml(user)
     assert b"Alpha City Council" in result
 
 def test_build_user_feed_xml_excludes_unsubscribed(user_archive):
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     result = build_user_feed_xml(user)
     assert b"Beta City Council" not in result
 
 def test_build_user_feed_xml_no_subscriptions_empty_feed(user_archive):
-    user = {"name": "No Subs", "channel_ids": []}
+    user = {"name": "No Subs", "channels": {}}
     result = build_user_feed_xml(user)
     assert b"Alpha City Council" not in result
     assert b"Beta City Council" not in result
 
 def test_build_user_feed_xml_multiple_channels(user_archive):
-    user = {"name": "Both", "channel_ids": ["UC_ALPHA_ID", "UC_BETA__ID"]}
+    user = {"name": "Both", "channels": {"UC_ALPHA_ID": [], "UC_BETA__ID": []}}
     result = build_user_feed_xml(user)
     assert b"Alpha City Council" in result
     assert b"Beta City Council" in result
 
 def test_build_user_feed_xml_does_not_write_to_disk(user_archive):
     """Key contract: build_user_feed_xml must never touch the filesystem."""
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     build_user_feed_xml(user)
     assert not (user_archive / "_users" / "Jane_Doe" / "rss.xml").exists()
 
@@ -792,14 +792,14 @@ def test_build_user_feed_xml_skips_ignored_too_old(tmp_path, monkeypatch):
         json.dumps({"channel_id": "UC_TEST_ID", "channel_name": "Test Channel"})
     )
 
-    user = {"name": "Checker", "channel_ids": ["UC_TEST_ID"]}
+    user = {"name": "Checker", "channels": {"UC_TEST_ID": []}}
     result = build_user_feed_xml(user).decode()
     assert "Ghost Story" not in result
     assert "New Story" in result
 
 def test_build_user_feed_xml_includes_youtube_link(user_archive):
     """Each story entry must link to the YouTube video with a timestamp."""
-    user = {"name": "Jane Doe", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     result = build_user_feed_xml(user).decode()
     assert "youtu.be/" in result
     assert "?t=" in result
@@ -807,7 +807,7 @@ def test_build_user_feed_xml_includes_youtube_link(user_archive):
 def test_rebuild_user_feed_writes_same_stories_as_build_user_feed_xml(user_archive):
     """rebuild_user_feed is a thin wrapper: the file it writes must have the same
     story content as build_user_feed_xml returns."""
-    user = {"name": "Compare", "channel_ids": ["UC_ALPHA_ID"]}
+    user = {"name": "Compare", "channels": {"UC_ALPHA_ID": []}}
 
     xml_bytes = build_user_feed_xml(user)
     rebuild_user_feed(user)
@@ -839,7 +839,7 @@ def test_feed_and_blog_contain_same_story_titles(parity_archive):
     """Every story title present in the RSS feed must also appear in the blog and vice versa."""
     user = {
         "name": "Parity",
-        "channel_ids": ["UC_PA_ID", "UC_PB_ID"],
+        "channels": {"UC_PA_ID": [], "UC_PB_ID": []},
         "feed_token": "parity-tok",
     }
 
@@ -862,7 +862,7 @@ def test_feed_and_blog_exclude_same_unsubscribed_stories(parity_archive):
     """Stories from an unsubscribed channel must be absent from both feed and blog."""
     user = {
         "name": "Selective",
-        "channel_ids": ["UC_PA_ID"],          # subscribed to A only
+        "channels": {"UC_PA_ID": []},          # subscribed to A only
         "feed_token": "selective-tok",
     }
 
@@ -880,7 +880,7 @@ def test_feed_and_blog_empty_when_no_subscriptions(parity_archive):
     """A user with no subscriptions must get an empty feed and an empty-state blog."""
     user = {
         "name": "Empty",
-        "channel_ids": [],
+        "channels": {},
         "feed_token": "empty-tok",
     }
 
@@ -914,7 +914,7 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
         json.dumps({"channel_id": "UC_OLD_ID", "channel_name": "Old Channel"})
     )
 
-    user = {"name": "Time", "channel_ids": ["UC_OLD_ID"], "feed_token": "time-tok"}
+    user = {"name": "Time", "channels": {"UC_OLD_ID": []}, "feed_token": "time-tok"}
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_blog(user)
@@ -1470,11 +1470,14 @@ def _make_user_dir(users_dir, channel_id, focuses, channel_ids=None):
     uid = str(_uuid.uuid4())
     d = users_dir / uid
     d.mkdir(parents=True)
+    subscribed_ids = channel_ids if channel_ids is not None else [channel_id]
+    channels = {cid: [] for cid in subscribed_ids}
+    if channel_id in channels:
+        channels[channel_id] = focuses if isinstance(focuses, list) else [focuses]
     (d / "user.json").write_text(json.dumps({
         "name": "Test",
         "email": f"{uid[:8]}@example.com",
-        "channel_ids": channel_ids if channel_ids is not None else [channel_id],
-        "channel_focus": {channel_id: focuses},
+        "channels": channels,
     }))
     return d
 
@@ -1732,7 +1735,7 @@ def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
     }))
     _write_story(meeting, "01_Bad.md", "Bad Story", "CITY — Mar 1, 2026", "Body.", 60)
 
-    user = {"name": "Alice", "channel_ids": ["UC_GOOD_ID"]}
+    user = {"name": "Alice", "channels": {"UC_GOOD_ID": []}}
     result = build_user_feed_xml(user)  # must not raise
     assert b"Good Channel" in result
     assert b"Bad Story" not in result
@@ -1749,7 +1752,7 @@ def test_rebuild_user_blog_skips_corrupt_story_file(tmp_path, monkeypatch):
     good_meeting = next(channel_dir.glob("*/"))
     (good_meeting / "02_Corrupt.md").write_bytes(b"\xff\xfe garbage \x00")
 
-    user = {"name": "Alice", "channel_ids": ["UC_ALPHA_ID"], "feed_token": "test-token-xyz"}
+    user = {"name": "Alice", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-xyz"}
     rebuild_user_blog(user)  # must not raise
 
     html = (tmp_path / "_users" / "Alice" / "index.html").read_text()

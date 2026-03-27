@@ -388,7 +388,8 @@ def test_account_feed_url_is_root_relative(flask_env):
     with patch("app._load_channels", return_value=[
         {"channel_id": "UC_TEST_CHAN", "channel_name": "Test Channel", "focus": "test"}
     ]):
-        user.set_channel_ids(["UC_TEST_CHAN"])
+        user._data["channels"] = {"UC_TEST_CHAN": []}
+        user._save()
         resp = client.get("/account")
     html = resp.data.decode()
     assert "/feed/admin-feed-token-xyz.xml" in html
@@ -404,7 +405,8 @@ def test_account_blog_url_is_root_relative(flask_env):
     with patch("app._load_channels", return_value=[
         {"channel_id": "UC_TEST_CHAN", "channel_name": "Test Channel", "focus": "test"}
     ]):
-        user.set_channel_ids(["UC_TEST_CHAN"])
+        user._data["channels"] = {"UC_TEST_CHAN": []}
+        user._save()
         resp = client.get("/account")
     html = resp.data.decode()
     assert "/blog/admin-feed-token-xyz.html" in html
