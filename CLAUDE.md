@@ -607,4 +607,4 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 ## Commit & Branch Conventions
 
-This project uses descriptive commit messages. When working on this repo as an AI assistant, push to the branch specified in the task instructions. Never push to `main` directly.
+This project uses descriptive commit messages. When working on this repo as an AI assistant, push to the branch specified in the task instructions.
