@@ -437,6 +437,36 @@ def test_parse_channel_page_metadata_no_duplicate_ids():
 
 
 # ---------------------------------------------------------------------------
+# discover_videos — metadata-parse degradation warning
+# ---------------------------------------------------------------------------
+
+class _MockResponse:
+    def __init__(self, text, status_code=200):
+        self.text = text
+        self.status_code = status_code
+
+def test_discover_videos_warns_when_ids_found_but_metadata_parse_fails(monkeypatch, caplog):
+    """When the regex finds video IDs but _parse_channel_page_metadata returns nothing,
+    discover_videos must emit a warning so silent YouTube structure changes are surfaced."""
+    import logging
+    import TubeNews
+
+    # Raw HTML that contains a videoId the regex will find, but no valid ytInitialData blob.
+    bare_html = '"videoId":"abcde12345z" some other content'
+
+    monkeypatch.setattr(TubeNews.requests, "get",
+                        lambda *a, **kw: _MockResponse(bare_html))
+
+    with caplog.at_level(logging.WARNING):
+        results = TubeNews.discover_videos("UCtest1234567890", feed_name="TestCh")
+
+    assert any("titles or dates" in r.message for r in caplog.records), \
+        "Must warn when IDs are found but metadata parse returns nothing"
+    # IDs are still returned (fallback works).
+    assert any(v["id"] == "abcde12345z" for v in results)
+
+
+# ---------------------------------------------------------------------------
 # write_story_files
 # ---------------------------------------------------------------------------
 

@@ -446,13 +446,20 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
         html = tab_results.get(tab)
         if html is None:
             continue
-        meta_lookup.update(_parse_channel_page_metadata(html))
+        tab_meta = _parse_channel_page_metadata(html)
         found = re.findall(r'"videoId":"([^"]{11})"', html)
         if not found:
             logger.warning(
                 f"{prefix}YouTube: Got 200 from {tab} tab but found 0 "
                 "video IDs — YouTube HTML structure may have changed."
             )
+        elif not tab_meta:
+            logger.warning(
+                f"{prefix}YouTube: Found {len(found)} video ID(s) on {tab} tab "
+                "but could not parse any titles or dates — "
+                "YouTube HTML structure may have changed (run dump_channel_html.py to inspect)."
+            )
+        meta_lookup.update(tab_meta)
         all_ids.extend(found)
 
     today = datetime.now().strftime("%Y-%m-%d")
