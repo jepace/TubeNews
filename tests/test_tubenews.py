@@ -973,6 +973,48 @@ def test_resolve_request_timeout_is_int_not_string(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _main_body — duplicate channel_id validation
+# ---------------------------------------------------------------------------
+
+def test_main_body_rejects_duplicate_channel_ids(tmp_path, monkeypatch, caplog):
+    """_main_body must log an error and return without processing when the same
+    channel_id appears more than once in the feeds list."""
+    import TubeNews as _tn_local
+    import argparse
+    import logging
+
+    cfg = {
+        "gemini_api_key": "x",
+        "gemini_model": "gemini-test",
+        "supadata_api_key": "y",
+        "feeds": [
+            {"channel_id": "UCabc", "channel_name": "Channel A", "focus": ""},
+            {"channel_id": "UCabc", "channel_name": "Channel A duplicate", "focus": ""},
+        ],
+    }
+
+    config_file = tmp_path / "TubeNews.json"
+    config_file.write_text(json.dumps(cfg))
+
+    supadata_called = []
+
+    monkeypatch.setattr(_tn_local, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(_tn_local, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        _tn_local, "Supadata",
+        lambda api_key: supadata_called.append(api_key) or object()
+    )
+
+    args = argparse.Namespace(debug=False)
+    with caplog.at_level(logging.ERROR):
+        _tn_local._main_body(args)
+
+    assert supadata_called == [], "Supadata must not be instantiated on duplicate channel"
+    assert any("UCabc" in r.message for r in caplog.records), \
+        "Error message must name the duplicate channel_id"
+
+
+# ---------------------------------------------------------------------------
 # _acquire_lock / _release_lock
 # ---------------------------------------------------------------------------
 

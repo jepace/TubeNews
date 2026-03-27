@@ -1551,6 +1551,21 @@ def _main_body(args) -> None:
     with open(CONFIG_FILE, "r") as config_file:
         config = json.load(config_file)
 
+    # Reject duplicate channel_ids before spawning threads — two entries for
+    # the same channel would race to process the same video directories.
+    seen_ids: dict[str, str] = {}
+    for feed in config.get("feeds", []):
+        cid = feed.get("channel_id", "")
+        cname = feed.get("channel_name", "?")
+        if cid in seen_ids:
+            logger.error(
+                f"TubeNews: Duplicate channel_id '{cid}' in feeds "
+                f"('{seen_ids[cid]}' and '{cname}'). "
+                "Fix TubeNews.json and re-run."
+            )
+            return
+        seen_ids[cid] = cname
+
     supadata_client = Supadata(api_key=config["supadata_api_key"])
     logger.info(f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')} | AI Model: {config.get('gemini_model')}")
 
