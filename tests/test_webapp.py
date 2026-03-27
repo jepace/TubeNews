@@ -80,7 +80,7 @@ def _make_user(users_root: Path, name: str, email: str, channel_ids: list[str],
         "name": name,
         "email": email,
         "password_hash": generate_password_hash(password),
-        "channel_ids": channel_ids,
+        "channels": {cid: [] for cid in channel_ids},
         "feed_token": token,
         "created_at": int(time.time()),
     }
@@ -941,7 +941,7 @@ def test_account_saves_focuses_as_list(logged_in_client, archive):
                 user_data = d
                 break
     assert user_data is not None
-    focus_val = user_data["channel_focus"]["UC_ALPHA_ID"]
+    focus_val = user_data["channels"]["UC_ALPHA_ID"]
     assert isinstance(focus_val, list)
     assert "housing, zoning" in focus_val
     assert "transportation, roads" in focus_val
@@ -964,7 +964,7 @@ def test_account_caps_focuses_at_three(logged_in_client, archive):
         if uj.exists():
             d = _json.loads(uj.read_text())
             if d.get("email") == "test@example.com":
-                assert len(d["channel_focus"]["UC_ALPHA_ID"]) == 3
+                assert len(d["channels"]["UC_ALPHA_ID"]) == 3
                 return
     pytest.fail("User not found")
 
@@ -1011,7 +1011,7 @@ def test_dashboard_save_sanitizes_focus(logged_in_client, archive):
         if uj.exists():
             d = _json.loads(uj.read_text())
             if d.get("email") == "test@example.com":
-                saved = d["channel_focus"]["UC_ALPHA_ID"][0]
+                saved = d["channels"]["UC_ALPHA_ID"][0]
                 assert "." not in saved
                 assert "!" not in saved
                 return
@@ -1126,6 +1126,62 @@ def test_nav_badge_hidden_after_account_visit(client, archive):
     # Badge gone on subsequent page load
     r = client.get("/blog")
     assert b'nav-badge' not in r.data
+
+
+# ---------------------------------------------------------------------------
+# last_accessed tracking
+# ---------------------------------------------------------------------------
+
+def test_last_accessed_set_on_authenticated_request(logged_in_client, archive):
+    """An authenticated GET sets last_accessed in user.json."""
+    import json as _json
+    import web.app as webapp
+
+    logged_in_client.get("/blog")
+
+    users_dir = webapp.STORAGE_ROOT / "_users"
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "test@example.com":
+            assert "last_accessed" in d
+            assert d["last_accessed"] > 0
+            return
+    pytest.fail("User not found")
+
+
+def test_last_accessed_not_written_when_fresh(logged_in_client, archive):
+    """last_accessed is not rewritten when it was updated less than 5 min ago."""
+    import json as _json
+    import web.app as webapp
+
+    # Pre-seed a recent last_accessed timestamp
+    users_dir = webapp.STORAGE_ROOT / "_users"
+    recent_ts = time.time() - 10  # 10 seconds ago
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "test@example.com":
+            d["last_accessed"] = recent_ts
+            uj.write_text(_json.dumps(d))
+            break
+
+    logged_in_client.get("/blog")
+
+    for uid_dir in users_dir.iterdir():
+        uj = uid_dir / "user.json"
+        if not uj.exists():
+            continue
+        d = _json.loads(uj.read_text())
+        if d.get("email") == "test@example.com":
+            # last_accessed must not have changed — still close to recent_ts
+            assert abs(d["last_accessed"] - recent_ts) < 1
+            return
+    pytest.fail("User not found")
 
 
 # ---------------------------------------------------------------------------
@@ -1280,7 +1336,7 @@ def test_run_now_sends_ntfy(archive, monkeypatch):
         "name": "Admin",
         "email": "admin@example.com",
         "password_hash": _gph("adminpassword1"),
-        "channel_ids": [],
+        "channels": {},
         "feed_token": str(uuid.uuid4()),
         "created_at": int(time.time()),
     }))

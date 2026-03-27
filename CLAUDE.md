@@ -121,7 +121,7 @@ Defined in `web/app.py`:
 | `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory`. Body lines are HTML-escaped with `html.escape()` before joining, so `body_html` is safe for `{{ ... \| safe }}` rendering. |
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* is a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
-| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `content/_users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses carry the UUIDs of all subscribers who set that focus; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
+| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `content/_users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses are read from `user["channels"][channel_id]`; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
 
 ### YouTube data-gathering
 
@@ -396,23 +396,24 @@ content/_users/
   "name": "Alice",
   "email": "alice@example.com",
   "password_hash": "scrypt:...",
-  "channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
-  "channel_focus": {
-    "UCxxxxxxx": ["housing, zoning, permits", "transportation, roads, transit"]
+  "channels": {
+    "UCxxxxxxx": ["housing, zoning, permits", "transportation, roads, transit"],
+    "UCyyyyyyy": []
   },
   "feed_token": "550e8400-e29b-41d4-a716-446655440000",
   "created_at": 1741910400,
+  "last_accessed": 1741910400,
   "locked": false,
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "read_articles": ["abc123hash", "def456hash"]
 }
 ```
 
-- `channel_ids` — authoritative subscription list.
-- `channel_focus` — optional per-channel focus keywords set by the user on the dashboard. Each value is a **list of strings** (one per focus line, up to 3). Missing key or empty list means no filter (show all stories). `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
+- `channels` — merged subscription + focus dict. Keys are subscribed channel IDs; values are **lists of focus strings** (one per focus line, up to 3). An empty list means no filter (show all stories from that channel). Every subscribed channel must appear as a key, even with an empty focus list. `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
+- `last_accessed` — Unix timestamp (float) of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes). Key absent on accounts created before this field was added.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
-- `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes.
+- `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 
 ### Token Model
 

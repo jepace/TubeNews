@@ -47,7 +47,7 @@
         <button type="button" class="btn-select-all" id="btn-unselect-all">Select none</button>
       </div>
       <div class="channel-list" id="channel-list">
-        {% set channel_focus = u._data.get('channel_focus', {}) %}
+        {% set channel_focus = u._data.get('channels', {}) %}
         {% for ch in channels %}
           <div class="channel-row">
             <div class="channel-row-top">

@@ -830,21 +830,22 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
     callers decide what to do with the returned bytes (serve directly or cache).
 
     Reads ``channel.json`` from each channel directory (written by :func:`rebuild_feed`)
-    to determine which archive folders correspond to the user's ``channel_ids``.  Stories
+    to determine which archive folders correspond to the user's subscribed channels.  Stories
     are sorted newest-first, matching :func:`rebuild_aggregate_feed` behaviour.
 
     Args:
-        user:          User config dict from ``archive/users/<id>/user.json``.
-                       Must contain ``name`` (str) and ``channel_ids`` (list[str]).
+        user:          User config dict from ``content/_users/<id>/user.json``.
+                       Must contain ``name`` (str) and ``channels`` (dict[str, list[str]]).
         base_url:      Public URL root; currently unused but reserved for future self-links.
         user_id:       UUID directory name for the user. Falls back to slugify(name) if omitted.
-        channel_focus: Optional override mapping ``{channel_id: focus_string}``.  When
-                       ``None``, falls back to ``user.get("channel_focus", {})``.
+        channel_focus: Optional override mapping ``{channel_id: list[str]}``.  When
+                       ``None``, falls back to ``user.get("channels", {})``.
     """
     name = user["name"]
-    subscribed = set(user.get("channel_ids", []))
+    channels_data = user.get("channels", {})
+    subscribed = set(channels_data.keys())
     if channel_focus is None:
-        channel_focus = user.get("channel_focus", {})
+        channel_focus = channels_data
 
     feed = FeedGenerator()
     feed.id(f"tubenews_user_{slugify(name)}")
@@ -950,7 +951,7 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
         user_id:   UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
-    subscribed = set(user.get("channel_ids", []))
+    subscribed = set(user.get("channels", {}).keys())
     user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1159,9 +1160,10 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str
             except Exception as exc:
                 logger.debug(f"Skipping {uid_dir.name}: {exc}")
                 continue
-            if channel_id not in data.get("channel_ids", []):
+            channels_data = data.get("channels", {})
+            if channel_id not in channels_data:
                 continue
-            raw = data.get("channel_focus", {}).get(channel_id, [])
+            raw = channels_data.get(channel_id, [])
             for f in raw:
                 f = f.strip()
                 if not f:
