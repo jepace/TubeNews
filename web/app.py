@@ -13,6 +13,7 @@ Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -421,6 +422,18 @@ def format_datetime(ts: int) -> str:
     if not ts:
         return "—"
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _sanitize_focus(text: str) -> str:
+    """Sanitize a user-supplied focus line against prompt injection.
+
+    Allows only the characters needed for keyword phrases: letters, digits,
+    spaces, commas, and hyphens.  Strips everything else, collapses runs of
+    whitespace to a single space, and truncates to 100 characters.
+    """
+    cleaned = re.sub(r"[^\w\s,\-]", "", text, flags=re.UNICODE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:100]
 
 
 @app.template_filter("focuses_text")
@@ -973,7 +986,8 @@ def account():
         channel_focus = {}
         for ch_id in new_ids:
             raw = request.form.get(f"focus_{ch_id}", "")
-            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+            lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
+            lines = [ln for ln in lines if ln]
             if lines:
                 channel_focus[ch_id] = lines
         current_user._data["channel_focus"] = channel_focus
@@ -1181,7 +1195,8 @@ def admin_user_subscriptions(uid: str):
     channel_focus = {}
     for ch_id in new_ids:
         raw = request.form.get(f"focus_{ch_id}", "")
-        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()][:3]
+        lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
+        lines = [ln for ln in lines if ln]
         if lines:
             channel_focus[ch_id] = lines
     user._data["channel_focus"] = channel_focus

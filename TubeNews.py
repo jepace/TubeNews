@@ -575,7 +575,7 @@ def call_gemini_api(
         f"You are a highly experienced investigative reporter. "
         f"Analyze this transcript of '{video_title}' recorded on {video_date}.\n\n"
         f"OBJECTIVE: Identify and extract distinct news stories strictly "
-        f"relevant to this FOCUS: '{focus}'.\n\n"
+        f"relevant to this FOCUS: <focus>{focus}</focus>.\n\n"
         "WRITING GUIDELINES:\n"
         "1. TONE: Professional, objective, and authoritative. Use the Inverted "
         "Pyramid style.\n"
