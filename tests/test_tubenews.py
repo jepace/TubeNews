@@ -1906,3 +1906,57 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
     # Only one video should have been attempted before the event stopped the loop.
     assert len(calls) == 1
     assert event.is_set()
+
+# ---------------------------------------------------------------------------
+# _send_ntfy — message formatting and error handling
+# ---------------------------------------------------------------------------
+
+from TubeNews import _send_ntfy
+
+
+def test_send_ntfy_message_includes_story_count_and_channels():
+    """_send_ntfy message body names every channel that produced stories."""
+    import urllib.request as _ur
+    sent = []
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req)
+
+    import unittest.mock as _mock
+    with _mock.patch.object(_ur, "urlopen", fake_urlopen):
+        _send_ntfy(
+            topic="my-topic",
+            total_stories=3,
+            feed_results=[
+                {"channel_id": "UCa", "channel_name": "Alpha Council", "stories_written": 2},
+                {"channel_id": "UCb", "channel_name": "Beta Board", "stories_written": 1},
+                {"channel_id": "UCc", "channel_name": "Gamma Corp", "stories_written": 0},
+            ],
+            started_at=0.0,
+        )
+
+    assert len(sent) == 1
+    body = sent[0].data.decode()
+    assert "3 new stories" in body
+    assert "Alpha Council" in body
+    assert "Beta Board" in body
+    assert "Gamma Corp" not in body  # 0 stories — should not appear
+
+
+def test_send_ntfy_singular_story_word():
+    """'story' (not 'stories') when total_stories == 1."""
+    import urllib.request as _ur
+    sent = []
+    import unittest.mock as _mock
+    with _mock.patch.object(_ur, "urlopen", lambda req, timeout=None: sent.append(req)):
+        _send_ntfy("t", 1, [{"channel_id": "UCa", "channel_name": "Alpha", "stories_written": 1}], 0.0)
+    assert "1 new story" in sent[0].data.decode()
+    assert "stories" not in sent[0].data.decode()
+
+
+def test_send_ntfy_swallows_network_errors():
+    """_send_ntfy must not raise when the HTTP call fails."""
+    import urllib.request as _ur
+    import unittest.mock as _mock
+    with _mock.patch.object(_ur, "urlopen", side_effect=OSError("network down")):
+        _send_ntfy("t", 1, [], 0.0)  # must not raise

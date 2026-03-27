@@ -467,6 +467,16 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_find_user_by_email(email)` | O(1) lookup via `index.json`; falls back to a glob scan and repairs the index if the entry is missing or stale |
 | `_find_user_by_id(uid)` | Loads a user by their UUID directory name |
 | `_all_users()` | Returns all users sorted by name |
+| `_web_ntfy(title, message, priority)` | Sends a best-effort ntfy.sh notification from web events (registration, manual run trigger). No-op when `ntfy_topic` is not configured; exceptions are silently swallowed so a notification failure never breaks a request. |
+| `_is_running()` | Returns `True` if a TubeNews.py process currently holds the lock file (PID is live). Used by `admin_runs` to show a "currently running" indicator and by `admin_run_log` to decide when to stop auto-refreshing. |
+| `_sanitize_focus(text)` | Strips characters outside `[\w\s,\-]`, collapses whitespace, and truncates to 100 characters. Applied to every focus line before saving to `user.json`. Security-relevant: prevents prompt injection via the focus field. |
+| `_prefs_to_classes(prefs)` | Converts a user preferences dict (`dark_mode`, `font_size`) to a CSS class string applied to `<html>` by the base template. |
+| `_safe_next(url)` | Returns `url` only when it is a safe same-site relative path (starts with `/`, not `//`). Used by the login route to prevent open-redirect attacks after authentication. |
+| `_channel_info_for_dir(channel_dir)` | Reads `channel.json` from a content directory and returns `ChannelInfo`. Returns `None` if the file is absent or unparseable. Used by all archive scanners. |
+| `_archive_channel_stats()` | Scans all channel directories and returns `list[ChannelStat]` with per-channel counts of processed, ignored, no-stories, and story files. Used by `admin_feeds`. |
+| `_get_channel_stories(channel_id)` | Returns `(channel_name | None, list[StoryDict])` for a single channel. Used by `channel_blog`. |
+| `_get_user_stories(user_data, user_id)` | Scans all subscribed channel directories and returns `list[StoryDict]` filtered by the user's `user_ids` attribution. Used by `serve_blog`, `serve_read`, `serve_all`, and the public blog route. |
+| `_get_supadata_balance()` | Reads the cached Supadata credit data from `content/_run_logs/supadata_balance.json`; returns `None` if absent. Used by `admin_feeds` to show the credit balance without a live API call. |
 
 ### Route Map
 
@@ -480,6 +490,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET | `/content/<path>` | `serve_content` | Serves files from `content/` directory; blocks any path starting with `_` (covers `_users/`, `_run_logs/`, etc.) |
 | GET | `/feed/<token>.xml` | `serve_feed` | Personal RSS feed by token |
 | GET | `/blog/<token>.html` | `serve_blog_public` | Personal blog page by token |
+| GET | `/transcript/<channel_slug>/<meeting_id>` | `serve_transcript` | Renders a transcript as an HTML page with per-segment anchors; URL fragment `#t<seconds>` scrolls to and highlights that segment. Path-traversal guarded. No auth required — transcripts are public content. |
 
 **Login required:**
 
@@ -505,6 +516,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | Method | Route | Handler | Description |
 |---|---|---|---|
 | GET | `/admin` | `admin_users` | User list |
+| POST | `/admin/users/add` | `admin_user_add` | Create a new user account (name, email, password); validates input and uniqueness |
 | GET | `/admin/user/<uid>` | `admin_user` | User detail / edit |
 | POST | `/admin/user/<uid>/info` | `admin_user_info` | Update name and email |
 | POST | `/admin/user/<uid>/subscriptions` | `admin_user_subscriptions` | Update channel subscriptions |

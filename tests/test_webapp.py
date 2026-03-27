@@ -2176,3 +2176,43 @@ def test_admin_user_promote_blocks_self_promotion(admin_client, archive, monkeyp
     r = admin_client.post(f"/admin/user/{admin_uid}/promote", follow_redirects=True)
     assert r.status_code == 200
     assert b"cannot change your own" in r.data.lower()
+
+
+# ---------------------------------------------------------------------------
+# _web_ntfy — direct unit tests
+# ---------------------------------------------------------------------------
+
+def test_web_ntfy_noop_when_topic_not_configured(archive, monkeypatch):
+    """_web_ntfy must do nothing when ntfy_topic is absent from config."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "_load_config", lambda: {})
+    calls = []
+    import urllib.request as _ur
+    monkeypatch.setattr(_ur, "urlopen", lambda *a, **kw: calls.append(a))
+    _wa._web_ntfy("Title", "Message")
+    assert calls == []
+
+
+def test_web_ntfy_sends_post_when_configured(archive, monkeypatch):
+    """_web_ntfy POSTs to ntfy.sh/<topic> when ntfy_topic is configured."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "_load_config", lambda: {"ntfy_topic": "test-topic"})
+    sent = []
+    import urllib.request as _ur
+    monkeypatch.setattr(_ur, "urlopen", lambda req, timeout=None: sent.append(req))
+    _wa._web_ntfy("My Title", "My message", priority="high")
+    assert len(sent) == 1
+    req = sent[0]
+    assert "test-topic" in req.full_url
+    assert req.data == b"My message"
+    assert req.get_header("Title") == "My Title"
+    assert req.get_header("Priority") == "high"
+
+
+def test_web_ntfy_swallows_network_errors(archive, monkeypatch):
+    """_web_ntfy must not raise when the HTTP call fails."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "_load_config", lambda: {"ntfy_topic": "test-topic"})
+    import urllib.request as _ur
+    monkeypatch.setattr(_ur, "urlopen", lambda *a, **kw: (_ for _ in ()).throw(OSError("network down")))
+    _wa._web_ntfy("Title", "Message")  # must not raise
