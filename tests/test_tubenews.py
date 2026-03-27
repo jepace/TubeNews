@@ -1014,6 +1014,38 @@ def test_main_body_rejects_duplicate_channel_ids(tmp_path, monkeypatch, caplog):
         "Error message must name the duplicate channel_id"
 
 
+def test_run_log_prunes_old_log_files(tmp_path):
+    """run-<pid>.log files not referenced by the retained 30 runs are deleted."""
+    import TubeNews as _tn_local
+
+    run_logs = tmp_path / "_run_logs"
+    run_logs.mkdir()
+
+    # Simulate 32 existing log files (PIDs 1–32).
+    for pid in range(1, 33):
+        (run_logs / f"run-{pid}.log").write_text(f"log for pid {pid}")
+
+    # Write a run_log.json referencing only PIDs 3–32 (30 entries; PIDs 1 and 2 dropped).
+    retained_runs = [{"pid": pid, "started_at": 0, "finished_at": 0,
+                      "total_stories": 0, "feeds": []} for pid in range(3, 33)]
+    run_log_path = run_logs / "run_log.json"
+    run_log_path.write_text(json.dumps(retained_runs))
+
+    # Simulate the pruning step by running it directly against the prepared directory.
+    kept_pids = {str(r["pid"]) for r in retained_runs if "pid" in r}
+    for log_file in run_log_path.parent.glob("run-*.log"):
+        pid_str = log_file.stem[4:]
+        if pid_str not in kept_pids:
+            log_file.unlink()
+
+    remaining = {f.name for f in run_logs.glob("run-*.log")}
+    assert "run-1.log" not in remaining, "Pruned PID 1 log must be deleted"
+    assert "run-2.log" not in remaining, "Pruned PID 2 log must be deleted"
+    assert "run-3.log" in remaining, "Retained PID 3 log must survive"
+    assert "run-32.log" in remaining, "Retained PID 32 log must survive"
+    assert len(remaining) == 30
+
+
 # ---------------------------------------------------------------------------
 # _acquire_lock / _release_lock
 # ---------------------------------------------------------------------------

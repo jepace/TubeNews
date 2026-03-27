@@ -1667,10 +1667,21 @@ def _main_body(args) -> None:
         "feeds": feed_results,
         "pid": os.getpid(),
     })
+    retained = runs[-30:]
     try:
-        run_log_path.write_text(json.dumps(runs[-30:], indent=2))
+        run_log_path.write_text(json.dumps(retained, indent=2))
     except Exception as exc:
         logger.warning(f"TubeNews: Failed to write run log: {exc}")
+
+    # Prune run-<pid>.log files that are no longer referenced by the retained runs.
+    kept_pids = {str(r["pid"]) for r in retained if "pid" in r}
+    for log_file in run_log_path.parent.glob("run-*.log"):
+        pid_str = log_file.stem[4:]  # strip leading "run-"
+        if pid_str not in kept_pids:
+            try:
+                log_file.unlink()
+            except Exception as exc:
+                logger.debug(f"Could not remove old run log {log_file.name}: {exc}")
 
     ntfy_topic = config.get("ntfy_topic")
     if ntfy_topic and total_stories > 0:
