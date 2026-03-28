@@ -333,10 +333,11 @@ def _relative_date_to_iso(text: str) -> str:
     # "Streamed live on Month DD, YYYY" or just "Month DD, YYYY"
     exact = re.search(r"([a-z]+ \d{1,2},\s*\d{4})", lower)
     if exact:
-        try:
-            return datetime.strptime(exact.group(1), "%b %d, %Y").strftime("%Y-%m-%d")
-        except ValueError:
-            pass
+        for fmt in ("%b %d, %Y", "%B %d, %Y"):
+            try:
+                return datetime.strptime(exact.group(1), fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
 
     # "N seconds/minutes/hours/days/weeks/months/years ago"
     m = re.match(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
