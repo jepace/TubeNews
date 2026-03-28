@@ -308,9 +308,10 @@ Story body text in AP inverted pyramid style...
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. |
 | `request_timeout` | No | Seconds before giving up on YouTube scrape and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
+| `gemini_call_delay` | No | Seconds to sleep between consecutive Gemini API calls within a single video's focus passes (default: `5`). Keeps call rate well under the 15 RPM free-tier limit. Set to `0` to disable. |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
-| `max_parallel_feeds` | No | Max channels processed concurrently (default: `3`; capped at number of feeds) |
+| `max_parallel_feeds` | No | Max channels processed concurrently (default: `1`; capped at number of feeds). Keep at `1` unless you have a paid Gemini tier with higher RPM limits. |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
 | `tubenews_key` | Web UI only | Flask session secret key — generate with `python -c 'import secrets; print(secrets.token_hex(32))'`; also readable from `TUBENEWS_SECRET_KEY` env var |
 | `admin_users` | No | List of email addresses granted admin access to the web UI (e.g. `["alice@example.com"]`) |

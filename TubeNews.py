@@ -1290,7 +1290,12 @@ def process_video(
     # in multiple focus passes.
     seen_titles: dict[str, int] = {}
     all_stories: list = []
+    gemini_delay = config.get("gemini_call_delay", 5)
+    first_call = True
     for focus, user_ids in focuses:
+        if not first_call and gemini_delay:
+            time.sleep(gemini_delay)
+        first_call = False
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
         result = call_gemini_api(
@@ -1639,7 +1644,7 @@ def _main_body(args) -> None:
                 "stories_written": 0,
             }
 
-    max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
+    max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 1))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         feed_results = list(executor.map(_run_feed, config["feeds"]))
     total_stories = sum(r["stories_written"] for r in feed_results)
