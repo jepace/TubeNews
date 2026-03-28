@@ -384,6 +384,7 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
 
                 relative = obj.get("publishedTimeText", {}).get("simpleText", "")
                 date = _relative_date_to_iso(relative) if relative else datetime.now().strftime("%Y-%m-%d")
+                logger.debug(f"  video {vid}: publishedTimeText={relative!r} → date={date}")
 
                 is_live = any(
                     ov.get("thumbnailOverlayTimeStatusRenderer", {}).get("style")
@@ -1419,7 +1420,7 @@ def process_feed(
         noun = "video" if len(fresh) == 1 else "videos"
         logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
         for v in fresh:
-            logger.info(f"  held: {v['id']} — {v['title']}")
+            logger.info(f"  held: {v['id']} (parsed date: {v['date']}) — {v['title']}")
 
     if is_new_feed:
         too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
