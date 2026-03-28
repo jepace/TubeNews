@@ -32,6 +32,13 @@
     {% endif %}
   </div>
   <div class="hs-right">
+    {% if current_user.is_authenticated and not channel_id %}
+    <form method="get" action="{{ url_for('serve_all') }}" class="hs-search">
+      <input type="search" name="q" value="{{ query|default('') }}"
+             placeholder="Search…" class="search-input"
+             title="Search all stories">
+    </form>
+    {% endif %}
     {% if channel_id %}
     <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
     {% endif %}
@@ -45,10 +52,17 @@
 {% block content %}
 <div class="blog-page">
 
+  {% if query is defined and query %}
+  <p class="search-results-info">
+    Showing {{ stories|length }} result{% if stories|length != 1 %}s{% endif %} for <strong>{{ query | e }}</strong>
+    &nbsp;<a href="{{ url_for('serve_all') }}" class="search-clear">Clear</a>
+  </p>
+  {% endif %}
+
   {% if stories %}
     {% for story in stories %}
     <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}">
-      <h2>{{ story.title }}</h2>
+      <h2>{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</h2>
       <p class="story-dateline">{{ story.dateline }}</p>
       <p class="story-source">
         {{ story.channel_name }}{% if story.video_title %} &mdash; <em>{{ story.video_title }}</em>{% endif %}
