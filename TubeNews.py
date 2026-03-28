@@ -340,7 +340,7 @@ def _relative_date_to_iso(text: str) -> str:
                 continue
 
     # "N seconds/minutes/hours/days/weeks/months/years ago"
-    m = re.match(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
+    m = re.search(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
     if m:
         n, unit = int(m.group(1)), m.group(2)
         days = {"second": 0, "minute": 0, "hour": 0, "day": n,

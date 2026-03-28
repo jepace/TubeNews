@@ -344,6 +344,15 @@ def test_relative_date_streamed_live_full_month_name():
     # YouTube uses full month names for completed livestreams, e.g. "March 25, 2026"
     assert _relative_date_to_iso("Streamed live on March 25, 2026") == "2026-03-25"
 
+def test_relative_date_streamed_prefix():
+    # "Streamed 2 days ago" was broken because re.match anchors at start of string
+    expected = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("Streamed 2 days ago") == expected
+
+def test_relative_date_streamed_weeks():
+    expected = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    assert _relative_date_to_iso("Streamed 1 week ago") == expected
+
 def test_relative_date_exact_month_day_year():
     assert _relative_date_to_iso("Mar 14, 2026") == "2026-03-14"
 
