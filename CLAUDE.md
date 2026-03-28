@@ -336,9 +336,9 @@ pytest tests/ -v
 
 | File | Covers |
 |---|---|
-| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
-| `tests/test_webapp.py` | Flask routes: login guards, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
+| `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 
 All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
 
@@ -404,14 +404,19 @@ content/_users/
   "created_at": 1741910400,
   "last_accessed": 1741910400,
   "locked": false,
+  "blog_name": "Alice's Local News",
+  "preferences": {"dark_mode": false, "font_size": "normal"},
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "read_articles": ["abc123hash", "def456hash"]
 }
 ```
 
 - `channels` — merged subscription + focus dict. Keys are subscribed channel IDs; values are **lists of focus strings** (one per focus line, up to 3). An empty list means no filter (show all stories from that channel). Every subscribed channel must appear as a key, even with an empty focus list. `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
-- `last_accessed` — Unix timestamp (float) of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes). Key absent on accounts created before this field was added.
+- `last_accessed` — Unix timestamp (float) of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes per user). Key absent on accounts created before this field was added.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
+- `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
+- `blog_name` — optional custom title shown on the user's `/blog` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
+- `preferences` — display settings dict with keys `dark_mode` (bool) and `font_size` (`"normal"` | `"large"` | `"larger"`). Converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. Key absent means all defaults (light mode, normal font).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 

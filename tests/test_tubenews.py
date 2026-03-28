@@ -1963,3 +1963,66 @@ def test_send_ntfy_swallows_network_errors():
     import unittest.mock as _mock
     with _mock.patch.object(_ur, "urlopen", side_effect=OSError("network down")):
         _send_ntfy("t", 1, [], 0.0)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# fetch_transcript — mock unit tests
+# ---------------------------------------------------------------------------
+
+class _Seg:
+    """Minimal stand-in for a Supadata transcript segment."""
+    def __init__(self, offset_ms: int, text: str):
+        self.offset = offset_ms
+        self.text = text
+
+
+def _mock_supadata_client(segments, lang="en"):
+    """Return a mock Supadata client whose transcript() returns the given segments."""
+    class _Resp:
+        pass
+    resp = _Resp()
+    resp.lang = lang
+    resp.content = segments
+    return type("C", (), {"transcript": staticmethod(lambda **kw: resp)})()
+
+
+def test_fetch_transcript_success_returns_formatted_string():
+    """fetch_transcript formats segments as '<offset>s --> <text>' lines."""
+    client = _mock_supadata_client([_Seg(0, "Welcome."), _Seg(5000, "We vote now.")])
+    result = fetch_transcript("VID123", client)
+    assert result is not None
+    assert "0s --> Welcome." in result
+    assert "5s --> We vote now." in result
+
+
+def test_fetch_transcript_success_segment_offset_converted_from_ms():
+    """Segment offsets in milliseconds are divided by 1000 to produce seconds."""
+    client = _mock_supadata_client([_Seg(90000, "Ninety seconds in.")])
+    result = fetch_transcript("VID123", client)
+    assert "90s --> Ninety seconds in." in result
+
+
+def test_fetch_transcript_language_mismatch_still_returns_transcript(caplog):
+    """Non-English language response still returns a transcript and logs a warning."""
+    import logging
+    client = _mock_supadata_client([_Seg(0, "Bienvenidos.")], lang="es")
+    with caplog.at_level(logging.WARNING):
+        result = fetch_transcript("VID123", client)
+    assert result is not None
+    assert "Bienvenidos." in result
+    # A warning about the language mismatch must be logged.
+    assert any("es" in r.message for r in caplog.records)
+
+
+def test_fetch_transcript_live_stream_returns_none_no_quota_event():
+    """Live-stream exception returns None but must NOT set transcript_rate_limit_event."""
+    import threading
+    mock_client = type("C", (), {
+        "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
+            Exception("live streaming content is not available")
+        ))
+    })()
+    event = threading.Event()
+    result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
+    assert result is None
+    assert not event.is_set()

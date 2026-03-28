@@ -2272,3 +2272,72 @@ def test_web_ntfy_swallows_network_errors(archive, monkeypatch):
     import urllib.request as _ur
     monkeypatch.setattr(_ur, "urlopen", lambda *a, **kw: (_ for _ in ()).throw(OSError("network down")))
     _wa._web_ntfy("Title", "Message")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — /login returns HTTP 429 after 10 requests per minute
+# ---------------------------------------------------------------------------
+
+def test_login_rate_limited_after_10_attempts(client, registered_user):
+    """POST /login must return HTTP 429 after the 10-per-minute limit is exceeded."""
+    flask_app.config["RATELIMIT_ENABLED"] = True
+    webapp.limiter.reset()
+    try:
+        # Make 10 requests to hit the limit (all with wrong password)
+        for _ in range(10):
+            client.post("/login", data={"email": "nobody@example.com", "password": "wrong"})
+        # The 11th request must be rate-limited
+        r = client.post("/login", data={"email": "nobody@example.com", "password": "wrong"})
+        assert r.status_code == 429
+    finally:
+        flask_app.config["RATELIMIT_ENABLED"] = False
+
+
+# ---------------------------------------------------------------------------
+# Locked accounts — rejected at login
+# ---------------------------------------------------------------------------
+
+def test_login_locked_account_shows_error(client, archive):
+    """A locked account must be rejected at login with an appropriate error message."""
+    locked_data = {
+        "name": "Locked User",
+        "email": "locked@example.com",
+        "password_hash": generate_password_hash("correctpassword1"),
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": int(time.time()),
+        "locked": True,
+    }
+    user_dir = archive / "_users" / str(uuid.uuid4())
+    user_dir.mkdir(parents=True)
+    (user_dir / "user.json").write_text(json.dumps(locked_data))
+
+    r = client.post("/login", data={
+        "email": "locked@example.com",
+        "password": "correctpassword1",
+    }, follow_redirects=True)
+
+    assert r.status_code == 200
+    assert b"locked" in r.data.lower()
+
+
+def test_login_locked_account_does_not_authenticate(client, archive):
+    """A locked account must not be granted a session even with correct credentials."""
+    locked_data = {
+        "name": "Locked User",
+        "email": "locked2@example.com",
+        "password_hash": generate_password_hash("correctpassword1"),
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": int(time.time()),
+        "locked": True,
+    }
+    user_dir = archive / "_users" / str(uuid.uuid4())
+    user_dir.mkdir(parents=True)
+    (user_dir / "user.json").write_text(json.dumps(locked_data))
+
+    client.post("/login", data={"email": "locked2@example.com", "password": "correctpassword1"})
+    # After "login", accessing a login-required page must still redirect to login
+    r = client.get("/blog", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]

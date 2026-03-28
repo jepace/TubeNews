@@ -671,6 +671,11 @@ def serve_content(filename=""):
     # Never expose internal reserved directories (including _users/).
     if filename.startswith("_"):
         abort(404)
+    # Guard against path traversal: ensure the resolved target stays inside STORAGE_ROOT.
+    safe_root = STORAGE_ROOT.resolve()
+    target = (STORAGE_ROOT / filename).resolve()
+    if not str(target).startswith(str(safe_root) + os.sep) and target != safe_root:
+        abort(404)
     mimetype = "application/rss+xml" if filename.endswith(".xml") else None
     return send_from_directory(STORAGE_ROOT, filename, mimetype=mimetype)
 
@@ -890,10 +895,18 @@ def serve_all():
     if not current_user.channel_ids:
         return redirect(url_for("account"))
     stories = _get_user_stories(current_user._data, current_user.get_id())
+    query = request.args.get("q", "").strip()[:200]
+    if query:
+        q = query.lower()
+        stories = [s for s in stories if
+                   q in s["title"].lower() or
+                   q in s["body_html"].lower() or
+                   q in s["channel_name"].lower() or
+                   q in s["dateline"].lower()]
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_all=True)
+                           is_all=True, query=query)
 
 
 @app.route("/channel/<channel_id>")
@@ -1546,7 +1559,7 @@ def admin_feed_add():
     if request.method == "POST":
         channel_id = request.form.get("channel_id", "").strip()
         channel_name = request.form.get("channel_name", "").strip()
-        focus = request.form.get("focus", "").strip()
+        focus = _sanitize_focus(request.form.get("focus", ""))
         if not channel_id or not channel_name or not focus:
             flash("All fields are required.", "error")
         elif not channel_id.startswith("UC"):
@@ -1575,7 +1588,7 @@ def admin_feed_edit(channel_id: str):
     if request.method == "POST":
         new_channel_id = request.form.get("channel_id", "").strip()
         channel_name = request.form.get("channel_name", "").strip()
-        focus = request.form.get("focus", "").strip()
+        focus = _sanitize_focus(request.form.get("focus", ""))
         if not new_channel_id or not channel_name or not focus:
             flash("All fields are required.", "error")
         elif not new_channel_id.startswith("UC"):
