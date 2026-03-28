@@ -1403,8 +1403,11 @@ def admin_run_now():
     # Open a placeholder log file; rename to run-{pid}.log once we have the PID.
     tmp_log = run_logs_dir / ".run-starting.log"
     with open(tmp_log, "w") as log_fh:
+        cmd = [sys.executable, str(TUBENEWS_PY)]
+        if request.form.get("debug"):
+            cmd.append("--debug")
         proc = subprocess.Popen(
-            [sys.executable, str(TUBENEWS_PY)],
+            cmd,
             stdout=log_fh,
             stderr=log_fh,
             start_new_session=True,
