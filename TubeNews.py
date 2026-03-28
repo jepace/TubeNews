@@ -1412,6 +1412,8 @@ def process_feed(
     if fresh:
         noun = "video" if len(fresh) == 1 else "videos"
         logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
+        for v in fresh:
+            logger.info(f"  held: {v['id']} — {v['title']}")
 
     if is_new_feed:
         too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
