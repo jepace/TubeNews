@@ -552,7 +552,7 @@ def _channel_counts(stories: list[StoryDict]) -> list[dict]:
         if cid not in mapping:
             mapping[cid] = {"channel_id": cid, "channel_name": s["channel_name"], "count": 0}
         mapping[cid]["count"] += 1
-    return sorted(mapping.values(), key=lambda c: c["count"], reverse=True)
+    return sorted(mapping.values(), key=lambda c: c["channel_name"].lower())
 
 
 def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:

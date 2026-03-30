@@ -631,22 +631,30 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 .blog-meta a { color: var(--accent); }
 
 /* ---- Channel sidebar layout ---- */
+
+/* When the blog layout is active, let main stretch to full viewport width
+   so the sidebar sits at the far left and the feed area is unrestricted. */
+main:has(.blog-layout) {
+  max-width: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .blog-layout {
   display: flex;
   align-items: flex-start;
-  gap: 1rem;
-  max-width: 860px;
-  margin: 0 auto;
+  padding: 0 1rem; /* restore the 1rem horizontal breathing room */
 }
 
 .blog-page {
   flex: 1;
   min-width: 0;
   max-width: 640px;
+  margin-left: 2rem; /* space between sidebar and content */
 }
 
 .channel-sidebar {
-  width: 180px;
+  width: 200px;
   flex-shrink: 0;
   position: sticky;
   top: 88px; /* 52px header + 36px sub-header */
@@ -694,7 +702,9 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 .sidebar-toggle { display: none; }
 
 @media (max-width: 700px) {
-  .blog-layout { display: block; }
+  .blog-layout { display: block; padding: 0 1rem; }
+
+  .blog-page { margin-left: 0; }
 
   .channel-sidebar {
     display: none;

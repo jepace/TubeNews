@@ -9,10 +9,11 @@
     {% endif %}
     <span class="hs-feed-name">{{ blog_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
-      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
-      <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}">Starred<span class="tab-count" id="starred-badge"{% if not starred_hashes %} style="display:none"{% endif %}>{{ starred_hashes|length }}</span></a>
-      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Read</a>
-      <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}">All</a>
+      {% set _ch = ('?channel=' ~ active_channel_id) if active_channel_id is defined and active_channel_id else '' %}
+      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}{{ _ch }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
+      <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}{{ _ch }}">Starred<span class="tab-count" id="starred-badge"{% if not starred_hashes %} style="display:none"{% endif %}>{{ starred_hashes|length }}</span></a>
+      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}{{ _ch }}">Read</a>
+      <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}{{ _ch }}">All</a>
     {% elif channel_id %}
       <a class="hs-tab" href="{{ url_for('serve_blog') }}">Unread</a>
       <a class="hs-tab" href="{{ url_for('serve_starred') }}">Starred</a>
@@ -62,7 +63,8 @@
      href="{{ current_view_url }}">All channels</a>
   {% for ch in channel_counts %}
   <a class="sidebar-channel{% if active_channel_id == ch.channel_id %} sc-active{% endif %}"
-     href="{{ current_view_url }}?channel={{ ch.channel_id }}">
+     href="{{ current_view_url }}?channel={{ ch.channel_id }}"
+     data-channel-id="{{ ch.channel_id }}">
     <span class="sc-name">{{ ch.channel_name }}</span>
     <span class="sc-count">{{ ch.count }}</span>
   </a>
@@ -80,7 +82,7 @@
 
   {% if stories %}
     {% for story in stories %}
-    <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}">
+    <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}" data-channel-id="{{ story.channel_id }}">
       <h2>{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</h2>
       <p class="story-dateline">{{ story.dateline }}</p>
       <p class="story-source">
@@ -291,11 +293,23 @@
   }
 
   function fadeRemove(article) {
+    var channelId = article.dataset.channelId || '';
     article.style.transition = 'opacity 0.3s';
     article.style.opacity = '0';
     setTimeout(function () {
       article.remove();
       if (unreadBadgeEl) setBadge(unreadBadgeEl, Math.max(0, parseInt(unreadBadgeEl.textContent || '0') - 1));
+      if (channelId) {
+        var sidebarLink = document.querySelector('.sidebar-channel[data-channel-id="' + channelId + '"]');
+        if (sidebarLink) {
+          var countEl = sidebarLink.querySelector('.sc-count');
+          if (countEl) {
+            var n = Math.max(0, parseInt(countEl.textContent || '0') - 1);
+            if (n === 0) { sidebarLink.remove(); }
+            else { countEl.textContent = n; }
+          }
+        }
+      }
       scrollToFocused();
     }, 300);
   }
