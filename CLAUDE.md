@@ -289,7 +289,7 @@ Story body text in AP inverted pyramid style...
 }
 ```
 
-`status` values: `"processed"` | `"ignored_too_old"` | `"no_stories"` (AI ran but returned no relevant stories)
+`status` values: `"processed"` | `"ignored_too_old"` | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried)
 
 `processed_focuses` is a sorted list of all focus strings for which Gemini has been called on this video. Old `metadata.json` files that pre-date this field have no `processed_focuses` key and are treated as fully processed (not re-run).
 

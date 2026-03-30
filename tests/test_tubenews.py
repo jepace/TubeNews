@@ -1877,13 +1877,13 @@ def test_fetch_transcript_sets_quota_event_on_http_402(monkeypatch):
 
 
 def test_fetch_transcript_does_not_set_event_on_other_errors(monkeypatch):
-    """fetch_transcript does NOT set the event for non-quota errors (e.g. video not found)."""
+    """fetch_transcript does NOT set the event for generic transient errors."""
     import threading
     from supadata import SupadataError
 
     mock_client = type("C", (), {
         "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
-            SupadataError(error="video-not-found", message="Not found", details="")
+            SupadataError(error="internal-error", message="Server error", details="")
         ))
     })()
 
@@ -1891,6 +1891,65 @@ def test_fetch_transcript_does_not_set_event_on_other_errors(monkeypatch):
     result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
     assert result is None
     assert not event.is_set()
+
+
+def test_fetch_transcript_returns_false_for_transcript_unavailable():
+    """fetch_transcript returns False (permanent) for 'transcript-unavailable' error code."""
+    import threading
+    from supadata import SupadataError
+
+    for error_code in ("transcript-unavailable", "video-not-found"):
+        mock_client = type("C", (), {
+            "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
+                SupadataError(error=error_code, message="No transcript", details="")
+            ))
+        })()
+        event = threading.Event()
+        result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
+        assert result is False, f"Expected False for error_code={error_code!r}, got {result!r}"
+        assert not event.is_set(), "quota event must not be set for permanent no-transcript"
+
+
+def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
+    """When fetch_transcript returns False, process_video writes metadata.json with
+    status 'no_transcript_available' and _needs_processing returns False afterward."""
+    import TubeNews
+    from TubeNews import _needs_processing
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
+    feed_dir = tmp_path / "test_channel"
+    feed_dir.mkdir()
+
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
+
+    from unittest.mock import MagicMock
+    status, n = TubeNews.process_video(
+        video_id="VID_NO_TX",
+        video_title="March Meeting",
+        video_date="2026-03-01",
+        is_live=False,
+        feed=feed,
+        feed_dir=feed_dir,
+        supadata_client=MagicMock(),
+        config={"gemini_api_key": "k", "gemini_model": "m"},
+        ai_disabled=False,
+    )
+
+    assert status == "skipped"
+    assert n == 0
+
+    # metadata.json must exist with the correct status
+    meeting_dirs = [d for d in feed_dir.iterdir() if d.is_dir() and "VID_NO_TX" in d.name]
+    assert len(meeting_dirs) == 1, "Expected exactly one meeting directory"
+    import json
+    meta = json.loads((meeting_dirs[0] / "metadata.json").read_text())
+    assert meta["status"] == "no_transcript_available"
+    assert meta["video_id"] == "VID_NO_TX"
+
+    # _needs_processing must now return False — the video won't be retried
+    assert not _needs_processing("VID_NO_TX", feed_dir)
 
 
 def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch):
