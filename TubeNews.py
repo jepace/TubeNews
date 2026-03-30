@@ -485,7 +485,7 @@ def fetch_transcript(
     feed_name: str = "",
     video_title: str = "",
     transcript_rate_limit_event: threading.Event | None = None,
-) -> str | None:
+) -> str | None | bool:
     """Fetch timed transcript segments from the Supadata API.
 
     Each segment is formatted as ``"<offset_seconds>s --> <text>"`` so Gemini
@@ -496,7 +496,11 @@ def fetch_transcript(
     *transcript_rate_limit_event* is set so that ``process_video`` and
     ``process_feed`` can abort remaining videos immediately.
 
-    Returns the formatted transcript string, or None if the API call fails.
+    Returns:
+        str  — formatted transcript on success.
+        None — transient failure (network error, rate limit, etc.); will retry next run.
+        False — permanent no-transcript (Supadata confirmed the video has no captions);
+                caller should write ``status: "no_transcript_available"`` and stop retrying.
     """
     prefix = ": ".join(p for p in [feed_name, video_title] if p)
     prefix = f"{prefix}: " if prefix else ""
@@ -531,6 +535,12 @@ def fetch_transcript(
             status = getattr(getattr(exc, "response", None), "status_code", None)
             is_quota_error = status == 402
 
+        # Detect permanent "no transcript" from SupadataError codes.
+        is_permanent_no_transcript = isinstance(exc, SupadataError) and (
+            exc.error == "transcript-unavailable"
+            or "not-found" in (exc.error or "")
+        )
+
         if is_quota_error:
             logger.error(
                 f"{prefix}Supadata: Quota exhausted — no credits remaining. "
@@ -538,6 +548,9 @@ def fetch_transcript(
             )
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
+        elif is_permanent_no_transcript:
+            logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+            return False
         elif "live streaming" in exc_str:
             logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry next run")
         else:
@@ -1273,11 +1286,24 @@ def process_video(
             feed_name=channel_name, video_title=video_title,
             transcript_rate_limit_event=transcript_rate_limit_event,
         )
-        if not transcript_text:
-            # Distinguish quota exhaustion from ordinary fetch failure.
+        if transcript_text is False:
+            # Permanent: Supadata confirmed no transcript exists — never retry.
+            meeting_dir = feed_dir / f"{video_date}_{video_id}"
+            meeting_dir.mkdir(exist_ok=True)
+            metadata: MetadataDict = {
+                "video_id": video_id,
+                "video_title": video_title,
+                "status": "no_transcript_available",
+                "processed_at": time.time(),
+            }
+            (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
+            logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: No transcript available — marked permanent, will not retry")
+            return "skipped", 0
+        elif not transcript_text:
+            # Transient failure — quota exhausted or network error, will retry next run.
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
-            logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: No transcript available — skipping")
+            logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetch failed — will retry next run")
             return "skipped", 0
 
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
