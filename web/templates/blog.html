@@ -4,6 +4,9 @@
 {% block header_sub %}
 <div class="header-sub">
   <div class="hs-left">
+    {% if channel_counts is defined and channel_counts and not channel_id %}
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776;</button>
+    {% endif %}
     <span class="hs-feed-name">{{ blog_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
       <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
@@ -52,6 +55,20 @@
 {% endblock %}
 
 {% block content %}
+<div class="blog-layout">
+{% if channel_counts is defined and channel_counts and not channel_id %}
+<aside class="channel-sidebar" id="channel-sidebar">
+  <a class="sidebar-channel{% if not active_channel_id %} sc-active{% endif %}"
+     href="{{ current_view_url }}">All channels</a>
+  {% for ch in channel_counts %}
+  <a class="sidebar-channel{% if active_channel_id == ch.channel_id %} sc-active{% endif %}"
+     href="{{ current_view_url }}?channel={{ ch.channel_id }}">
+    <span class="sc-name">{{ ch.channel_name }}</span>
+    <span class="sc-count">{{ ch.count }}</span>
+  </a>
+  {% endfor %}
+</aside>
+{% endif %}
 <div class="blog-page">
 
   {% if query is defined and query %}
@@ -121,7 +138,8 @@
     <p class="blog-empty">No unread stories.{% if read_count %} <a href="{{ url_for('serve_read') }}">View {{ read_count }} archived article{% if read_count != 1 %}s{% endif %}</a>.{% else %} Check back after the next TubeNews run.{% endif %}</p>
     {% endif %}
   {% endif %}
-</div>
+</div>{# end .blog-page #}
+</div>{# end .blog-layout #}
 
 <script>
 (function () {
@@ -606,6 +624,15 @@
         if (delBtn) delBtn.click();
       }
     }
+  });
+})();
+(function () {
+  var btn = document.getElementById('sidebar-toggle');
+  var sb = document.getElementById('channel-sidebar');
+  if (!btn || !sb) return;
+  btn.addEventListener('click', function () {
+    var open = sb.classList.toggle('sidebar-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 })();
 </script>

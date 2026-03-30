@@ -204,6 +204,7 @@ class StoryDict(TypedDict):
     story_filename: str
     processed_at: float
     content_hash: str
+    channel_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +544,17 @@ def _archive_channel_stats() -> list[ChannelStat]:
     return sorted(stats, key=lambda s: s["channel_name"].lower())
 
 
+def _channel_counts(stories: list[StoryDict]) -> list[dict]:
+    """Return [{channel_id, channel_name, count}] sorted by count descending."""
+    mapping: dict[str, dict] = {}
+    for s in stories:
+        cid = s["channel_id"]
+        if cid not in mapping:
+            mapping[cid] = {"channel_id": cid, "channel_name": s["channel_name"], "count": 0}
+        mapping[cid]["count"] += 1
+    return sorted(mapping.values(), key=lambda c: c["count"], reverse=True)
+
+
 def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
@@ -570,6 +582,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                     continue
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
+                                "channel_id": channel_id,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
             except Exception as exc:
                 logger.debug(f"Skipping {meeting_dir}: {exc}")
@@ -593,6 +606,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                     "meeting_id": entry.get("meeting_id", ""),
                     "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
+                    "channel_id": channel_id,
                 })
             except Exception as exc:
                 logger.debug(f"Skipping {entry['file']}: {exc}")
@@ -654,6 +668,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "story_filename": entry["file"].name,
                 "processed_at": entry["meta"].get("processed_at", 0),
                 "content_hash": s.get("content_hash", ""),
+                "channel_id": entry["channel_id"],
             })
         except Exception as exc:
             logger.debug(f"Skipping {entry['file']}: {exc}")
@@ -883,9 +898,17 @@ def serve_blog():
     read_count = len(all_stories) - len(stories)
     starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    counts = _channel_counts(stories)
+    active_channel_id = request.args.get("channel", "")
+    if active_channel_id:
+        if not any(s["channel_id"] == active_channel_id for s in stories):
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] == active_channel_id]
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           read_count=read_count, starred_hashes=starred_hashes)
+                           read_count=read_count, starred_hashes=starred_hashes,
+                           channel_counts=counts, active_channel_id=active_channel_id,
+                           current_view_url=url_for("serve_blog"))
 
 
 @app.route("/read")
@@ -899,9 +922,17 @@ def serve_read():
     stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
     starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    counts = _channel_counts(stories)
+    active_channel_id = request.args.get("channel", "")
+    if active_channel_id:
+        if not any(s["channel_id"] == active_channel_id for s in stories):
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] == active_channel_id]
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_archive=True, starred_hashes=starred_hashes)
+                           is_archive=True, starred_hashes=starred_hashes,
+                           channel_counts=counts, active_channel_id=active_channel_id,
+                           current_view_url=url_for("serve_read"))
 
 
 @app.route("/all")
@@ -921,9 +952,18 @@ def serve_all():
                    q in s["dateline"].lower()]
     starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    counts = _channel_counts(stories)
+    active_channel_id = request.args.get("channel", "")
+    if active_channel_id:
+        if not any(s["channel_id"] == active_channel_id for s in stories):
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] == active_channel_id]
+    current_view = url_for("serve_all", q=query) if query else url_for("serve_all")
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_all=True, query=query, starred_hashes=starred_hashes)
+                           is_all=True, query=query, starred_hashes=starred_hashes,
+                           channel_counts=counts, active_channel_id=active_channel_id,
+                           current_view_url=current_view)
 
 
 @app.route("/starred")
@@ -936,9 +976,17 @@ def serve_starred():
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") in starred_set]
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    counts = _channel_counts(stories)
+    active_channel_id = request.args.get("channel", "")
+    if active_channel_id:
+        if not any(s["channel_id"] == active_channel_id for s in stories):
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] == active_channel_id]
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_starred=True, starred_hashes=starred_set)
+                           is_starred=True, starred_hashes=starred_set,
+                           channel_counts=counts, active_channel_id=active_channel_id,
+                           current_view_url=url_for("serve_starred"))
 
 
 @app.route("/channel/<channel_id>")

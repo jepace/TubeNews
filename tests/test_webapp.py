@@ -2478,3 +2478,145 @@ def test_mark_unstarred_removes_hash(logged_in_client, archive, monkeypatch):
         if d.get("email") == "test@example.com":
             assert "abc123" not in d.get("starred_articles", [])
             break
+
+
+# ---------------------------------------------------------------------------
+# Channel sidebar — _channel_counts, channel_id in StoryDict, ?channel= filter
+# ---------------------------------------------------------------------------
+
+
+def test_channel_counts_groups_and_sorts():
+    """_channel_counts must group by channel_id and sort highest-count first."""
+    stories = [
+        {"channel_id": "UC_A", "channel_name": "Alpha", "title": "S1", "dateline": "",
+         "body_html": "", "start_seconds": 0, "video_id": "v1", "video_title": "",
+         "channel_slug": "alpha", "meeting_id": "m1", "story_filename": "01.md",
+         "processed_at": 0, "content_hash": "h1"},
+        {"channel_id": "UC_A", "channel_name": "Alpha", "title": "S2", "dateline": "",
+         "body_html": "", "start_seconds": 0, "video_id": "v2", "video_title": "",
+         "channel_slug": "alpha", "meeting_id": "m1", "story_filename": "02.md",
+         "processed_at": 0, "content_hash": "h2"},
+        {"channel_id": "UC_B", "channel_name": "Beta", "title": "S3", "dateline": "",
+         "body_html": "", "start_seconds": 0, "video_id": "v3", "video_title": "",
+         "channel_slug": "beta", "meeting_id": "m2", "story_filename": "01.md",
+         "processed_at": 0, "content_hash": "h3"},
+    ]
+    counts = webapp._channel_counts(stories)
+    assert len(counts) == 2
+    assert counts[0]["channel_id"] == "UC_A"
+    assert counts[0]["count"] == 2
+    assert counts[1]["channel_id"] == "UC_B"
+    assert counts[1]["count"] == 1
+
+
+def test_channel_counts_empty():
+    """_channel_counts must return an empty list when given no stories."""
+    assert webapp._channel_counts([]) == []
+
+
+def test_get_user_stories_includes_channel_id(archive, monkeypatch):
+    """_get_user_stories must include channel_id in every returned story dict."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    user_data = {"channels": {"UC_ALPHA_ID": []}}
+    stories = _wa._get_user_stories(user_data)
+    assert stories, "Expected at least one story from alpha channel"
+    for s in stories:
+        assert "channel_id" in s
+        assert s["channel_id"] == "UC_ALPHA_ID"
+
+
+def test_serve_blog_channel_filter_returns_only_that_channel(client, archive, monkeypatch):
+    """/blog?channel=<id> must return only stories from the specified channel."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    _make_user(archive / "_users", "Multi User", "multi@example.com",
+               ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-abc")
+    client.post("/login", data={"email": "multi@example.com", "password": "testpassword123"})
+    r = client.get("/blog?channel=UC_ALPHA_ID")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+    assert b"Beta Council Discusses Zoning" not in r.data
+
+
+def test_serve_blog_channel_filter_unknown_returns_404(client, archive, monkeypatch):
+    """/blog?channel=<unknown> must return 404."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    _make_user(archive / "_users", "Multi User", "multi2@example.com",
+               ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-xyz")
+    client.post("/login", data={"email": "multi2@example.com", "password": "testpassword123"})
+    r = client.get("/blog?channel=UC_NO_SUCH_ID")
+    assert r.status_code == 404
+
+
+def test_serve_blog_includes_sidebar_with_multiple_channels(client, archive, monkeypatch):
+    """/blog must render the channel sidebar when the user has stories from multiple channels."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    _make_user(archive / "_users", "Multi User", "multi3@example.com",
+               ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-def")
+    client.post("/login", data={"email": "multi3@example.com", "password": "testpassword123"})
+    r = client.get("/blog")
+    assert r.status_code == 200
+    assert b"channel-sidebar" in r.data
+    assert b"Alpha City Council" in r.data
+    assert b"Beta City Council" in r.data
+
+
+def test_serve_all_channel_filter_returns_only_that_channel(client, archive, monkeypatch):
+    """/all?channel=<id> must return only stories from the specified channel."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    _make_user(archive / "_users", "Multi User", "multi4@example.com",
+               ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-ghi")
+    client.post("/login", data={"email": "multi4@example.com", "password": "testpassword123"})
+    r = client.get("/all?channel=UC_BETA__ID")
+    assert r.status_code == 200
+    assert b"Beta Council Discusses Zoning" in r.data
+    assert b"Alpha Council Approves Budget" not in r.data
+
+
+def test_serve_read_channel_filter(client, archive, monkeypatch):
+    """/read?channel=<id> must show only read stories from the specified channel."""
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+    _make_user(archive / "_users", "Multi User", "multi5@example.com",
+               ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-jkl")
+    client.post("/login", data={"email": "multi5@example.com", "password": "testpassword123"})
+    # Mark the alpha story as read.
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    client.post("/account/mark-read", data={"content_hash": parsed["content_hash"]})
+    r = client.get("/read?channel=UC_ALPHA_ID")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+    assert b"Beta Council Discusses Zoning" not in r.data
+
+
+def test_serve_starred_channel_filter(client, archive, monkeypatch):
+    """/starred?channel=<id> must show only starred stories from the specified channel."""
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+    _make_user(archive / "_users", "Multi User", "multi6@example.com",
+               ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-mno")
+    client.post("/login", data={"email": "multi6@example.com", "password": "testpassword123"})
+    # Star the alpha story.
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    client.post("/account/mark-starred", data={"content_hash": parsed["content_hash"]})
+    r = client.get("/starred?channel=UC_ALPHA_ID")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+    assert b"Beta Council Discusses Zoning" not in r.data
