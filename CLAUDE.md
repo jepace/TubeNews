@@ -106,7 +106,7 @@ Defined in `web/app.py`:
 |---|---|---|
 | `ChannelInfo` | `channel_id`, `channel_name` (both `str`) | `_channel_info_for_dir()` return type |
 | `ChannelStat` | `channel_id`, `channel_name`, `processed`, `ignored`, `no_stories`, `story_count` (`int`), `last_processed` (`float`) | `_archive_channel_stats()` return type |
-| `StoryDict` | `title`, `dateline`, `body_html`, `video_id`, `video_title`, `channel_name`, `channel_slug`, `meeting_id`, `story_filename` (`str`), `start_seconds` (`int`), `processed_at` (`float`), `content_hash` (`str`) | `_get_user_stories()` and `_get_channel_stories()` return type; passed to Flask templates |
+| `StoryDict` | `title`, `dateline`, `body_html`, `video_id`, `video_title`, `channel_name`, `channel_slug`, `meeting_id`, `story_filename`, `channel_id` (`str`), `start_seconds` (`int`), `processed_at` (`float`), `content_hash` (`str`) | `_get_user_stories()` and `_get_channel_stories()` return type; passed to Flask templates |
 
 ---
 
@@ -485,6 +485,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_archive_channel_stats()` | Scans all channel directories and returns `list[ChannelStat]` with per-channel counts of processed, ignored, no-stories, and story files. Used by `admin_feeds`. |
 | `_get_channel_stories(channel_id)` | Returns `(channel_name | None, list[StoryDict])` for a single channel. Used by `channel_blog`. |
 | `_get_user_stories(user_data, user_id)` | Scans all subscribed channel directories and returns `list[StoryDict]` filtered by the user's `user_ids` attribution. Used by `serve_blog`, `serve_read`, `serve_all`, and the public blog route. |
+| `_channel_counts(stories)` | Takes a `list[StoryDict]` and returns `list[dict]` with `channel_id`, `channel_name`, and `count` keys, sorted by count descending. Used by all four blog routes to populate the channel sidebar. |
 | `_get_supadata_balance()` | Reads the cached Supadata credit data from `content/_run_logs/supadata_balance.json`; returns `None` if absent. Used by `admin_feeds` to show the credit balance without a live API call. |
 
 ### Route Map
@@ -507,10 +508,10 @@ the web app does **not** call either — the web UI uses dynamic generation only
 |---|---|---|---|
 | GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
 | POST | `/logout` | `logout` | Clears session (POST + CSRF to prevent logout CSRF) |
-| GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories |
-| GET | `/starred` | `serve_starred` | Serves the logged-in user's starred stories |
-| GET | `/read` | `serve_read` | Serves the logged-in user's read stories (the "Read" tab) |
-| GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status |
+| GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories; accepts `?channel=<channel_id>` to filter to a single channel |
+| GET | `/starred` | `serve_starred` | Serves the logged-in user's starred stories; accepts `?channel=<channel_id>` to filter to a single channel |
+| GET | `/read` | `serve_read` | Serves the logged-in user's read stories (the "Read" tab); accepts `?channel=<channel_id>` to filter to a single channel |
+| GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status; accepts `?channel=<channel_id>` to filter to a single channel (applied after any `?q=` search) |
 | GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
 | GET/POST | `/account` | `account` | Self-service account settings: change name/email (requires current password) |
 | POST | `/account/password` | `account_password` | Change own password (requires current password; new password min 10 chars) |
