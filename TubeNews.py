@@ -1206,7 +1206,7 @@ def process_video(
     total_videos: int = 0,
     focuses: list[tuple[str, list[str]]] | None = None,
     transcript_rate_limit_event: threading.Event | None = None,
-) -> str:
+) -> tuple[str, int]:
     """Fetch, analyse, and archive one video.
 
     Attempts to reuse a locally-cached transcript (from a previous run that
