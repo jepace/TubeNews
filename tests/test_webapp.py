@@ -2341,3 +2341,107 @@ def test_login_locked_account_does_not_authenticate(client, archive):
     r = client.get("/blog", follow_redirects=False)
     assert r.status_code == 302
     assert "/login" in r.headers["Location"]
+
+
+# ---------------------------------------------------------------------------
+# Starred articles
+# ---------------------------------------------------------------------------
+
+
+def test_starred_requires_login(client, archive):
+    """/starred must redirect unauthenticated requests to login."""
+    r = client.get("/starred", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_starred_returns_200(logged_in_client, archive, monkeypatch):
+    """GET /starred must return 200 for a logged-in user."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    r = logged_in_client.get("/starred")
+    assert r.status_code == 200
+
+
+def test_starred_shows_starred_story(logged_in_client, archive, monkeypatch):
+    """/starred must show stories whose content_hash is in starred_articles."""
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    content_hash = parsed["content_hash"]
+
+    logged_in_client.post("/account/mark-starred", data={"content_hash": content_hash})
+    r = logged_in_client.get("/starred")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+
+
+def test_starred_hides_unstarred_story(logged_in_client, archive, monkeypatch):
+    """/starred must not show stories that are not in starred_articles."""
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    r = logged_in_client.get("/starred")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" not in r.data
+
+
+def test_mark_starred_requires_login(client, archive):
+    """POST /account/mark-starred must redirect unauthenticated requests to login."""
+    r = client.post("/account/mark-starred", data={"content_hash": "abc123"},
+                    follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_mark_starred_adds_hash(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-starred must persist content_hash in starred_articles."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+
+    r = logged_in_client.post("/account/mark-starred", data={"content_hash": "abc123"})
+    assert r.status_code == 200
+    assert json.loads(r.data)["ok"] is True
+
+    user_dir = archive / "_users"
+    user_data = None
+    for user_json in user_dir.glob("*/user.json"):
+        d = json.loads(user_json.read_text())
+        if d.get("email") == "test@example.com":
+            user_data = d
+            break
+    assert user_data is not None
+    assert "abc123" in user_data.get("starred_articles", [])
+
+
+def test_mark_starred_missing_hash_returns_400(logged_in_client, archive):
+    """POST /account/mark-starred with no content_hash must return 400."""
+    r = logged_in_client.post("/account/mark-starred", data={})
+    assert r.status_code == 400
+
+
+def test_mark_unstarred_removes_hash(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-unstarred must remove content_hash from starred_articles."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+
+    logged_in_client.post("/account/mark-starred", data={"content_hash": "abc123"})
+    r = logged_in_client.post("/account/mark-unstarred", data={"content_hash": "abc123"})
+    assert r.status_code == 200
+    assert json.loads(r.data)["ok"] is True
+
+    user_dir = archive / "_users"
+    for user_json in user_dir.glob("*/user.json"):
+        d = json.loads(user_json.read_text())
+        if d.get("email") == "test@example.com":
+            assert "abc123" not in d.get("starred_articles", [])
+            break

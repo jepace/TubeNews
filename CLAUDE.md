@@ -407,7 +407,8 @@ content/_users/
   "blog_name": "Alice's Local News",
   "preferences": {"dark_mode": false, "font_size": "normal"},
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
-  "read_articles": ["abc123hash", "def456hash"]
+  "read_articles": ["abc123hash", "def456hash"],
+  "starred_articles": ["abc123hash"]
 }
 ```
 
@@ -419,6 +420,7 @@ content/_users/
 - `preferences` — display settings dict with keys `dark_mode` (bool) and `font_size` (`"normal"` | `"large"` | `"larger"`). Converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. Key absent means all defaults (light mode, normal font).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
+- `starred_articles` — sorted list of `content_hash` strings for articles the user has starred. `/starred` shows only these stories. Key absent means no starred articles. Written by the `account_mark_starred` and `account_mark_unstarred` routes. Independent of read/unread state.
 
 ### Token Model
 
@@ -505,6 +507,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
 | POST | `/logout` | `logout` | Clears session (POST + CSRF to prevent logout CSRF) |
 | GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories |
+| GET | `/starred` | `serve_starred` | Serves the logged-in user's starred stories |
 | GET | `/read` | `serve_read` | Serves the logged-in user's read stories (the "Read" tab) |
 | GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status |
 | GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
@@ -516,6 +519,8 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/account/mark-unread` | `account_mark_unread` | Remove a `content_hash` from `read_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-all-read` | `account_mark_all_read` | Mark all current stories as read; redirects to `/blog` |
 | POST | `/account/mark-all-unread` | `account_mark_all_unread` | Clear all read articles (mark everything unread); redirects to `/blog` |
+| POST | `/account/mark-starred` | `account_mark_starred` | Add a `content_hash` to the user's `starred_articles`; returns JSON `{"ok": true}` |
+| POST | `/account/mark-unstarred` | `account_mark_unstarred` | Remove a `content_hash` from `starred_articles`; returns JSON `{"ok": true}` |
 
 **Admin required (`admin_users` in config):**
 

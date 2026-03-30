@@ -6,11 +6,13 @@
   <div class="hs-left">
     <span class="hs-feed-name">{{ blog_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
-      <a class="hs-tab{% if not is_archive and not is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread</a>
+      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread</a>
+      <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}">Starred</a>
       <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Read</a>
       <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}">All</a>
     {% elif channel_id %}
       <a class="hs-tab" href="{{ url_for('serve_blog') }}">Unread</a>
+      <a class="hs-tab" href="{{ url_for('serve_starred') }}">Starred</a>
       <a class="hs-tab" href="{{ url_for('serve_read') }}">Read</a>
       <span class="hs-tab hs-tab-active">All</span>
     {% endif %}
@@ -80,6 +82,11 @@
           {% else %}
           <button type="button" class="share-read" title="Mark as read">&#10003; Mark Read</button>
           {% endif %}
+          {% if story.content_hash in (starred_hashes | default([])) %}
+          <button type="button" class="share-unstarred" title="Unstar">&#9733; Starred</button>
+          {% else %}
+          <button type="button" class="share-starred" title="Star">&#9734; Star</button>
+          {% endif %}
         {% endif %}
         {% if current_user.is_authenticated and current_user.is_admin and story.story_filename %}
         <button type="button" class="share-delete"
@@ -92,7 +99,9 @@
     </article>
     {% endfor %}
   {% else %}
-    {% if is_archive %}
+    {% if is_starred %}
+    <p class="blog-empty">No starred stories yet. Use the &#9734; button or press <kbd>s</kbd> to star a story.</p>
+    {% elif is_archive %}
     <p class="blog-empty">No read articles yet. Mark articles as read from your <a href="{{ url_for('serve_blog') }}">inbox</a>.</p>
     {% else %}
     <p class="blog-empty">No unread stories.{% if read_count %} <a href="{{ url_for('serve_read') }}">View {{ read_count }} archived article{% if read_count != 1 %}s{% endif %}</a>.{% else %} Check back after the next TubeNews run.{% endif %}</p>
@@ -210,9 +219,12 @@
 {% if current_user.is_authenticated %}
 (function () {
   var csrfToken = {{ csrf_token() | tojson }};
-  var markReadUrl   = {{ url_for('account_mark_read')   | tojson }};
-  var markUnreadUrl = {{ url_for('account_mark_unread') | tojson }};
-  var isAll = {{ (is_all or False) | tojson }};
+  var markReadUrl     = {{ url_for('account_mark_read')     | tojson }};
+  var markUnreadUrl   = {{ url_for('account_mark_unread')   | tojson }};
+  var markStarredUrl  = {{ url_for('account_mark_starred')  | tojson }};
+  var markUnstarredUrl= {{ url_for('account_mark_unstarred')| tojson }};
+  var isAll     = {{ (is_all     or False) | tojson }};
+  var isStarred = {{ (is_starred or False) | tojson }};
 
   function postHash(url, hash, onSuccess) {
     var fd = new FormData();
@@ -284,8 +296,44 @@
     });
   }
 
+  function attachStarBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-share');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markStarredUrl, hash, function () {
+        btn.removeEventListener('click', handler);
+        btn.className = 'share-unstarred';
+        btn.title = 'Unstar';
+        btn.innerHTML = '&#9733; Starred';
+        attachUnstarBtn(btn);
+      });
+    });
+  }
+
+  function attachUnstarBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-share');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markUnstarredUrl, hash, function () {
+        btn.removeEventListener('click', handler);
+        if (isStarred) {
+          fadeRemove(btn.closest('article'));
+        } else {
+          btn.className = 'share-starred';
+          btn.title = 'Star';
+          btn.innerHTML = '&#9734; Star';
+          attachStarBtn(btn);
+        }
+      });
+    });
+  }
+
   document.querySelectorAll('.share-read').forEach(attachReadBtn);
   document.querySelectorAll('.share-unread').forEach(attachUnreadBtn);
+  document.querySelectorAll('.share-starred').forEach(attachStarBtn);
+  document.querySelectorAll('.share-unstarred').forEach(attachUnstarBtn);
 })();
 {% endif %}
 
@@ -376,10 +424,14 @@
       <tr><td>e</td><td>Mark story as read</td></tr>
         {% endif %}
       {% endif %}
+      {% if current_user.is_authenticated and not channel_id %}
+      <tr><td>s</td><td>Star / unstar story</td></tr>
+      {% endif %}
       {% if current_user.is_authenticated and current_user.is_admin %}
       <tr><td>#</td><td>Delete story (admin)</td></tr>
       {% endif %}
       <tr><td>g i</td><td>Go to inbox</td></tr>
+      <tr><td>g s</td><td>Go to starred</td></tr>
       <tr><td>g a</td><td>Go to read</td></tr>
       <tr><td>?</td><td>Show / hide this help</td></tr>
       <tr><td>Esc / Enter</td><td>Close this help</td></tr>
@@ -464,8 +516,9 @@
     if (pendingG) {
       clearTimeout(gTimer);
       pendingG = false;
-      if (key === 'i') { window.location.href = '/blog'; return; }
-      if (key === 'a') { window.location.href = '/read'; return; }
+      if (key === 'i') { window.location.href = '/blog';    return; }
+      if (key === 's') { window.location.href = '/starred'; return; }
+      if (key === 'a') { window.location.href = '/read';    return; }
       return;
     }
     if (key === 'g') {
@@ -508,6 +561,16 @@
         if (unreadBtn) {
           advanceFocus(articles, focusIdx);
           unreadBtn.click();
+        }
+      }
+    } else if (key === 's') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var starBtn = articles[focusIdx].querySelector('.share-starred, .share-unstarred');
+        if (starBtn) {
+          if (isStarred && starBtn.classList.contains('share-unstarred')) {
+            advanceFocus(articles, focusIdx);
+          }
+          starBtn.click();
         }
       }
     } else if (key === '#') {

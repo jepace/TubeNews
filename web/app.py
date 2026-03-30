@@ -867,10 +867,11 @@ def serve_blog():
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") not in read_set]
     read_count = len(all_stories) - len(stories)
+    starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           read_count=read_count)
+                           read_count=read_count, starred_hashes=starred_hashes)
 
 
 @app.route("/read")
@@ -882,10 +883,11 @@ def serve_read():
     read_set = set(current_user._data.get("read_articles", []))
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
+    starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_archive=True)
+                           is_archive=True, starred_hashes=starred_hashes)
 
 
 @app.route("/all")
@@ -903,10 +905,26 @@ def serve_all():
                    q in s["body_html"].lower() or
                    q in s["channel_name"].lower() or
                    q in s["dateline"].lower()]
+    starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     return render_template("blog.html", stories=stories, blog_name=blog_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_all=True, query=query)
+                           is_all=True, query=query, starred_hashes=starred_hashes)
+
+
+@app.route("/starred")
+@login_required
+def serve_starred():
+    """Render the logged-in user's starred stories."""
+    if not current_user.channel_ids:
+        return redirect(url_for("account"))
+    starred_set = set(current_user._data.get("starred_articles", []))
+    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    stories = [s for s in all_stories if s.get("content_hash", "") in starred_set]
+    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    return render_template("blog.html", stories=stories, blog_name=blog_name,
+                           feed_path=f"/feed/{current_user.feed_token}.xml",
+                           is_starred=True, starred_hashes=starred_set)
 
 
 @app.route("/channel/<channel_id>")
@@ -1109,6 +1127,34 @@ def account_mark_all_unread():
     current_user._data["read_articles"] = []
     current_user._save()
     return redirect(url_for("serve_blog"))
+
+
+@app.route("/account/mark-starred", methods=["POST"])
+@login_required
+def account_mark_starred():
+    """Star a story (add content_hash to starred_articles). Returns JSON."""
+    content_hash = request.form.get("content_hash", "").strip()
+    if not content_hash:
+        return jsonify({"ok": False, "error": "missing content_hash"}), 400
+    starred_set = set(current_user._data.get("starred_articles", []))
+    starred_set.add(content_hash)
+    current_user._data["starred_articles"] = sorted(starred_set)
+    current_user._save()
+    return jsonify({"ok": True})
+
+
+@app.route("/account/mark-unstarred", methods=["POST"])
+@login_required
+def account_mark_unstarred():
+    """Unstar a story (remove content_hash from starred_articles). Returns JSON."""
+    content_hash = request.form.get("content_hash", "").strip()
+    if not content_hash:
+        return jsonify({"ok": False, "error": "missing content_hash"}), 400
+    starred_set = set(current_user._data.get("starred_articles", []))
+    starred_set.discard(content_hash)
+    current_user._data["starred_articles"] = sorted(starred_set)
+    current_user._save()
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------
