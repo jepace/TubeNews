@@ -528,6 +528,7 @@
 
   var pendingG = false;
   var gTimer   = null;
+  var isStarred = {{ (is_starred or False) | tojson }};
 
   document.addEventListener('keydown', function (e) {
     var tag = (e.target.tagName || '').toLowerCase();
