@@ -324,7 +324,7 @@ Story body text in AP inverted pyramid style...
 |---|---|---|
 | `helpers/catchup.py` | Marks all visible videos as ignored | Before first run on a channel with existing videos |
 | `helpers/check_quota.py` | Tests Gemini API key quota across models | When AI calls fail with 429 errors |
-| `helpers/dump_channel_html.py` | Dumps raw `ytInitialData` JSON for the first configured channel | When YouTube scraper stops finding videos/titles — inspect structure changes |
+| `helpers/dump_channel_html.py` | Dumps raw `ytInitialData` JSON for a channel; accepts optional `channel_id` positional arg, falls back to first configured channel | When YouTube scraper stops finding videos/titles — inspect structure changes |
 | `helpers/reset_password.py` | Resets a user's password from the CLI | When the admin is locked out and can't log in to use the admin panel |
 
 ---
