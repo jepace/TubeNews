@@ -456,6 +456,15 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
                 "video IDs — YouTube HTML structure may have changed."
             )
         elif not tab_meta:
+            if '"collectionThumbnailViewModel"' in html:
+                # Tab is showing playlist cards rather than individual videos
+                # (some channels organise streams this way). The regex finds
+                # false-positive IDs from playlist thumbnail URLs — skip them.
+                logger.debug(
+                    f"{prefix}YouTube: {tab} tab shows playlist cards, not "
+                    "individual videos — skipping."
+                )
+                continue
             logger.warning(
                 f"{prefix}YouTube: Found {len(found)} video ID(s) on {tab} tab "
                 "but could not parse any titles or dates — "
