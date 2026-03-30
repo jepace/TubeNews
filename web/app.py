@@ -768,6 +768,9 @@ def login():
                 flash("This account has been locked. Contact an administrator.", "error")
             else:
                 login_user(user, remember=remember)
+                if not user.channel_ids:
+                    flash("Welcome! Choose the channels you'd like to follow below.", "success")
+                    return redirect(url_for("account"))
                 return redirect(_safe_next(request.args.get("next")))
         else:
             flash("Invalid email or password.", "error")
@@ -812,7 +815,7 @@ def register():
             _index_add(email, user_uuid)
             login_user(User(user_dir, data))
             _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
-            flash("Account created. Choose your channels below.", "success")
+            flash("Account created! Choose the channels you'd like to follow below.", "success")
             return redirect(url_for("account"))
 
     return render_template("register.html")
