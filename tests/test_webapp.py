@@ -2272,3 +2272,176 @@ def test_web_ntfy_swallows_network_errors(archive, monkeypatch):
     import urllib.request as _ur
     monkeypatch.setattr(_ur, "urlopen", lambda *a, **kw: (_ for _ in ()).throw(OSError("network down")))
     _wa._web_ntfy("Title", "Message")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — /login returns HTTP 429 after 10 requests per minute
+# ---------------------------------------------------------------------------
+
+def test_login_rate_limited_after_10_attempts(client, registered_user):
+    """POST /login must return HTTP 429 after the 10-per-minute limit is exceeded."""
+    flask_app.config["RATELIMIT_ENABLED"] = True
+    webapp.limiter.reset()
+    try:
+        # Make 10 requests to hit the limit (all with wrong password)
+        for _ in range(10):
+            client.post("/login", data={"email": "nobody@example.com", "password": "wrong"})
+        # The 11th request must be rate-limited
+        r = client.post("/login", data={"email": "nobody@example.com", "password": "wrong"})
+        assert r.status_code == 429
+    finally:
+        flask_app.config["RATELIMIT_ENABLED"] = False
+
+
+# ---------------------------------------------------------------------------
+# Locked accounts — rejected at login
+# ---------------------------------------------------------------------------
+
+def test_login_locked_account_shows_error(client, archive):
+    """A locked account must be rejected at login with an appropriate error message."""
+    locked_data = {
+        "name": "Locked User",
+        "email": "locked@example.com",
+        "password_hash": generate_password_hash("correctpassword1"),
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": int(time.time()),
+        "locked": True,
+    }
+    user_dir = archive / "_users" / str(uuid.uuid4())
+    user_dir.mkdir(parents=True)
+    (user_dir / "user.json").write_text(json.dumps(locked_data))
+
+    r = client.post("/login", data={
+        "email": "locked@example.com",
+        "password": "correctpassword1",
+    }, follow_redirects=True)
+
+    assert r.status_code == 200
+    assert b"locked" in r.data.lower()
+
+
+def test_login_locked_account_does_not_authenticate(client, archive):
+    """A locked account must not be granted a session even with correct credentials."""
+    locked_data = {
+        "name": "Locked User",
+        "email": "locked2@example.com",
+        "password_hash": generate_password_hash("correctpassword1"),
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": int(time.time()),
+        "locked": True,
+    }
+    user_dir = archive / "_users" / str(uuid.uuid4())
+    user_dir.mkdir(parents=True)
+    (user_dir / "user.json").write_text(json.dumps(locked_data))
+
+    client.post("/login", data={"email": "locked2@example.com", "password": "correctpassword1"})
+    # After "login", accessing a login-required page must still redirect to login
+    r = client.get("/blog", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+# ---------------------------------------------------------------------------
+# Starred articles
+# ---------------------------------------------------------------------------
+
+
+def test_starred_requires_login(client, archive):
+    """/starred must redirect unauthenticated requests to login."""
+    r = client.get("/starred", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_starred_returns_200(logged_in_client, archive, monkeypatch):
+    """GET /starred must return 200 for a logged-in user."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    r = logged_in_client.get("/starred")
+    assert r.status_code == 200
+
+
+def test_starred_shows_starred_story(logged_in_client, archive, monkeypatch):
+    """/starred must show stories whose content_hash is in starred_articles."""
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    story_file = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    parsed = _tn.parse_story_file(story_file)
+    content_hash = parsed["content_hash"]
+
+    logged_in_client.post("/account/mark-starred", data={"content_hash": content_hash})
+    r = logged_in_client.get("/starred")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+
+
+def test_starred_hides_unstarred_story(logged_in_client, archive, monkeypatch):
+    """/starred must not show stories that are not in starred_articles."""
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    r = logged_in_client.get("/starred")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" not in r.data
+
+
+def test_mark_starred_requires_login(client, archive):
+    """POST /account/mark-starred must redirect unauthenticated requests to login."""
+    r = client.post("/account/mark-starred", data={"content_hash": "abc123"},
+                    follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_mark_starred_adds_hash(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-starred must persist content_hash in starred_articles."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+
+    r = logged_in_client.post("/account/mark-starred", data={"content_hash": "abc123"})
+    assert r.status_code == 200
+    assert json.loads(r.data)["ok"] is True
+
+    user_dir = archive / "_users"
+    user_data = None
+    for user_json in user_dir.glob("*/user.json"):
+        d = json.loads(user_json.read_text())
+        if d.get("email") == "test@example.com":
+            user_data = d
+            break
+    assert user_data is not None
+    assert "abc123" in user_data.get("starred_articles", [])
+
+
+def test_mark_starred_missing_hash_returns_400(logged_in_client, archive):
+    """POST /account/mark-starred with no content_hash must return 400."""
+    r = logged_in_client.post("/account/mark-starred", data={})
+    assert r.status_code == 400
+
+
+def test_mark_unstarred_removes_hash(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-unstarred must remove content_hash from starred_articles."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+
+    logged_in_client.post("/account/mark-starred", data={"content_hash": "abc123"})
+    r = logged_in_client.post("/account/mark-unstarred", data={"content_hash": "abc123"})
+    assert r.status_code == 200
+    assert json.loads(r.data)["ok"] is True
+
+    user_dir = archive / "_users"
+    for user_json in user_dir.glob("*/user.json"):
+        d = json.loads(user_json.read_text())
+        if d.get("email") == "test@example.com":
+            assert "abc123" not in d.get("starred_articles", [])
+            break

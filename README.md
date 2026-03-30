@@ -72,6 +72,8 @@ content/
 │   └── rss.xml
 ├── _run_logs/            ← per-run logs and summaries (internal)
 ├── _users/               ← one directory per registered user (internal)
+│   ├── index.json        ← email→UUID index for fast login lookup
+│   └── <uuid>/           ← one sub-directory per user account
 └── rss.xml               ← aggregated feed
 ```
 

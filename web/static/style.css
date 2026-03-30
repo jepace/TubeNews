@@ -716,6 +716,9 @@ button.btn-danger-sm:hover { background: #fee2e2; }
 .share-delete { color: #dc2626; border-color: #fca5a5; }
 .share-delete:hover { color: #fff !important; background: #dc2626 !important; border-color: #dc2626 !important; }
 
+.share-unstarred { color: var(--accent); border-color: var(--accent); }
+.share-unstarred:hover { color: #fff !important; background: var(--accent) !important; border-color: var(--accent) !important; }
+
 .blog-empty {
   color: var(--muted);
   margin-top: 2rem;
