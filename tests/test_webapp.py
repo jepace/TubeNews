@@ -424,6 +424,39 @@ def test_login_valid_credentials_redirects(client, registered_user):
     assert r.status_code == 302
 
 
+def test_login_with_channels_redirects_to_blog(client, registered_user):
+    """Users who already have channel subscriptions land on /blog after login."""
+    r = client.post("/login", data={
+        "email": "test@example.com",
+        "password": "testpassword123",
+    }, follow_redirects=False)
+    assert r.status_code == 302
+    assert "/blog" in r.headers["Location"]
+
+
+def test_login_no_channels_redirects_to_account(client, archive):
+    """A user with no channel subscriptions is sent to /account on login (onboarding)."""
+    _make_user(archive / "_users", name="New User", email="new@example.com",
+               channel_ids=[], token="new-user-token")
+    r = client.post("/login", data={
+        "email": "new@example.com",
+        "password": "testpassword123",
+    }, follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/account")
+
+
+def test_login_no_channels_shows_welcome_message(client, archive):
+    """A welcome flash message is shown when a channel-less user is redirected to /account."""
+    _make_user(archive / "_users", name="New User", email="new@example.com",
+               channel_ids=[], token="new-user-token")
+    r = client.post("/login", data={
+        "email": "new@example.com",
+        "password": "testpassword123",
+    }, follow_redirects=True)
+    assert b"Welcome" in r.data
+
+
 def test_login_wrong_password_shows_error(client, registered_user):
     r = client.post("/login", data={
         "email": "test@example.com",

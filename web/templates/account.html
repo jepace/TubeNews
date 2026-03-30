@@ -5,6 +5,14 @@
 <div class="admin">
   <h1>{{ current_user.name }}</h1>
 
+  {% if not current_user.channel_ids %}
+  <section class="admin-section onboarding-banner">
+    <h2>Get started</h2>
+    <p>Pick the channels you want to follow, then click <strong>Subscribe</strong>.
+       Your personal RSS feed and blog will be ready once you've saved at least one channel.</p>
+  </section>
+  {% endif %}
+
   <!-- ── Sharing URLs ───────────────────────────────────────── -->
   <section class="admin-section">
     <h2>Sharing URLs</h2>

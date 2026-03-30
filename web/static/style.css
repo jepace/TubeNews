@@ -487,6 +487,9 @@ button[type="submit"]:hover,
 
 .danger-zone { border-color: #fca5a5; background: #fff8f8; }
 
+.onboarding-banner { border-color: var(--accent); background: var(--info-bg); color: var(--info-text); }
+html.dark .onboarding-banner { background: var(--info-bg); color: var(--info-text); }
+
 .alert-danger {
   background: #fff0f0;
   border: 1px solid var(--danger);
