@@ -10,9 +10,13 @@ you can update ``_parse_channel_page_metadata()`` accordingly.
 
 Usage::
 
-    python3 helpers/dump_channel_html.py
+    python3 helpers/dump_channel_html.py [channel_id]
 
-Reads the first channel from ``TubeNews.json`` and writes two files:
+If ``channel_id`` is omitted, reads the first channel from ``TubeNews.json``.
+Pass a channel ID directly to inspect any channel without editing the config
+(e.g. when the warning log tells you which channel triggered the error).
+
+Writes two files:
 
 * ``/tmp/yt_data.json`` — the full ``ytInitialData`` blob (pretty-printed).
   Open this in a text editor or ``jq`` to explore the structure.
@@ -69,19 +73,24 @@ def find_video_renderers(obj: object, found: list | None = None) -> list[dict]:
 
 
 def main() -> None:
-    try:
-        config = json.loads(CONFIG_FILE.read_text())
-    except FileNotFoundError:
-        sys.exit(f"Error: {CONFIG_FILE} not found — copy TubeNews.json.sample first.")
-    except json.JSONDecodeError as exc:
-        sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
+    if len(sys.argv) > 1:
+        channel_id = sys.argv[1]
+        channel_name = channel_id  # no friendly name available from CLI
+    else:
+        try:
+            config = json.loads(CONFIG_FILE.read_text())
+        except FileNotFoundError:
+            sys.exit(f"Error: {CONFIG_FILE} not found — copy TubeNews.json.sample first.")
+        except json.JSONDecodeError as exc:
+            sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
 
-    feeds = config.get("feeds", [])
-    if not feeds:
-        sys.exit("No feeds configured in TubeNews.json — nothing to fetch.")
+        feeds = config.get("feeds", [])
+        if not feeds:
+            sys.exit("No feeds configured in TubeNews.json — nothing to fetch.")
 
-    channel_id = feeds[0]["channel_id"]
-    channel_name = feeds[0]["channel_name"]
+        channel_id = feeds[0]["channel_id"]
+        channel_name = feeds[0]["channel_name"]
+
     print(f"Channel : {channel_name}  ({channel_id})")
 
     url = f"https://www.youtube.com/channel/{channel_id}/videos"

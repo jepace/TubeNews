@@ -459,7 +459,8 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
             logger.warning(
                 f"{prefix}YouTube: Found {len(found)} video ID(s) on {tab} tab "
                 "but could not parse any titles or dates — "
-                "YouTube HTML structure may have changed (run dump_channel_html.py to inspect)."
+                "YouTube HTML structure may have changed "
+                f"(run: python3 helpers/dump_channel_html.py {channel_id})."
             )
         meta_lookup.update(tab_meta)
         all_ids.extend(found)
