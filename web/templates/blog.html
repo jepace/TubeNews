@@ -552,6 +552,14 @@
     if (!goNext) { scrollToStory(target); focusIdx = idx - 1; }
   }
 
+  // Clicking story text (not a button/link) focuses that story for keyboard nav.
+  document.querySelectorAll('article.story').forEach(function (article, idx) {
+    article.addEventListener('click', function (e) {
+      if (e.target.closest('a, button, input, select, textarea')) return;
+      setFocus(idx);
+    });
+  });
+
   function showHelp() { helpEl.style.display = 'flex'; }
   function hideHelp() { helpEl.style.display = 'none'; }
 
