@@ -1894,11 +1894,11 @@ def test_fetch_transcript_does_not_set_event_on_other_errors(monkeypatch):
 
 
 def test_fetch_transcript_returns_false_for_transcript_unavailable():
-    """fetch_transcript returns False (permanent) for 'transcript-unavailable' error code."""
+    """fetch_transcript returns False (permanent) for known permanent error codes."""
     import threading
     from supadata import SupadataError
 
-    for error_code in ("transcript-unavailable", "video-not-found"):
+    for error_code in ("transcript-unavailable", "video-not-found", "forbidden"):
         mock_client = type("C", (), {
             "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
                 SupadataError(error=error_code, message="No transcript", details="")
@@ -1908,6 +1908,17 @@ def test_fetch_transcript_returns_false_for_transcript_unavailable():
         result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
         assert result is False, f"Expected False for error_code={error_code!r}, got {result!r}"
         assert not event.is_set(), "quota event must not be set for permanent no-transcript"
+
+
+def test_fetch_transcript_returns_false_for_empty_content():
+    """fetch_transcript returns False (permanent) when API returns a response with no content."""
+    # Simulate a successful API call that returns a transcript object with no content
+    empty_response = type("T", (), {"content": None, "lang": "en"})()
+    mock_client = type("C", (), {
+        "transcript": staticmethod(lambda **kw: empty_response)
+    })()
+    result = fetch_transcript("VID123", mock_client)
+    assert result is False
 
 
 def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
