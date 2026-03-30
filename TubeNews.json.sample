@@ -5,6 +5,7 @@
   "base_url": "",
   "archive_dir": "",
   "request_timeout": 15,
+  "gemini_call_delay": 5,
   "ntfy_topic": "TubeNewsAdmin",
   "tubenews_key": "generate with: python -c 'import secrets; print(secrets.token_hex(32))'",
   "admin_users": ["you@example.com"],

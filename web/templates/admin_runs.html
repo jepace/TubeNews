@@ -28,9 +28,12 @@
         })();
       </script>
     {% else %}
-      <form method="post" action="{{ url_for('admin_run_now') }}">
+      <form method="post" action="{{ url_for('admin_run_now') }}" style="display:flex; align-items:center; gap:0.5rem;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn-sm">Run Now</button>
+        <label style="font-size:0.85rem; color:var(--muted); display:flex; align-items:center; gap:0.25rem;">
+          <input type="checkbox" name="debug" value="1"> Debug
+        </label>
       </form>
     {% endif %}
     {% if current_run_pid %}

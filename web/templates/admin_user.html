@@ -117,6 +117,7 @@
     <div class="feed-url-row">
       <input type="text" class="feed-url-input" id="blog-url" value="{{ blog_url }}" readonly>
       <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
+      <a href="{{ blog_url }}" target="_blank" class="btn-copy">Open</a>
     </div>
     <form method="post" action="{{ url_for('admin_rotate_token', uid=u.get_id()) }}"
           class="inline-form" onsubmit="return confirm('Rotate the feed token? The current RSS and blog URLs will stop working.')">

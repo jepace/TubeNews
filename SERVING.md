@@ -107,59 +107,84 @@ Set `base_url` in `TubeNews.json` to the public root of your server
 
 ---
 
-## Adding HTTPS with Certbot
+## Adding HTTPS with nginx + Certbot
 
-Certbot handles certificates; nginx handles TLS; gunicorn handles the actual
-content. The traffic flow is:
+Certbot handles certificates; nginx handles TLS termination on the host;
+gunicorn handles requests inside the jail. Traffic flow:
 
 ```
-Browser → nginx :443 (HTTPS) → gunicorn :8000 (localhost)
+Browser → nginx :443 (host) → gunicorn :8000 (jail at 10.0.0.1)
 ```
 
-### 1. Point your domain at the server
+nginx proxies all requests to gunicorn — Flask's `serve_content` route already
+handles `/content/` with the appropriate security checks, so no direct
+filesystem access from nginx is needed.
 
-Make sure `feeds.example.com` resolves to your server's IP before running
-certbot.
+A ready-to-use config is included at `contrib/nginx/tubenews.org.conf`.
 
-### 2. Create a basic nginx config
+### 1. Install nginx and certbot on the host (not in the jail)
+
+```sh
+pkg install nginx py311-certbot-nginx
+```
+
+### 2. Install the nginx config
+
+```sh
+cp contrib/nginx/tubenews.org.conf /usr/local/etc/nginx/conf.d/tubenews.org.conf
+```
+
+If nginx uses the default single-file config, add an include to
+`/usr/local/etc/nginx/nginx.conf` inside the `http {}` block:
 
 ```nginx
-server {
-    listen 80;
-    server_name feeds.example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
+include /usr/local/etc/nginx/conf.d/*.conf;
 ```
 
-### 3. Run certbot
+### 3. Enable and start nginx
 
-```bash
-certbot --nginx -d feeds.example.com
+```sh
+sysrc nginx_enable=YES
+service nginx start
 ```
 
-Certbot edits the nginx config and adds an HTTPS server block automatically.
+Verify: `curl -I http://tubenews.org` should return a 200 proxied from gunicorn
+(or a connection-refused error if gunicorn isn't running yet — that's fine,
+nginx is working).
 
-### 4. Tell Flask it's behind HTTPS
+### 4. Obtain a TLS certificate
 
-Add to `TubeNews.json`:
+```sh
+certbot --nginx -d tubenews.org -d www.tubenews.org
+```
+
+Certbot rewrites the nginx config to add HTTPS server blocks and redirects
+HTTP → HTTPS automatically. After this, both `http://` and `https://` work,
+and `www.tubenews.org` redirects to `https://tubenews.org`.
+
+### 5. Tell Flask it's behind HTTPS
+
+In the jail's `TubeNews.json`:
 
 ```json
 {
-  "base_url": "https://feeds.example.com",
-  ...
+  "base_url": "https://tubenews.org"
 }
 ```
 
-And set the environment variable before starting the server so session cookies
-are marked `Secure`:
+And start gunicorn with the HTTPS flag so session cookies are marked `Secure`:
 
-```bash
+```sh
 TUBENEWS_HTTPS=true ./serve.sh
+```
+
+### 6. Verify end-to-end
+
+```sh
+curl -I http://tubenews.org        # → 301 https://tubenews.org
+curl -I http://www.tubenews.org    # → 301 https://tubenews.org
+curl -I https://tubenews.org       # → 200
+curl -I https://www.tubenews.org   # → 301 https://tubenews.org
 ```
 
 ---

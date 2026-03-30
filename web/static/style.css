@@ -118,6 +118,12 @@ header {
   white-space: nowrap;
 }
 .hs-rss:hover { color: var(--text); border-color: var(--text); text-decoration: none; }
+.hs-search { display: flex; align-items: center; }
+.search-input { padding: 0.15rem 0.45rem; font-size: 0.8rem; border: 1px solid var(--border);
+                border-radius: 4px; background: var(--bg); color: var(--text); width: 140px; }
+mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
+.search-results-info { font-size: 0.9rem; color: var(--muted); margin-bottom: 1rem; }
+.search-clear { font-size: 0.85rem; }
 
 /* Hamburger toggle — hidden on desktop */
 .nav-toggle {

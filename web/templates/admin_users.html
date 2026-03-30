@@ -14,6 +14,7 @@
         <th>Subscriptions</th>
         <th>Status</th>
         <th>Created</th>
+        <th>Last seen</th>
         <th></th>
       </tr>
     </thead>
@@ -45,6 +46,9 @@
         </td>
         <td class="muted">
           {{ u._data.get('created_at', 0) | format_ts }}
+        </td>
+        <td class="muted">
+          {{ u._data.get('last_accessed', 0) | format_datetime }}
         </td>
         <td style="white-space:nowrap">
           <a href="{{ url_for('admin_user', uid=u.get_id()) }}" class="btn-sm">Edit</a>

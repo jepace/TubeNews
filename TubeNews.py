@@ -333,13 +333,14 @@ def _relative_date_to_iso(text: str) -> str:
     # "Streamed live on Month DD, YYYY" or just "Month DD, YYYY"
     exact = re.search(r"([a-z]+ \d{1,2},\s*\d{4})", lower)
     if exact:
-        try:
-            return datetime.strptime(exact.group(1), "%b %d, %Y").strftime("%Y-%m-%d")
-        except ValueError:
-            pass
+        for fmt in ("%b %d, %Y", "%B %d, %Y"):
+            try:
+                return datetime.strptime(exact.group(1), fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
 
     # "N seconds/minutes/hours/days/weeks/months/years ago"
-    m = re.match(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
+    m = re.search(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
     if m:
         n, unit = int(m.group(1)), m.group(2)
         days = {"second": 0, "minute": 0, "hour": 0, "day": n,
@@ -383,6 +384,7 @@ def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
 
                 relative = obj.get("publishedTimeText", {}).get("simpleText", "")
                 date = _relative_date_to_iso(relative) if relative else datetime.now().strftime("%Y-%m-%d")
+                logger.debug(f"  video {vid}: publishedTimeText={relative!r} → date={date}")
 
                 is_live = any(
                     ov.get("thumbnailOverlayTimeStatusRenderer", {}).get("style")
@@ -513,8 +515,9 @@ def fetch_transcript(
                 f"{int(getattr(seg, 'offset', 0) / 1000)}s --> {getattr(seg, 'text', '')}"
                 for seg in segments
             ]
-            logger.debug(f"{prefix}Supadata: Received {len(segments)} segments")
-            return "\n".join(lines)
+            transcript_text = "\n".join(lines)
+            logger.info(f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars")
+            return transcript_text
     except Exception as exc:
         exc_str = str(exc).lower()
         # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
@@ -606,10 +609,10 @@ def call_gemini_api(
             raw_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
             if not json_match:
-                logger.debug(f"{prefix}Gemini: No JSON in response — 0 stories")
+                logger.info(f"{prefix}Gemini: No stories returned (no JSON in response)")
                 return []
             stories = json.loads(json_match.group(0))
-            logger.debug(f"{prefix}Gemini: Generated {len(stories)} stories")
+            logger.info(f"{prefix}Gemini: {len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
             return stories
         elif response.status_code == 429:
             logger.warning(f"{prefix}Gemini: Rate limit hit — AI disabled for this run")
@@ -1251,7 +1254,7 @@ def process_video(
     # --- Load or fetch transcript ---
     if existing_dir and (existing_dir / "transcript.txt").exists():
         # Re-use cached transcript; only the AI step needs to re-run.
-        logger.info(f"{channel_name}: {video_title}: TubeNews: Found cached transcript, re-running AI")
+        logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
@@ -1260,11 +1263,11 @@ def process_video(
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
             return "transcript_quota_exhausted", 0
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
-        logger.info(f"{channel_name}: {video_title}: TubeNews: Processing new video{counter}")
+        logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Processing new video{counter}")
         if is_live:
-            logger.info(f"{channel_name}: {video_title}: TubeNews: Live stream — skipping, will retry next run")
+            logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Live stream — skipping, will retry next run")
             return "skipped", 0
-        logger.debug(f"{channel_name}: {video_title}: Supadata: Requesting transcript")
+        logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
         transcript_text = fetch_transcript(
             video_id, supadata_client,
             feed_name=channel_name, video_title=video_title,
@@ -1274,6 +1277,7 @@ def process_video(
             # Distinguish quota exhaustion from ordinary fetch failure.
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
+            logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: No transcript available — skipping")
             return "skipped", 0
 
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
@@ -1289,7 +1293,12 @@ def process_video(
     # in multiple focus passes.
     seen_titles: dict[str, int] = {}
     all_stories: list = []
+    gemini_delay = config.get("gemini_call_delay", 5)
+    first_call = True
     for focus, user_ids in focuses:
+        if not first_call and gemini_delay:
+            time.sleep(gemini_delay)
+        first_call = False
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
         result = call_gemini_api(
@@ -1328,7 +1337,9 @@ def process_video(
             "processed_focuses": sorted(f for f, _ in focuses),
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-        return "content_written", len(all_stories)
+        n = len(all_stories)
+        logger.info(f"{channel_name}: [{video_id}] {video_title}: Done — {n} stor{'y' if n == 1 else 'ies'} written")
+        return "content_written", n
 
     # Gemini returned no stories for any focus.
     metadata = {
@@ -1339,6 +1350,7 @@ def process_video(
         "processed_focuses": sorted(f for f, _ in focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
+    logger.info(f"{channel_name}: [{video_id}] {video_title}: Done — no relevant stories found")
     return "skipped", 0
 
 
@@ -1412,6 +1424,8 @@ def process_feed(
     if fresh:
         noun = "video" if len(fresh) == 1 else "videos"
         logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
+        for v in fresh:
+            logger.info(f"  held: {v['id']} (parsed date: {v['date']}) — {v['title']}")
 
     if is_new_feed:
         too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
@@ -1636,7 +1650,7 @@ def _main_body(args) -> None:
                 "stories_written": 0,
             }
 
-    max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 3))
+    max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 1))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         feed_results = list(executor.map(_run_feed, config["feeds"]))
     total_stories = sum(r["stories_written"] for r in feed_results)

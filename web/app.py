@@ -10,6 +10,7 @@ The secret key is read from the "tubenews_key" field in TubeNews.json.
 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
+import html
 import json
 import logging
 import os
@@ -443,6 +444,16 @@ def focuses_text(val) -> str:
     if not val:
         return ""
     return "\n".join(val)
+
+
+@app.template_filter("highlight")
+def highlight_filter(text: str, query: str) -> str:
+    """HTML-escape *text* and wrap each occurrence of *query* in <mark>."""
+    escaped = html.escape(text)
+    if not query:
+        return escaped
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    return pattern.sub(lambda m: f"<mark>{html.escape(m.group())}</mark>", escaped)
 
 
 def admin_required(f):
@@ -1443,8 +1454,11 @@ def admin_run_now():
     # Open a placeholder log file; rename to run-{pid}.log once we have the PID.
     tmp_log = run_logs_dir / ".run-starting.log"
     with open(tmp_log, "w") as log_fh:
+        cmd = [sys.executable, str(TUBENEWS_PY)]
+        if request.form.get("debug"):
+            cmd.append("--debug")
         proc = subprocess.Popen(
-            [sys.executable, str(TUBENEWS_PY)],
+            cmd,
             stdout=log_fh,
             stderr=log_fh,
             start_new_session=True,
