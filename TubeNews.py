@@ -522,6 +522,10 @@ def fetch_transcript(
             transcript_text = "\n".join(lines)
             logger.info(f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars")
             return transcript_text
+        else:
+            # API returned a response but no transcript content — video has no captions.
+            logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+            return False
     except Exception as exc:
         exc_str = str(exc).lower()
         # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
@@ -538,6 +542,7 @@ def fetch_transcript(
         # Detect permanent "no transcript" from SupadataError codes.
         is_permanent_no_transcript = isinstance(exc, SupadataError) and (
             exc.error == "transcript-unavailable"
+            or exc.error == "forbidden"
             or "not-found" in (exc.error or "")
         )
 
