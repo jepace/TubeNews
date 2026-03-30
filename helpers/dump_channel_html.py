@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump the raw ``ytInitialData`` JSON from a channel's ``/videos`` page.
+"""Dump the raw ``ytInitialData`` JSON from a channel tab page.
 
 Use this when the YouTube scraper in ``TubeNews.py`` stops discovering
 videos or stops extracting titles and dates correctly.  YouTube embeds
@@ -10,15 +10,16 @@ you can update ``_parse_channel_page_metadata()`` accordingly.
 
 Usage::
 
-    python3 helpers/dump_channel_html.py [channel_id]
+    python3 helpers/dump_channel_html.py [channel_id [tab]]
 
-If ``channel_id`` is omitted, reads the first channel from ``TubeNews.json``.
-Pass a channel ID directly to inspect any channel without editing the config
-(e.g. when the warning log tells you which channel triggered the error).
+``tab`` is ``videos`` (default) or ``streams``.  If ``channel_id`` is
+omitted, reads the first channel from ``TubeNews.json``.  When the warning
+log tells you which channel and tab triggered the error, copy-paste the
+suggested command directly — it now includes both.
 
 Writes two files:
 
-* ``/tmp/yt_data.json`` — the full ``ytInitialData`` blob (pretty-printed).
+* ``/tmp/yt_data_<tab>.json`` — the full ``ytInitialData`` blob (pretty-printed).
   Open this in a text editor or ``jq`` to explore the structure.
 * ``/tmp/yt_raw.html`` — the raw page HTML, written only if the blob is not
   found (e.g. YouTube served a bot-detection interstitial instead).
@@ -91,9 +92,14 @@ def main() -> None:
         channel_id = feeds[0]["channel_id"]
         channel_name = feeds[0]["channel_name"]
 
-    print(f"Channel : {channel_name}  ({channel_id})")
+    tab = sys.argv[2] if len(sys.argv) > 2 else "videos"
+    if tab not in {"videos", "streams"}:
+        sys.exit(f"Error: tab must be 'videos' or 'streams', got {tab!r}.")
 
-    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    print(f"Channel : {channel_name}  ({channel_id})")
+    print(f"Tab     : {tab}")
+
+    url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
     print(f"Fetching {url} …")
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
@@ -124,7 +130,7 @@ def main() -> None:
     except json.JSONDecodeError as exc:
         sys.exit(f"Found ytInitialData but could not parse it as JSON: {exc}")
 
-    out = Path("/tmp/yt_data.json")
+    out = Path(f"/tmp/yt_data_{tab}.json")
     out.write_text(json.dumps(data, indent=2))
     print(f"ytInitialData written to {out}  ({out.stat().st_size:,} bytes)")
 
