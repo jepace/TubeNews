@@ -9,10 +9,11 @@
     {% endif %}
     <span class="hs-feed-name">{{ blog_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
-      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
-      <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}">Starred<span class="tab-count" id="starred-badge"{% if not starred_hashes %} style="display:none"{% endif %}>{{ starred_hashes|length }}</span></a>
-      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}">Read</a>
-      <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}">All</a>
+      {% set _ch = ('?channel=' ~ active_channel_id) if active_channel_id is defined and active_channel_id else '' %}
+      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}{{ _ch }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
+      <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}{{ _ch }}">Starred<span class="tab-count" id="starred-badge"{% if not starred_hashes %} style="display:none"{% endif %}>{{ starred_hashes|length }}</span></a>
+      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}{{ _ch }}">Read</a>
+      <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}{{ _ch }}">All</a>
     {% elif channel_id %}
       <a class="hs-tab" href="{{ url_for('serve_blog') }}">Unread</a>
       <a class="hs-tab" href="{{ url_for('serve_starred') }}">Starred</a>

@@ -2485,28 +2485,29 @@ def test_mark_unstarred_removes_hash(logged_in_client, archive, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_channel_counts_groups_and_sorts():
-    """_channel_counts must group by channel_id and sort highest-count first."""
+def test_channel_counts_groups_and_sorts_alphabetically():
+    """_channel_counts must group by channel_id and sort alphabetically by channel_name."""
     stories = [
-        {"channel_id": "UC_A", "channel_name": "Alpha", "title": "S1", "dateline": "",
+        {"channel_id": "UC_B", "channel_name": "Beta", "title": "S1", "dateline": "",
          "body_html": "", "start_seconds": 0, "video_id": "v1", "video_title": "",
-         "channel_slug": "alpha", "meeting_id": "m1", "story_filename": "01.md",
+         "channel_slug": "beta", "meeting_id": "m1", "story_filename": "01.md",
          "processed_at": 0, "content_hash": "h1"},
-        {"channel_id": "UC_A", "channel_name": "Alpha", "title": "S2", "dateline": "",
+        {"channel_id": "UC_B", "channel_name": "Beta", "title": "S2", "dateline": "",
          "body_html": "", "start_seconds": 0, "video_id": "v2", "video_title": "",
-         "channel_slug": "alpha", "meeting_id": "m1", "story_filename": "02.md",
+         "channel_slug": "beta", "meeting_id": "m1", "story_filename": "02.md",
          "processed_at": 0, "content_hash": "h2"},
-        {"channel_id": "UC_B", "channel_name": "Beta", "title": "S3", "dateline": "",
+        {"channel_id": "UC_A", "channel_name": "Alpha", "title": "S3", "dateline": "",
          "body_html": "", "start_seconds": 0, "video_id": "v3", "video_title": "",
-         "channel_slug": "beta", "meeting_id": "m2", "story_filename": "01.md",
+         "channel_slug": "alpha", "meeting_id": "m2", "story_filename": "01.md",
          "processed_at": 0, "content_hash": "h3"},
     ]
     counts = webapp._channel_counts(stories)
     assert len(counts) == 2
+    # Alpha comes before Beta alphabetically even though Beta has more stories
     assert counts[0]["channel_id"] == "UC_A"
-    assert counts[0]["count"] == 2
+    assert counts[0]["count"] == 1
     assert counts[1]["channel_id"] == "UC_B"
-    assert counts[1]["count"] == 1
+    assert counts[1]["count"] == 2
 
 
 def test_channel_counts_empty():
