@@ -1170,8 +1170,15 @@ def account_mark_unread():
 @app.route("/account/mark-all-read", methods=["POST"])
 @login_required
 def account_mark_all_read():
-    """Mark all of the user's current stories as read, then redirect to /blog."""
+    """Mark all of the user's current stories as read, then redirect to /blog.
+
+    If a ``channel_id`` form field is present, only stories from that channel
+    are marked; the redirect preserves the ``?channel=`` filter.
+    """
+    channel_id = request.form.get("channel_id", "").strip()
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    if channel_id:
+        all_stories = [s for s in all_stories if s.get("channel_id") == channel_id]
     read_set = set(current_user._data.get("read_articles", []))
     for s in all_stories:
         h = s.get("content_hash", "")
@@ -1179,15 +1186,34 @@ def account_mark_all_read():
             read_set.add(h)
     current_user._data["read_articles"] = sorted(read_set)
     current_user._save()
+    if channel_id:
+        return redirect(url_for("serve_blog") + f"?channel={channel_id}")
     return redirect(url_for("serve_blog"))
 
 
 @app.route("/account/mark-all-unread", methods=["POST"])
 @login_required
 def account_mark_all_unread():
-    """Clear all read articles, then redirect to the inbox."""
-    current_user._data["read_articles"] = []
+    """Clear all read articles, then redirect to the inbox.
+
+    If a ``channel_id`` form field is present, only stories from that channel
+    are unmarked; the redirect preserves the ``?channel=`` filter.
+    """
+    channel_id = request.form.get("channel_id", "").strip()
+    if channel_id:
+        channel_hashes = {
+            s["content_hash"]
+            for s in _get_user_stories(current_user._data, current_user.get_id())
+            if s.get("channel_id") == channel_id and s.get("content_hash")
+        }
+        read_set = set(current_user._data.get("read_articles", []))
+        read_set -= channel_hashes
+        current_user._data["read_articles"] = sorted(read_set)
+    else:
+        current_user._data["read_articles"] = []
     current_user._save()
+    if channel_id:
+        return redirect(url_for("serve_blog") + f"?channel={channel_id}")
     return redirect(url_for("serve_blog"))
 
 
