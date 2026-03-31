@@ -786,7 +786,7 @@ main:has(.blog-layout) {
 .story-watch:hover,
 .story-transcript:hover { text-decoration: underline; }
 
-.story-share {
+.story-toolbar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -795,8 +795,8 @@ main:has(.blog-layout) {
   border-top: 1px solid var(--border);
 }
 
-.story-share button,
-.story-share a {
+.story-toolbar button,
+.story-toolbar a {
   font-size: 0.78rem;
   padding: 0.2rem 0.6rem;
   border: 1px solid var(--border);
@@ -814,28 +814,28 @@ main:has(.blog-layout) {
   margin: 0.2rem 0.4rem 0 0;
 }
 
-.story-share button:hover,
-.story-share a:hover {
+.story-toolbar button:hover,
+.story-toolbar a:hover {
   color: var(--bg);
   background: var(--text);
   border-color: var(--text);
 }
 
-.share-delete { color: #dc2626; border-color: #fca5a5; }
-.share-delete:hover { color: #fff !important; background: #dc2626 !important; border-color: #dc2626 !important; }
+.tb-delete { color: #dc2626; border-color: #fca5a5; }
+.tb-delete:hover { color: #fff !important; background: #dc2626 !important; border-color: #dc2626 !important; }
 
-.share-unstarred { color: var(--accent); border-color: var(--accent); }
-.share-unstarred:hover { color: #fff !important; background: var(--accent) !important; border-color: var(--accent) !important; }
+.tb-unstar { color: var(--accent); border-color: var(--accent); }
+.tb-unstar:hover { color: #fff !important; background: var(--accent) !important; border-color: var(--accent) !important; }
 
 /* On narrow/touch viewports meet the 44 pt iOS tap-target guideline and
    ensure the buttons are visible even after JS hides the redundant ones. */
 @media (max-width: 700px) {
-  .story-share {
+  .story-toolbar {
     padding-top: 0.75rem;
     margin-top: 0.75rem;
   }
-  .story-share button,
-  .story-share a {
+  .story-toolbar button,
+  .story-toolbar a {
     font-size: 0.85rem;
     padding: 0.5rem 0.75rem;
     min-height: 2.75rem; /* ~44 pt at 16 px base */

@@ -102,7 +102,7 @@
         {% endif %}
       </p>
       <div class="story-body">{{ story.body_html | safe }}</div>
-      <div class="story-share"
+      <div class="story-toolbar"
            data-title="{{ story.title | e }}"
            data-dateline="{{ story.dateline | e }}"
            data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}"
@@ -111,24 +111,24 @@
            {% if story.channel_slug and story.meeting_id %}
            data-transcript="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}"
            {% endif %}>
-        <button type="button" class="share-copy-text" title="Copy article text">&#128203; Copy Article</button>
-        <button type="button" class="share-copy-link" title="Copy link to this article">&#128279; Copy Link</button>
-        <a class="share-email" href="#" title="Share via email">&#128231; Email</a>
-        <button type="button" class="share-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
+        <button type="button" class="tb-copy-text" title="Copy article text">&#128203; Copy Article</button>
+        <button type="button" class="tb-copy-link" title="Copy link to this article">&#128279; Copy Link</button>
+        <a class="tb-email" href="#" title="Share via email">&#128231; Email</a>
+        <button type="button" class="tb-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
         {% if current_user.is_authenticated and not channel_id %}
           {% if is_archive %}
-          <button type="button" class="share-unread" title="Mark as unread">&#10003; Mark Unread</button>
+          <button type="button" class="tb-unread" title="Mark as unread">&#10003; Mark Unread</button>
           {% else %}
-          <button type="button" class="share-read" title="Mark as read">&#10003; Mark Read</button>
+          <button type="button" class="tb-read" title="Mark as read">&#10003; Mark Read</button>
           {% endif %}
           {% if story.content_hash in (starred_hashes | default([])) %}
-          <button type="button" class="share-unstarred" title="Unstar">&#9733; Starred</button>
+          <button type="button" class="tb-unstar" title="Unstar">&#9733; Starred</button>
           {% else %}
-          <button type="button" class="share-starred" title="Star">&#9734; Star</button>
+          <button type="button" class="tb-star" title="Star">&#9734; Star</button>
           {% endif %}
         {% endif %}
         {% if current_user.is_authenticated and current_user.is_admin and story.story_filename %}
-        <button type="button" class="share-delete"
+        <button type="button" class="tb-delete"
                 data-channel="{{ story.channel_slug }}"
                 data-meeting="{{ story.meeting_id }}"
                 data-filename="{{ story.story_filename }}"
@@ -199,13 +199,13 @@
 
   var hasNativeShare = typeof navigator.share === 'function';
 
-  document.querySelectorAll('.story-share').forEach(function (bar) {
+  document.querySelectorAll('.story-toolbar').forEach(function (bar) {
     var title  = bar.dataset.title;
     var anchor = bar.dataset.anchor;
 
     // "Copy article" always works — on iOS it copies full text; on desktop the
     // share sheet doesn't exist so this is the only way to get the full text.
-    bar.querySelector('.share-copy-text').addEventListener('click', function () {
+    bar.querySelector('.tb-copy-text').addEventListener('click', function () {
       copyText(plainText(bar), this, 'Copied!');
     });
 
@@ -216,7 +216,7 @@
       // on plain HTTP the copy button degrades gracefully.
       var nativeBtn = document.createElement('button');
       nativeBtn.type = 'button';
-      nativeBtn.className = 'share-native';
+      nativeBtn.className = 'tb-native';
       nativeBtn.textContent = '\uD83D\uDCE4 Share';
       nativeBtn.title = 'Share via system share sheet';
       bar.insertBefore(nativeBtn, bar.firstChild);
@@ -232,22 +232,22 @@
       });
       // Hide the redundant buttons (copy-link, email, mastodon) since the share
       // sheet handles them.
-      ['share-copy-link', 'share-email', 'share-mastodon'].forEach(function (cls) {
+      ['tb-copy-link', 'tb-email', 'tb-mastodon'].forEach(function (cls) {
         var el = bar.querySelector('.' + cls);
         if (el) el.style.display = 'none';
       });
     } else {
-      bar.querySelector('.share-copy-link').addEventListener('click', function () {
+      bar.querySelector('.tb-copy-link').addEventListener('click', function () {
         copyText(articleLink(anchor), this, 'Copied!');
       });
 
-      bar.querySelector('.share-email').addEventListener('click', function (e) {
+      bar.querySelector('.tb-email').addEventListener('click', function (e) {
         e.preventDefault();
         window.location.href = 'mailto:?subject=' + encodeURIComponent(title)
                              + '&body=' + encodeURIComponent(plainText(bar));
       });
 
-      bar.querySelector('.share-mastodon').addEventListener('click', function () {
+      bar.querySelector('.tb-mastodon').addEventListener('click', function () {
         var text = title + '\n' + articleLink(anchor);
         window.open('https://toot.kytta.dev/?text=' + encodeURIComponent(text),
                     '_blank', 'noopener,width=600,height=400');
@@ -322,13 +322,13 @@
 
   function attachReadBtn(btn) {
     btn.addEventListener('click', function handler() {
-      var bar  = btn.closest('.story-share');
+      var bar  = btn.closest('.story-toolbar');
       var hash = bar.dataset.contentHash;
       if (!hash) return;
       postHash(markReadUrl, hash, function () {
         if (isAll) {
           btn.removeEventListener('click', handler);
-          btn.className = 'share-unread';
+          btn.className = 'tb-unread';
           btn.title = 'Mark as unread';
           btn.textContent = '\u2713 Mark Unread';
           attachUnreadBtn(btn);
@@ -341,13 +341,13 @@
 
   function attachUnreadBtn(btn) {
     btn.addEventListener('click', function handler() {
-      var bar  = btn.closest('.story-share');
+      var bar  = btn.closest('.story-toolbar');
       var hash = bar.dataset.contentHash;
       if (!hash) return;
       postHash(markUnreadUrl, hash, function () {
         if (isAll) {
           btn.removeEventListener('click', handler);
-          btn.className = 'share-read';
+          btn.className = 'tb-read';
           btn.title = 'Mark as read';
           btn.textContent = '\u2713 Mark Read';
           attachReadBtn(btn);
@@ -360,12 +360,12 @@
 
   function attachStarBtn(btn) {
     btn.addEventListener('click', function handler() {
-      var bar  = btn.closest('.story-share');
+      var bar  = btn.closest('.story-toolbar');
       var hash = bar.dataset.contentHash;
       if (!hash) return;
       postHash(markStarredUrl, hash, function () {
         btn.removeEventListener('click', handler);
-        btn.className = 'share-unstarred';
+        btn.className = 'tb-unstar';
         btn.title = 'Unstar';
         btn.innerHTML = '&#9733; Starred';
         if (starredBadgeEl) setBadge(starredBadgeEl, parseInt(starredBadgeEl.textContent || '0') + 1);
@@ -376,7 +376,7 @@
 
   function attachUnstarBtn(btn) {
     btn.addEventListener('click', function handler() {
-      var bar  = btn.closest('.story-share');
+      var bar  = btn.closest('.story-toolbar');
       var hash = bar.dataset.contentHash;
       if (!hash) return;
       postHash(markUnstarredUrl, hash, function () {
@@ -385,7 +385,7 @@
         if (isStarred) {
           fadeRemove(btn.closest('article'));
         } else {
-          btn.className = 'share-starred';
+          btn.className = 'tb-star';
           btn.title = 'Star';
           btn.innerHTML = '&#9734; Star';
           attachStarBtn(btn);
@@ -394,10 +394,10 @@
     });
   }
 
-  document.querySelectorAll('.share-read').forEach(attachReadBtn);
-  document.querySelectorAll('.share-unread').forEach(attachUnreadBtn);
-  document.querySelectorAll('.share-starred').forEach(attachStarBtn);
-  document.querySelectorAll('.share-unstarred').forEach(attachUnstarBtn);
+  document.querySelectorAll('.tb-read').forEach(attachReadBtn);
+  document.querySelectorAll('.tb-unread').forEach(attachUnreadBtn);
+  document.querySelectorAll('.tb-star').forEach(attachStarBtn);
+  document.querySelectorAll('.tb-unstar').forEach(attachUnstarBtn);
 })();
 {% endif %}
 
@@ -405,7 +405,7 @@
 (function () {
   var deleteUrl = {{ url_for('admin_story_delete') | tojson }};
   var csrfToken = {{ csrf_token() | tojson }};
-  document.querySelectorAll('.share-delete').forEach(function (btn) {
+  document.querySelectorAll('.tb-delete').forEach(function (btn) {
     btn.addEventListener('click', function () {
       if (!confirm(btn.dataset.confirm || 'Delete this story?\nThis cannot be undone.')) return;
       var fd = new FormData();
@@ -622,7 +622,7 @@
       }
     } else if (key === 'e') {
       if (focusIdx >= 0 && articles[focusIdx]) {
-        var readBtn = articles[focusIdx].querySelector('.share-read');
+        var readBtn = articles[focusIdx].querySelector('.tb-read');
         if (readBtn) {
           advanceFocus(articles, focusIdx);
           readBtn.click();
@@ -630,7 +630,7 @@
       }
     } else if (key === 'u') {
       if (focusIdx >= 0 && articles[focusIdx]) {
-        var unreadBtn = articles[focusIdx].querySelector('.share-unread');
+        var unreadBtn = articles[focusIdx].querySelector('.tb-unread');
         if (unreadBtn) {
           advanceFocus(articles, focusIdx);
           unreadBtn.click();
@@ -638,9 +638,9 @@
       }
     } else if (key === 's') {
       if (focusIdx >= 0 && articles[focusIdx]) {
-        var starBtn = articles[focusIdx].querySelector('.share-starred, .share-unstarred');
+        var starBtn = articles[focusIdx].querySelector('.tb-star, .tb-unstar');
         if (starBtn) {
-          if (isStarred && starBtn.classList.contains('share-unstarred')) {
+          if (isStarred && starBtn.classList.contains('tb-unstar')) {
             advanceFocus(articles, focusIdx);
           }
           starBtn.click();
@@ -648,7 +648,7 @@
       }
     } else if (key === '#') {
       if (focusIdx >= 0 && articles[focusIdx]) {
-        var delBtn = articles[focusIdx].querySelector('.share-delete');
+        var delBtn = articles[focusIdx].querySelector('.tb-delete');
         if (delBtn) delBtn.click();
       }
     }
