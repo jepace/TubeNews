@@ -761,6 +761,7 @@ main:has(.blog-layout) {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: nowrap;
+  overflow-x: auto;
   margin-bottom: 0.75rem;
 }
 
@@ -825,6 +826,24 @@ main:has(.blog-layout) {
 
 .share-unstarred { color: var(--accent); border-color: var(--accent); }
 .share-unstarred:hover { color: #fff !important; background: var(--accent) !important; border-color: var(--accent) !important; }
+
+/* On narrow/touch viewports meet the 44 pt iOS tap-target guideline and
+   ensure the buttons are visible even after JS hides the redundant ones. */
+@media (max-width: 700px) {
+  .story-share {
+    padding-top: 0.75rem;
+    margin-top: 0.75rem;
+  }
+  .story-share button,
+  .story-share a {
+    font-size: 0.85rem;
+    padding: 0.5rem 0.75rem;
+    min-height: 2.75rem; /* ~44 pt at 16 px base */
+    display: inline-flex;
+    align-items: center;
+    margin: 0.35rem 0.5rem 0 0;
+  }
+}
 
 .blog-empty {
   color: var(--muted);
