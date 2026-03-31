@@ -87,6 +87,56 @@
     {% endif %}
   </section>
 
+  <!-- ── Bundles ──────────────────────────────────────────── -->
+  {% if current_user.channel_ids %}
+  <section class="admin-section">
+    <h2>Channel Bundles</h2>
+    <p class="muted">Group subscribed channels into named bundles for quick sidebar filtering.</p>
+    <form method="post" action="{{ url_for('account_bundles') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="bundle_count" value="{{ bundles|length }}">
+
+      {% for bundle in bundles %}
+      {% set bi = loop.index0 %}
+      <div class="bundle-row">
+        <input type="text" class="bundle-name-input" name="bundle_name_{{ bi }}"
+               value="{{ bundle.name }}"
+               placeholder="Bundle name (clear to delete)">
+        <div class="bundle-channels-row">
+          {% for ch in channels %}{% if ch.channel_id in subscribed %}
+          <label class="checkbox-label bundle-ch-label">
+            <input type="checkbox" name="bundle_channels_{{ bi }}" value="{{ ch.channel_id }}"
+                   {% if ch.channel_id in bundle.channel_ids %}checked{% endif %}>
+            {{ ch.channel_name }}
+          </label>
+          {% endif %}{% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <p class="muted" id="no-bundles-msg">No bundles yet.</p>
+      {% endfor %}
+
+      <div class="bundle-row" id="new-bundle-row" style="display:none">
+        <input type="text" class="bundle-name-input" name="new_bundle_name"
+               id="new-bundle-name" placeholder="New bundle name">
+        <div class="bundle-channels-row">
+          {% for ch in channels %}{% if ch.channel_id in subscribed %}
+          <label class="checkbox-label bundle-ch-label">
+            <input type="checkbox" name="new_bundle_channels" value="{{ ch.channel_id }}">
+            {{ ch.channel_name }}
+          </label>
+          {% endif %}{% endfor %}
+        </div>
+      </div>
+
+      <div class="bundle-actions">
+        <button type="button" id="add-bundle-btn" class="btn-select-all">+ Add bundle</button>
+        <button type="submit" class="btn-save">Save bundles</button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
   <!-- ── Display ────────────────────────────────────────────── -->
   <section class="admin-section">
     <h2>Display</h2>
@@ -211,6 +261,14 @@
   });
   document.getElementById('btn-unselect-all')?.addEventListener('click', () => {
     checkboxes.forEach(cb => { cb.checked = false; updateFocusVisibility(cb); });
+  });
+
+  document.getElementById('add-bundle-btn')?.addEventListener('click', function() {
+    document.getElementById('new-bundle-row').style.display = '';
+    this.style.display = 'none';
+    document.getElementById('new-bundle-name').focus();
+    var msg = document.getElementById('no-bundles-msg');
+    if (msg) msg.style.display = 'none';
   });
 
   function copyUrl(inputId, btn) {

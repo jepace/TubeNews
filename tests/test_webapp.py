@@ -2699,3 +2699,162 @@ def test_serve_starred_channel_filter(client, archive, monkeypatch):
     assert r.status_code == 200
     assert b"Alpha Council Approves Budget" in r.data
     assert b"Beta Council Discusses Zoning" not in r.data
+
+# ---------------------------------------------------------------------------
+# Channel bundles
+# ---------------------------------------------------------------------------
+
+def test_account_bundles_save(logged_in_client, archive, monkeypatch):
+    """POST /account/bundles must save bundles to user.json."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": []}
+        user_json.write_text(_json.dumps(data))
+
+    r = logged_in_client.post("/account/bundles", data={
+        "bundle_count": "0",
+        "new_bundle_name": "My Bundle",
+        "new_bundle_channels": "UC_ALPHA_ID",
+    })
+    assert r.status_code == 302
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        bundles = data.get("bundles", [])
+        assert len(bundles) == 1
+        assert bundles[0]["name"] == "My Bundle"
+        assert "UC_ALPHA_ID" in bundles[0]["channel_ids"]
+
+
+def test_account_bundles_clear_name_deletes_bundle(logged_in_client, archive, monkeypatch):
+    """Saving a bundle with an empty name must delete it."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": []}
+        data["bundles"] = [{"name": "To Delete", "channel_ids": ["UC_ALPHA_ID"]}]
+        user_json.write_text(_json.dumps(data))
+
+    # Send bundle_name_0 as empty string to delete it
+    r = logged_in_client.post("/account/bundles", data={
+        "bundle_count": "1",
+        "bundle_name_0": "",
+        "bundle_channels_0": "UC_ALPHA_ID",
+    })
+    assert r.status_code == 302
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        assert data.get("bundles", []) == []
+
+
+def test_serve_blog_bundle_filter(logged_in_client, archive, monkeypatch):
+    """GET /blog?bundle=<slug> must show only stories from channels in that bundle."""
+    import json as _json
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": [], "UC_BETA__ID": []}
+        data["bundles"] = [{"name": "Alpha Only", "channel_ids": ["UC_ALPHA_ID"]}]
+        data["read_articles"] = []
+        user_json.write_text(_json.dumps(data))
+
+    r = logged_in_client.get("/blog?bundle=alpha_only")
+    assert r.status_code == 200
+    assert b"Alpha Council Approves Budget" in r.data
+    assert b"Beta Council Discusses Zoning" not in r.data
+
+
+def test_serve_blog_unknown_bundle_returns_404(logged_in_client, archive, monkeypatch):
+    """GET /blog?bundle=<nonexistent> must return 404."""
+    import json as _json
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": []}
+        data["read_articles"] = []
+        user_json.write_text(_json.dumps(data))
+
+    r = logged_in_client.get("/blog?bundle=no_such_bundle")
+    assert r.status_code == 404
+
+
+def test_mark_all_read_with_bundle_slug(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-all-read with bundle_slug marks only that bundle's channels."""
+    import json as _json
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    beta_story = archive / "beta_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    beta_hash = _tn.parse_story_file(beta_story)["content_hash"]
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": [], "UC_BETA__ID": []}
+        data["bundles"] = [{"name": "Alpha Only", "channel_ids": ["UC_ALPHA_ID"]}]
+        data["read_articles"] = []
+        user_json.write_text(_json.dumps(data))
+
+    r = logged_in_client.post("/account/mark-all-read", data={"bundle_slug": "alpha_only"})
+    assert r.status_code == 302
+    assert "bundle=alpha_only" in r.headers["Location"]
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        read = set(data.get("read_articles", []))
+        assert beta_hash not in read, "bundle mark-all-read must not touch other channels"
+        assert len(read) >= 1
+
+
+def test_mark_all_unread_with_bundle_slug(logged_in_client, archive, monkeypatch):
+    """POST /account/mark-all-unread with bundle_slug unmarks only that bundle's channels."""
+    import json as _json
+    import web.app as _wa
+    import TubeNews as _tn
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    alpha_story = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    beta_story  = archive / "beta_city"  / "2026-01-15_VID12345678" / "01_Story.md"
+    alpha_hash = _tn.parse_story_file(alpha_story)["content_hash"]
+    beta_hash  = _tn.parse_story_file(beta_story)["content_hash"]
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": [], "UC_BETA__ID": []}
+        data["bundles"] = [{"name": "Alpha Only", "channel_ids": ["UC_ALPHA_ID"]}]
+        data["read_articles"] = sorted({alpha_hash, beta_hash})
+        user_json.write_text(_json.dumps(data))
+
+    r = logged_in_client.post("/account/mark-all-unread", data={"bundle_slug": "alpha_only"})
+    assert r.status_code == 302
+    assert "bundle=alpha_only" in r.headers["Location"]
+
+    for user_json in (archive / "_users").glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        read = set(data.get("read_articles", []))
+        assert alpha_hash not in read, "bundle mark-all-unread should have removed alpha hash"
+        assert beta_hash in read, "bundle mark-all-unread must not touch other channels"
