@@ -65,8 +65,13 @@
 <div class="blog-layout">
 {% if channel_counts is defined and channel_counts and not channel_id %}
 <aside class="channel-sidebar" id="channel-sidebar">
-  <a class="sidebar-channel{% if not active_channel_id %} sc-active{% endif %}"
-     href="{{ current_view_url }}">All channels</a>
+  {% set total = channel_counts | sum(attribute='count') %}
+  <a class="sidebar-channel sc-all{% if not active_channel_id %} sc-active{% endif %}"
+     href="{{ current_view_url }}">
+    <span class="sc-name">All Channels</span>
+    <span class="sc-count">{{ total }}</span>
+  </a>
+  {# space reserved here for future channel bundles #}
   {% for ch in channel_counts %}
   <a class="sidebar-channel{% if active_channel_id == ch.channel_id %} sc-active{% endif %}"
      href="{{ current_view_url }}?channel={{ ch.channel_id }}"
