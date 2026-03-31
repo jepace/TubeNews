@@ -2030,6 +2030,84 @@ def test_mark_all_unread_clears_read_articles_and_redirects(logged_in_client, ar
         assert data.get("read_articles") == []
 
 
+def test_mark_all_read_with_channel_id_only_marks_that_channel(
+        logged_in_client, archive, monkeypatch):
+    """POST /account/mark-all-read with channel_id must only mark stories from
+    that channel, not stories from other channels the user subscribes to."""
+    import json as _json
+    import TubeNews as _tn
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    user_dir = archive / "_users"
+    # Subscribe the user to both channels.
+    for user_json in user_dir.glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": [], "UC_BETA__ID": []}
+        data["read_articles"] = []
+        user_json.write_text(_json.dumps(data))
+
+    # Get the content hash for the Beta story so we can verify it stays unread.
+    beta_story = archive / "beta_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    beta_hash = _tn.parse_story_file(beta_story)["content_hash"]
+
+    r = logged_in_client.post(
+        "/account/mark-all-read",
+        data={"channel_id": "UC_ALPHA_ID"},
+    )
+    assert r.status_code == 302
+    assert "channel=UC_ALPHA_ID" in r.headers["Location"]
+
+    for user_json in user_dir.glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        read = set(data.get("read_articles", []))
+        # Beta story must NOT be in read_articles.
+        assert beta_hash not in read, "mark-all-read with channel_id marked another channel's story"
+        # At least one hash should have been added (the Alpha story).
+        assert len(read) >= 1
+
+
+def test_mark_all_unread_with_channel_id_only_clears_that_channel(
+        logged_in_client, archive, monkeypatch):
+    """POST /account/mark-all-unread with channel_id must only unmark stories
+    from that channel, leaving other channels' stories marked as read."""
+    import json as _json
+    import TubeNews as _tn
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_tn, "STORAGE_ROOT", archive)
+
+    user_dir = archive / "_users"
+
+    alpha_story = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story.md"
+    beta_story  = archive / "beta_city"  / "2026-01-15_VID12345678" / "01_Story.md"
+    alpha_hash = _tn.parse_story_file(alpha_story)["content_hash"]
+    beta_hash  = _tn.parse_story_file(beta_story)["content_hash"]
+
+    # Subscribe the user to both channels and pre-mark both stories as read.
+    for user_json in user_dir.glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        data["channels"] = {"UC_ALPHA_ID": [], "UC_BETA__ID": []}
+        data["read_articles"] = sorted({alpha_hash, beta_hash})
+        user_json.write_text(_json.dumps(data))
+
+    r = logged_in_client.post(
+        "/account/mark-all-unread",
+        data={"channel_id": "UC_ALPHA_ID"},
+    )
+    assert r.status_code == 302
+    assert "channel=UC_ALPHA_ID" in r.headers["Location"]
+
+    for user_json in user_dir.glob("*/user.json"):
+        data = _json.loads(user_json.read_text())
+        read = set(data.get("read_articles", []))
+        assert alpha_hash not in read, "mark-all-unread with channel_id should have removed alpha hash"
+        assert beta_hash in read, "mark-all-unread with channel_id must not touch other channel's hash"
+
+
 def test_serve_read_requires_login(client, archive):
     """/read must redirect unauthenticated requests to login."""
     r = client.get("/read")

@@ -26,12 +26,18 @@
       {% if not is_archive %}
       <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:contents">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if active_channel_id is defined and active_channel_id %}
+        <input type="hidden" name="channel_id" value="{{ active_channel_id }}">
+        {% endif %}
         <button type="submit" class="btn-sm">Mark All Read</button>
       </form>
       {% endif %}
       {% if is_archive or is_all %}
       <form method="post" action="{{ url_for('account_mark_all_unread') }}" style="display:contents">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if active_channel_id is defined and active_channel_id %}
+        <input type="hidden" name="channel_id" value="{{ active_channel_id }}">
+        {% endif %}
         <button type="submit" class="btn-sm">Mark All Unread</button>
       </form>
       {% endif %}
