@@ -88,10 +88,13 @@
   </section>
 
   <!-- ── Bundles ──────────────────────────────────────────── -->
-  {% if current_user.channel_ids %}
+  {% if channels %}
   <section class="admin-section">
     <h2>Channel Bundles</h2>
     <p class="muted">Group subscribed channels into named bundles for quick sidebar filtering.</p>
+    {% if not current_user.channel_ids %}
+    <p class="muted">Subscribe to channels above first, then come back to create bundles.</p>
+    {% else %}
     <form method="post" action="{{ url_for('account_bundles') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="bundle_count" value="{{ bundles|length }}">
@@ -134,6 +137,7 @@
         <button type="submit" class="btn-save">Save bundles</button>
       </div>
     </form>
+    {% endif %}
   </section>
   {% endif %}
 
