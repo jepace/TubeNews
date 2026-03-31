@@ -409,7 +409,8 @@ content/_users/
   "preferences": {"dark_mode": false, "font_size": "normal"},
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "read_articles": ["abc123hash", "def456hash"],
-  "starred_articles": ["abc123hash"]
+  "starred_articles": ["abc123hash"],
+  "bundles": [{"name": "City Government", "channel_ids": ["UCxxxxxxx", "UCyyyyyyy"]}]
 }
 ```
 
@@ -422,6 +423,7 @@ content/_users/
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 - `starred_articles` — sorted list of `content_hash` strings for articles the user has starred. `/starred` shows only these stories. Key absent means no starred articles. Written by the `account_mark_starred` and `account_mark_unstarred` routes. Independent of read/unread state.
+- `bundles` — list of `{name: str, channel_ids: [str]}` dicts defining user-created channel bundles. Bundles appear in the sidebar between "All Channels" and the individual channel list. Clicking a bundle filters the view to stories from those channels via `?bundle=<slug>`. The slug is `slugify(name).lower()`, computed at runtime. Key absent means no bundles. Written by `POST /account/bundles`.
 
 ### Token Model
 
@@ -486,6 +488,8 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_get_channel_stories(channel_id)` | Returns `(channel_name | None, list[StoryDict])` for a single channel. Used by `channel_blog`. |
 | `_get_user_stories(user_data, user_id)` | Scans all subscribed channel directories and returns `list[StoryDict]` filtered by the user's `user_ids` attribution. Used by `serve_blog`, `serve_read`, `serve_all`, and the public blog route. |
 | `_channel_counts(stories)` | Takes a `list[StoryDict]` and returns `list[dict]` with `channel_id`, `channel_name`, and `count` keys, sorted by count descending. Used by all four blog routes to populate the channel sidebar. |
+| `_user_bundles(user_data)` | Returns the user's `bundles` list with a `slug` field added to each entry (`slugify(name).lower()`). Returns `[]` when `bundles` key is absent. |
+| `_bundle_counts(stories, bundles)` | Annotates each bundle dict with a `count` of matching stories from *stories*. Used by all four blog routes to populate bundle sidebar entries. |
 | `_get_supadata_balance()` | Reads the cached Supadata credit data from `content/_run_logs/supadata_balance.json`; returns `None` if absent. Used by `admin_feeds` to show the credit balance without a live API call. |
 
 ### Route Map
@@ -521,6 +525,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/account/mark-unread` | `account_mark_unread` | Remove a `content_hash` from `read_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-all-read` | `account_mark_all_read` | Mark all current stories as read; redirects to `/blog` |
 | POST | `/account/mark-all-unread` | `account_mark_all_unread` | Clear all read articles (mark everything unread); redirects to `/blog` |
+| POST | `/account/bundles` | `account_bundles` | Save user-defined channel bundles (list of `{name, channel_ids}` parsed from indexed form fields); key absent or empty name = delete bundle |
 | POST | `/account/mark-starred` | `account_mark_starred` | Add a `content_hash` to the user's `starred_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-unstarred` | `account_mark_unstarred` | Remove a `content_hash` from `starred_articles`; returns JSON `{"ok": true}` |
 

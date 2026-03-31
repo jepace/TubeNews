@@ -446,6 +446,46 @@ button[type="submit"]:hover,
 }
 .channel-browse:hover { text-decoration: underline; }
 
+.bundle-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bundle-row:last-of-type { border-bottom: none; }
+
+.bundle-name-input {
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface, var(--bg));
+  color: var(--text);
+  width: 100%;
+  max-width: 24rem;
+  box-sizing: border-box;
+}
+
+.bundle-channels-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  padding-left: 0.25rem;
+}
+
+.bundle-ch-label {
+  font-size: 0.85rem;
+}
+
+.bundle-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
 .muted { color: var(--muted); font-size: 0.9rem; }
 .mono  { font-family: monospace; font-size: 0.875rem; }
 
@@ -688,6 +728,16 @@ main:has(.blog-layout) {
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.35rem;
   padding-bottom: 0.35rem;
+}
+
+.sc-bundles {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.sc-bundle .sc-name {
+  font-style: italic;
 }
 
 .sc-name {

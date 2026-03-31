@@ -555,6 +555,25 @@ def _channel_counts(stories: list[StoryDict]) -> list[dict]:
     return sorted(mapping.values(), key=lambda c: c["channel_name"].lower())
 
 
+def _user_bundles(user_data: dict) -> list[dict]:
+    """Return the user's bundles with a 'slug' field added (computed from name, lowercased)."""
+    return [
+        {"name": b["name"], "slug": slugify(b["name"]).lower(), "channel_ids": b.get("channel_ids", [])}
+        for b in user_data.get("bundles", [])
+        if b.get("name", "").strip()
+    ]
+
+
+def _bundle_counts(stories: list[StoryDict], bundles: list[dict]) -> list[dict]:
+    """Add a 'count' of matching stories to each bundle dict."""
+    result = []
+    for b in bundles:
+        cids = set(b["channel_ids"])
+        count = sum(1 for s in stories if s["channel_id"] in cids)
+        result.append({**b, "count": count})
+    return result
+
+
 def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
@@ -899,8 +918,16 @@ def serve_blog():
     starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
-    active_channel_id = request.args.get("channel", "")
-    if active_channel_id:
+    user_bundles = _user_bundles(current_user._data)
+    bundle_counts = _bundle_counts(stories, user_bundles)
+    active_bundle_slug = request.args.get("bundle", "")
+    active_channel_id = "" if active_bundle_slug else request.args.get("channel", "")
+    if active_bundle_slug:
+        bundle_cids = next((set(b["channel_ids"]) for b in user_bundles if b["slug"] == active_bundle_slug), None)
+        if bundle_cids is None:
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] in bundle_cids]
+    elif active_channel_id:
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
@@ -908,6 +935,7 @@ def serve_blog():
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            read_count=read_count, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
+                           bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_blog"))
 
 
@@ -923,8 +951,16 @@ def serve_read():
     starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
-    active_channel_id = request.args.get("channel", "")
-    if active_channel_id:
+    user_bundles = _user_bundles(current_user._data)
+    bundle_counts = _bundle_counts(stories, user_bundles)
+    active_bundle_slug = request.args.get("bundle", "")
+    active_channel_id = "" if active_bundle_slug else request.args.get("channel", "")
+    if active_bundle_slug:
+        bundle_cids = next((set(b["channel_ids"]) for b in user_bundles if b["slug"] == active_bundle_slug), None)
+        if bundle_cids is None:
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] in bundle_cids]
+    elif active_channel_id:
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
@@ -932,6 +968,7 @@ def serve_read():
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_archive=True, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
+                           bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_read"))
 
 
@@ -953,8 +990,16 @@ def serve_all():
     starred_hashes = set(current_user._data.get("starred_articles", []))
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
-    active_channel_id = request.args.get("channel", "")
-    if active_channel_id:
+    user_bundles = _user_bundles(current_user._data)
+    bundle_counts = _bundle_counts(stories, user_bundles)
+    active_bundle_slug = request.args.get("bundle", "")
+    active_channel_id = "" if active_bundle_slug else request.args.get("channel", "")
+    if active_bundle_slug:
+        bundle_cids = next((set(b["channel_ids"]) for b in user_bundles if b["slug"] == active_bundle_slug), None)
+        if bundle_cids is None:
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] in bundle_cids]
+    elif active_channel_id:
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
@@ -963,6 +1008,7 @@ def serve_all():
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_all=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
+                           bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=current_view)
 
 
@@ -977,8 +1023,16 @@ def serve_starred():
     stories = [s for s in all_stories if s.get("content_hash", "") in starred_set]
     blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
-    active_channel_id = request.args.get("channel", "")
-    if active_channel_id:
+    user_bundles = _user_bundles(current_user._data)
+    bundle_counts = _bundle_counts(stories, user_bundles)
+    active_bundle_slug = request.args.get("bundle", "")
+    active_channel_id = "" if active_bundle_slug else request.args.get("channel", "")
+    if active_bundle_slug:
+        bundle_cids = next((set(b["channel_ids"]) for b in user_bundles if b["slug"] == active_bundle_slug), None)
+        if bundle_cids is None:
+            abort(404)
+        stories = [s for s in stories if s["channel_id"] in bundle_cids]
+    elif active_channel_id:
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
@@ -986,6 +1040,7 @@ def serve_starred():
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_starred=True, starred_hashes=starred_set,
                            channel_counts=counts, active_channel_id=active_channel_id,
+                           bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_starred"))
 
 
@@ -1086,7 +1141,31 @@ def account():
         feed_url=_feed_url(current_user.feed_token),
         blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
         prefs=prefs,
+        bundles=_user_bundles(current_user._data),
     )
+
+
+@app.route("/account/bundles", methods=["POST"])
+@login_required
+def account_bundles():
+    """Save the user's channel bundles from the account page form."""
+    bundle_count = int(request.form.get("bundle_count", "0") or "0")
+    valid_ids = set(current_user.channel_ids)
+    bundles: list[dict] = []
+    for i in range(min(bundle_count, 20)):
+        name = request.form.get(f"bundle_name_{i}", "").strip()[:100]
+        if not name:
+            continue  # empty name = delete this bundle
+        channel_ids = [cid for cid in request.form.getlist(f"bundle_channels_{i}") if cid in valid_ids]
+        bundles.append({"name": name, "channel_ids": channel_ids})
+    new_name = request.form.get("new_bundle_name", "").strip()[:100]
+    if new_name:
+        new_channels = [cid for cid in request.form.getlist("new_bundle_channels") if cid in valid_ids]
+        bundles.append({"name": new_name, "channel_ids": new_channels})
+    current_user._data["bundles"] = bundles
+    current_user._save()
+    flash("Bundles saved.", "success")
+    return redirect(url_for("account"))
 
 
 @app.route("/account/password", methods=["POST"])
@@ -1172,12 +1251,17 @@ def account_mark_unread():
 def account_mark_all_read():
     """Mark all of the user's current stories as read, then redirect to /blog.
 
-    If a ``channel_id`` form field is present, only stories from that channel
-    are marked; the redirect preserves the ``?channel=`` filter.
+    If a ``bundle_slug`` form field is present, only stories from that bundle's
+    channels are marked.  If a ``channel_id`` form field is present, only
+    stories from that channel are marked.  The redirect preserves the filter.
     """
+    bundle_slug = request.form.get("bundle_slug", "").strip()
     channel_id = request.form.get("channel_id", "").strip()
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
-    if channel_id:
+    if bundle_slug:
+        bundle_cids = next((set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set())
+        all_stories = [s for s in all_stories if s.get("channel_id") in bundle_cids]
+    elif channel_id:
         all_stories = [s for s in all_stories if s.get("channel_id") == channel_id]
     read_set = set(current_user._data.get("read_articles", []))
     for s in all_stories:
@@ -1186,6 +1270,8 @@ def account_mark_all_read():
             read_set.add(h)
     current_user._data["read_articles"] = sorted(read_set)
     current_user._save()
+    if bundle_slug:
+        return redirect(url_for("serve_blog") + f"?bundle={bundle_slug}")
     if channel_id:
         return redirect(url_for("serve_blog") + f"?channel={channel_id}")
     return redirect(url_for("serve_blog"))
@@ -1196,11 +1282,23 @@ def account_mark_all_read():
 def account_mark_all_unread():
     """Clear all read articles, then redirect to the inbox.
 
-    If a ``channel_id`` form field is present, only stories from that channel
-    are unmarked; the redirect preserves the ``?channel=`` filter.
+    If a ``bundle_slug`` form field is present, only stories from that bundle's
+    channels are unmarked.  If a ``channel_id`` form field is present, only
+    stories from that channel are unmarked.  The redirect preserves the filter.
     """
+    bundle_slug = request.form.get("bundle_slug", "").strip()
     channel_id = request.form.get("channel_id", "").strip()
-    if channel_id:
+    if bundle_slug:
+        bundle_cids = next((set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set())
+        bundle_hashes = {
+            s["content_hash"]
+            for s in _get_user_stories(current_user._data, current_user.get_id())
+            if s.get("channel_id") in bundle_cids and s.get("content_hash")
+        }
+        read_set = set(current_user._data.get("read_articles", []))
+        read_set -= bundle_hashes
+        current_user._data["read_articles"] = sorted(read_set)
+    elif channel_id:
         channel_hashes = {
             s["content_hash"]
             for s in _get_user_stories(current_user._data, current_user.get_id())
@@ -1212,6 +1310,8 @@ def account_mark_all_unread():
     else:
         current_user._data["read_articles"] = []
     current_user._save()
+    if bundle_slug:
+        return redirect(url_for("serve_blog") + f"?bundle={bundle_slug}")
     if channel_id:
         return redirect(url_for("serve_blog") + f"?channel={channel_id}")
     return redirect(url_for("serve_blog"))
