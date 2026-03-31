@@ -27,10 +27,23 @@
   </div>
 
   {% if content %}
-    <pre style="background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:1rem; font-size:0.8rem; overflow:auto; max-height:75vh; white-space:pre-wrap; word-break:break-all;">{{ content }}</pre>
+    <pre id="log-pre" style="background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:1rem; font-size:0.8rem; overflow:auto; max-height:75vh; white-space:pre-wrap; word-break:break-all;">{{ content }}</pre>
     <script>
+      // Ctrl+A selects only the log text, not the surrounding page chrome.
+      document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+          var pre = document.getElementById('log-pre');
+          if (!pre) return;
+          e.preventDefault();
+          var sel = window.getSelection();
+          var range = document.createRange();
+          range.selectNodeContents(pre);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      });
       (function() {
-        var pre = document.querySelector('pre');
+        var pre = document.getElementById('log-pre');
         {% if is_running %}
         // Scroll to bottom and keep it pinned unless the user scrolls up.
         var pinned = true;
