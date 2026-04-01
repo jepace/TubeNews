@@ -140,7 +140,7 @@ Defined in `web/app.py`:
 
 ### RSS feed builders
 
-**Naming convention:** `build_*` functions return content (bytes or HTML) and never touch disk — the web app calls these directly to serve feeds and blog pages dynamically. `rebuild_*` functions write to disk and are called by the CLI/scraper to produce static files. `rebuild_user_feed` is a thin wrapper: it calls `build_user_feed_xml` and writes the result to disk.
+**Naming convention:** `build_*` functions return content (bytes or HTML) and never touch disk — the web app calls these directly to serve feeds dynamically. `rebuild_*` functions write to disk and are called by the CLI/scraper to produce static files. `rebuild_user_feed` is a thin wrapper: it calls `build_user_feed_xml` and writes the result to disk.
 
 | Function | Description |
 |---|---|
@@ -148,7 +148,7 @@ Defined in `web/app.py`:
 | `rebuild_aggregate_feed(base_url)` | Generates `content/rss.xml` from all channels (all stories) |
 | `build_user_feed_xml(user, base_url)` | Builds and returns RSS feed XML bytes for a user's subscribed channels; does **not** write to disk |
 | `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `content/_users/<slug>/rss.xml` to disk |
-| `rebuild_user_blog(user, base_url)` | Generates `content/_users/<slug>/index.html` — a self-contained blog page with stories from subscribed channels |
+| `rebuild_user_feed_page(user, base_url)` | Generates `content/_users/<slug>/index.html` — a self-contained feed page with stories from subscribed channels |
 
 ### Processing orchestration
 
@@ -253,7 +253,7 @@ content/
 │   └── <uuid>/
 │       ├── user.json           # Account data (see schema in Web Application section)
 │       ├── rss.xml             # Pre-built personal feed (CLI only; web app generates dynamically)
-│       └── index.html          # Pre-built blog page (CLI only; web app generates dynamically)
+│       └── index.html          # Pre-built feed page (CLI only; web app generates dynamically)
 └── rss.xml                     # Regional aggregate feed (all channels)
 ```
 
@@ -337,7 +337,7 @@ pytest tests/ -v
 | File | Covers |
 |---|---|
 | `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
-| `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
+| `tests/test_web.py` | `web/app.py` URL helpers (`_rss_url`, `_feed_url`), user preferences |
 | `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 
 All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
@@ -374,7 +374,7 @@ The JSON is extracted with a regex `re.search(r'\[\s*{.*}\s*\]', raw, re.DOTALL)
 ## Web Application (`web/app.py`)
 
 The Flask web UI sits on top of `TubeNews.py` and provides user accounts,
-subscriptions, and a dashboard for sharing feeds and blog pages. It imports
+subscriptions, and a dashboard for sharing feeds. It imports
 `build_user_feed_xml`, `parse_story_file`, `slugify`,
 and `STORAGE_ROOT` directly from `TubeNews.py`.
 
@@ -387,7 +387,7 @@ content/_users/
 └── <uuid>/
     ├── user.json      # account data (see schema below)
     ├── rss.xml        # personal RSS feed (pre-built by CLI; not used by web app)
-    └── index.html     # personal blog page (built by rebuild_user_blog; not used by web app)
+    └── index.html     # personal feed page (built by rebuild_user_feed_page; not used by web app)
 ```
 
 **`user.json` schema:**
@@ -405,7 +405,7 @@ content/_users/
   "created_at": 1741910400,
   "last_accessed": 1741910400,
   "locked": false,
-  "blog_name": "Alice's Local News",
+  "feed_name": "Alice's Local News",
   "preferences": {"dark_mode": false, "font_size": "normal"},
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "read_articles": ["abc123hash", "def456hash"],
@@ -416,12 +416,12 @@ content/_users/
 
 - `channels` — merged subscription + focus dict. Keys are subscribed channel IDs; values are **lists of focus strings** (one per focus line, up to 3). An empty list means no filter (show all stories from that channel). Every subscribed channel must appear as a key, even with an empty focus list. `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `last_accessed` — Unix timestamp (float) of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes per user). Key absent on accounts created before this field was added.
-- `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the blog URL simultaneously.
+- `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
-- `blog_name` — optional custom title shown on the user's `/blog` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
+- `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
 - `preferences` — display settings dict with keys `dark_mode` (bool) and `font_size` (`"normal"` | `"large"` | `"larger"`). Converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. Key absent means all defaults (light mode, normal font).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
-- `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/blog` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
+- `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/feed` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 - `starred_articles` — sorted list of `content_hash` strings for articles the user has starred. `/starred` shows only these stories. Key absent means no starred articles. Written by the `account_mark_starred` and `account_mark_unstarred` routes. Independent of read/unread state.
 - `bundles` — list of `{name: str, channel_ids: [str]}` dicts defining user-created channel bundles. Bundles appear in the sidebar between "All Channels" and the individual channel list. Clicking a bundle filters the view to stories from those channels via `?bundle=<slug>`. The slug is `slugify(name).lower()`, computed at runtime. Key absent means no bundles. Written by `POST /account/bundles`.
 
@@ -432,31 +432,31 @@ One `feed_token` per user covers two public URLs:
 | URL | Content |
 |---|---|
 | `/feed/<token>.xml` | Personal RSS feed |
-| `/blog/<token>.html` | Personal blog page |
+| `/feed/<token>.html` | Personal feed page |
 
-Both `/feed/<token>.xml` and `/blog/<token>.html` are generated **dynamically
+Both `/feed/<token>.xml` and `/feed/<token>.html` are generated **dynamically
 on every request** — no static file is read or written by the web app.
-The extension-less variants (`/feed/<token>`, `/blog/<token>`) also work for
-backwards compatibility.
+The extension-less variant `/feed/<token>` also works for backwards
+compatibility (serves the RSS feed).
 
 ### On-request Generation Flow
 
-Both the feed and blog are generated fresh on each request from the live archive:
+Both the feed and feed page are generated fresh on each request from the live archive:
 
 **RSS feed** (`/feed/<token>.xml`):
 1. Token matched to a user in `content/_users/`
 2. `build_user_feed_xml()` scans `content/` and builds feedgen XML in memory
 3. XML bytes returned directly as the HTTP response — nothing written to disk
 
-**Blog** (`/blog/<token>.html` and logged-in `/blog`):
+**Feed page** (`/feed/<token>.html` and logged-in `/feed`):
 1. `_get_user_stories()` scans `content/` and returns all stories from the user's
    subscribed channels
-2. Flask renders `blog.html` with the story list and returns HTML
+2. Flask renders `feed.html` with the story list and returns HTML
 
 Because both read the content directory on every request, they always reflect the
 latest stories without any explicit rebuild step.
 
-`rebuild_user_feed()` and `rebuild_user_blog()` exist in `TubeNews.py` as
+`rebuild_user_feed()` and `rebuild_user_feed_page()` exist in `TubeNews.py` as
 standalone utilities (used by the CLI, or for generating static snapshots) but
 the web app does **not** call either — the web UI uses dynamic generation only.
 
@@ -468,9 +468,9 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_save_feeds(feeds)` | Atomically writes updated `feeds` list back to `TubeNews.json` (write-then-rename) |
 | `_load_channels()` | Returns the `feeds` list from config |
 | `_base_url()` | Returns `base_url` from config (empty string if not set) |
-| `_feed_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
+| `_rss_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
+| `_feed_url(token)` | Builds the full `/feed/<token>.html` URL using `base_url` or `url_for` |
 | `_find_archive_dir_for_channel(channel_id)` | Scans `content/*/channel.json` and returns the `Path` whose `channel_id` matches; used by `admin_feed_edit` to locate the channel dir regardless of historical directory naming |
-| `_blog_url(token)` | Builds the full `/blog/<token>.html` URL using `base_url` or `url_for` |
 | `_read_email_index()` | Returns the email→UUID dict from `content/_users/index.json`; returns `{}` on any error |
 | `_write_email_index(index)` | Atomically writes the email→UUID dict to `content/_users/index.json` (write-then-rename) |
 | `_index_add(email, uid)` | Adds or updates an entry in the email index |
@@ -485,11 +485,11 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_safe_next(url)` | Returns `url` only when it is a safe same-site relative path (starts with `/`, not `//`). Used by the login route to prevent open-redirect attacks after authentication. |
 | `_channel_info_for_dir(channel_dir)` | Reads `channel.json` from a content directory and returns `ChannelInfo`. Returns `None` if the file is absent or unparseable. Used by all archive scanners. |
 | `_archive_channel_stats()` | Scans all channel directories and returns `list[ChannelStat]` with per-channel counts of processed, ignored, no-stories, and story files. Used by `admin_feeds`. |
-| `_get_channel_stories(channel_id)` | Returns `(channel_name | None, list[StoryDict])` for a single channel. Used by `channel_blog`. |
-| `_get_user_stories(user_data, user_id)` | Scans all subscribed channel directories and returns `list[StoryDict]` filtered by the user's `user_ids` attribution. Used by `serve_blog`, `serve_read`, `serve_all`, and the public blog route. |
-| `_channel_counts(stories)` | Takes a `list[StoryDict]` and returns `list[dict]` with `channel_id`, `channel_name`, and `count` keys, sorted by count descending. Used by all four blog routes to populate the channel sidebar. |
+| `_get_channel_stories(channel_id)` | Returns `(channel_name | None, list[StoryDict])` for a single channel. Used by `channel_feed`. |
+| `_get_user_stories(user_data, user_id)` | Scans all subscribed channel directories and returns `list[StoryDict]` filtered by the user's `user_ids` attribution. Used by `serve_feed`, `serve_read`, `serve_all`, and the public feed route. |
+| `_channel_counts(stories)` | Takes a `list[StoryDict]` and returns `list[dict]` with `channel_id`, `channel_name`, and `count` keys, sorted by count descending. Used by all four feed routes to populate the channel sidebar. |
 | `_user_bundles(user_data)` | Returns the user's `bundles` list with a `slug` field added to each entry (`slugify(name).lower()`). Returns `[]` when `bundles` key is absent. |
-| `_bundle_counts(stories, bundles)` | Annotates each bundle dict with a `count` of matching stories from *stories*. Used by all four blog routes to populate bundle sidebar entries. |
+| `_bundle_counts(stories, bundles)` | Annotates each bundle dict with a `count` of matching stories from *stories*. Used by all four feed routes to populate bundle sidebar entries. |
 | `_get_supadata_balance()` | Reads the cached Supadata credit data from `content/_run_logs/supadata_balance.json`; returns `None` if absent. Used by `admin_feeds` to show the credit balance without a live API call. |
 
 ### Route Map
@@ -502,29 +502,29 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET/POST | `/login` | `login` | Login form (rate-limited: 10/min) |
 | GET/POST | `/register` | `register` | Registration form (rate-limited: 5/min) |
 | GET | `/content/<path>` | `serve_content` | Serves files from `content/` directory; blocks any path starting with `_` (covers `_users/`, `_run_logs/`, etc.) |
-| GET | `/feed/<token>.xml` | `serve_feed` | Personal RSS feed by token |
-| GET | `/blog/<token>.html` | `serve_blog_public` | Personal blog page by token |
+| GET | `/feed/<token>.xml` | `serve_rss` | Personal RSS feed by token |
+| GET | `/feed/<token>.html` | `serve_feed_public` | Personal feed page by token |
 | GET | `/transcript/<channel_slug>/<meeting_id>` | `serve_transcript` | Renders a transcript as an HTML page with per-segment anchors; URL fragment `#t<seconds>` scrolls to and highlights that segment. Path-traversal guarded. No auth required — transcripts are public content. |
 
 **Login required:**
 
 | Method | Route | Handler | Description |
 |---|---|---|---|
-| GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed and blog URLs |
+| GET/POST | `/dashboard` | `dashboard` | Subscribe to channels; shows feed URLs |
 | POST | `/logout` | `logout` | Clears session (POST + CSRF to prevent logout CSRF) |
-| GET | `/blog` | `serve_blog` | Serves the logged-in user's unread (inbox) stories; accepts `?channel=<channel_id>` to filter to a single channel |
+| GET | `/feed` | `serve_feed` | Serves the logged-in user's unread (inbox) stories; accepts `?channel=<channel_id>` to filter to a single channel |
 | GET | `/starred` | `serve_starred` | Serves the logged-in user's starred stories; accepts `?channel=<channel_id>` to filter to a single channel |
 | GET | `/read` | `serve_read` | Serves the logged-in user's read stories (the "Read" tab); accepts `?channel=<channel_id>` to filter to a single channel |
 | GET | `/all` | `serve_all` | Serves all of the logged-in user's stories regardless of read status; accepts `?channel=<channel_id>` to filter to a single channel (applied after any `?q=` search) |
-| GET | `/channel/<channel_id>` | `channel_blog` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `blog.html` so the sub-header can link to the YouTube channel page |
+| GET | `/channel/<channel_id>` | `channel_feed` | Browse all stories for one channel (no time cutoff); passes `channel_id` to `feed.html` so the sub-header can link to the YouTube channel page |
 | GET/POST | `/account` | `account` | Self-service account settings: change name/email (requires current password) |
 | POST | `/account/password` | `account_password` | Change own password (requires current password; new password min 10 chars) |
-| POST | `/account/rotate-token` | `account_rotate_token` | Issue a new feed token; invalidates old RSS/blog URLs |
+| POST | `/account/rotate-token` | `account_rotate_token` | Issue a new feed token; invalidates old RSS/feed URLs |
 | POST | `/account/delete` | `account_delete` | Delete own account (requires current password + email confirmation) |
 | POST | `/account/mark-read` | `account_mark_read` | Add a `content_hash` to the user's `read_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-unread` | `account_mark_unread` | Remove a `content_hash` from `read_articles`; returns JSON `{"ok": true}` |
-| POST | `/account/mark-all-read` | `account_mark_all_read` | Mark all current stories as read; redirects to `/blog` |
-| POST | `/account/mark-all-unread` | `account_mark_all_unread` | Clear all read articles (mark everything unread); redirects to `/blog` |
+| POST | `/account/mark-all-read` | `account_mark_all_read` | Mark all current stories as read; redirects to `/feed` |
+| POST | `/account/mark-all-unread` | `account_mark_all_unread` | Clear all read articles (mark everything unread); redirects to `/feed` |
 | POST | `/account/bundles` | `account_bundles` | Save user-defined channel bundles (list of `{name, channel_ids}` parsed from indexed form fields); key absent or empty name = delete bundle |
 | POST | `/account/mark-starred` | `account_mark_starred` | Add a `content_hash` to the user's `starred_articles`; returns JSON `{"ok": true}` |
 | POST | `/account/mark-unstarred` | `account_mark_unstarred` | Remove a `content_hash` from `starred_articles`; returns JSON `{"ok": true}` |
@@ -551,7 +551,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | GET | `/admin/runs` | `admin_runs` | Run history; shows per-run log links and a "View log" link for the currently-running process |
 | POST | `/admin/run-now` | `admin_run_now` | Launch a manual TubeNews.py run; stdout/stderr redirected to `content/_run_logs/run-<pid>.log` |
 | GET | `/admin/run-log/<int:pid>` | `admin_run_log` | Stream the captured log for the run with the given PID; auto-refreshes while that PID holds the lock |
-| GET | `/admin/blog` | `admin_all_stories` | Blog view of all stories from all channels — the HTML counterpart to `content/rss.xml`; links to that aggregate feed in the sub-header |
+| GET | `/admin/feed` | `admin_all_stories` | Feed view of all stories from all channels — the HTML counterpart to `content/rss.xml`; links to that aggregate feed in the sub-header |
 | POST | `/admin/story/delete` | `admin_story_delete` | Delete a single story `.md` file; rebuilds the per-channel and aggregate feeds; only accepts numbered `.md` filenames (path traversal guarded) |
 
 ### Sticky Sub-Header Row
@@ -559,11 +559,11 @@ the web app does **not** call either — the web UI uses dynamic generation only
 `base.html` exposes a `header_sub` Jinja block. When a child template overrides the block with content, a 36 px sticky band (`position: sticky; top: 52px; z-index: 190`) appears immediately below the main navigation header and stays visible while scrolling. When the block is left empty (the default), nothing is rendered and no space is reserved.
 
 **Current uses:**
-- `blog.html` always renders a sub-header with the feed/page name, three navigation tabs (Unread / Read / All), optional bulk-action buttons, and an RSS pill link on the right.
+- `feed.html` always renders a sub-header with the feed/page name, three navigation tabs (Unread / Read / All), optional bulk-action buttons, and an RSS pill link on the right.
   - **Tabs** are shown only for authenticated users not on a channel page. The active tab is highlighted. On channel pages, the tabs appear but All is always active.
   - **Bulk-action buttons** (Mark All Read, Mark All Unread) appear in a centered `hs-center` zone between the tabs and the RSS link. Unread tab shows Mark All Read; Read tab shows Mark All Unread; All tab shows both. Hidden when the story list is empty. Rendered as `<button class="btn-sm">` inside `<form style="display:contents">` to bypass the global `button[type="submit"]` style rule.
   - **RSS link** (`hs-rss` pill) appears on the right for authenticated personal pages and channel pages.
-  - When the template receives a `channel_id` variable (set only by `channel_blog()`), a "▶ YouTube channel" link is also added to the right.
+  - When the template receives a `channel_id` variable (set only by `channel_feed()`), a "▶ YouTube channel" link is also added to the right.
 
 **Sizing note:** The sub-header's `top: 52px` assumes the main header is exactly 52 px tall (set by `header { height: 52px }` in `style.css`). The transcript banner uses the same `top: 52px` on a page that has no sub-header, so there is no conflict. If the main header height ever changes, update both `top` values together.
 
@@ -616,7 +616,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 **Never use `_external=True` with `url_for()`** in the web UI. The deployment does not yet have HTTPS configured, and `_external=True` produces absolute URLs (with scheme and host) that break when the scheme or host is wrong.
 
-- `_feed_url(token)` and `_blog_url(token)` return relative paths (`/feed/<token>.xml`, `/blog/<token>.html`) when `base_url` is not set in `TubeNews.json`. They only prepend an absolute base when the operator has explicitly configured `base_url`.
+- `_rss_url(token)` returns `/feed/<token>.xml` and `_feed_url(token)` returns `/feed/<token>.html` when `base_url` is not set in `TubeNews.json`. They only prepend an absolute base when the operator has explicitly configured `base_url`.
 - All links rendered in HTML templates must be relative (use `url_for()` without `_external=True`, or hardcoded root-relative paths like `/feed/...`).
 - The only place absolute URLs are appropriate is inside generated RSS/Atom XML, and only when `base_url` is configured.
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ blog_name }}{% endblock %}
+{% block title %}{{ feed_name }}{% endblock %}
 
 {% block header_sub %}
 <div class="header-sub">
@@ -7,15 +7,15 @@
     {% if channel_counts is defined and channel_counts and not channel_id %}
     <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776;</button>
     {% endif %}
-    <span class="hs-feed-name">{{ blog_name }}</span>
+    <span class="hs-feed-name">{{ feed_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
       {% set _ch = ('?bundle=' ~ active_bundle_slug) if active_bundle_slug is defined and active_bundle_slug else (('?channel=' ~ active_channel_id) if active_channel_id is defined and active_channel_id else '') %}
-      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_blog') }}{{ _ch }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
+      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_feed') }}{{ _ch }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
       <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}{{ _ch }}">Starred<span class="tab-count" id="starred-badge"{% if not starred_hashes %} style="display:none"{% endif %}>{{ starred_hashes|length }}</span></a>
       <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}{{ _ch }}">Read</a>
       <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}{{ _ch }}">All</a>
     {% elif channel_id %}
-      <a class="hs-tab" href="{{ url_for('serve_blog') }}">Unread</a>
+      <a class="hs-tab" href="{{ url_for('serve_feed') }}">Unread</a>
       <a class="hs-tab" href="{{ url_for('serve_starred') }}">Starred</a>
       <a class="hs-tab" href="{{ url_for('serve_read') }}">Read</a>
       <span class="hs-tab hs-tab-active">All</span>
@@ -66,7 +66,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="blog-layout">
+<div class="feed-layout">
 {% if channel_counts is defined and channel_counts and not channel_id %}
 <aside class="channel-sidebar" id="channel-sidebar">
   {% set total = channel_counts | sum(attribute='count') %}
@@ -97,7 +97,7 @@
   {% endfor %}
 </aside>
 {% endif %}
-<div class="blog-page">
+<div class="feed-page">
 
   {% if query is defined and query %}
   <p class="search-results-info">
@@ -174,15 +174,15 @@
     {% endfor %}
   {% else %}
     {% if is_starred %}
-    <p class="blog-empty">No starred stories yet. Use the &#9734; button or press <kbd>s</kbd> to star a story.</p>
+    <p class="feed-empty">No starred stories yet. Use the &#9734; button or press <kbd>s</kbd> to star a story.</p>
     {% elif is_archive %}
-    <p class="blog-empty">No read articles yet. Mark articles as read from your <a href="{{ url_for('serve_blog') }}">inbox</a>.</p>
+    <p class="feed-empty">No read articles yet. Mark articles as read from your <a href="{{ url_for('serve_feed') }}">inbox</a>.</p>
     {% else %}
-    <p class="blog-empty">No unread stories.{% if read_count %} <a href="{{ url_for('serve_read') }}">View {{ read_count }} archived article{% if read_count != 1 %}s{% endif %}</a>.{% else %} Check back after the next TubeNews run.{% endif %}</p>
+    <p class="feed-empty">No unread stories.{% if read_count %} <a href="{{ url_for('serve_read') }}">View {{ read_count }} archived article{% if read_count != 1 %}s{% endif %}</a>.{% else %} Check back after the next TubeNews run.{% endif %}</p>
     {% endif %}
   {% endif %}
-</div>{# end .blog-page #}
-</div>{# end .blog-layout #}
+</div>{# end .feed-page #}
+</div>{# end .feed-layout #}
 
 <script>
 (function () {
@@ -211,7 +211,7 @@
     var header = bar.dataset.title + '\n' + bar.dataset.dateline;
     if (youtube) header += '\n' + youtube;
 
-    var footer = 'Blog: ' + link;
+    var footer = 'Feed: ' + link;
     if (transcript) footer += '\nTranscript: ' + transcript;
 
     return header + '\n\n' + bodyText + '\n\n' + footer;
@@ -340,6 +340,11 @@
     setTimeout(function () {
       article.remove();
       if (unreadBadgeEl) setBadge(unreadBadgeEl, Math.max(0, parseInt(unreadBadgeEl.textContent || '0') - 1));
+      var allCountEl = document.querySelector('.sc-all .sc-count');
+      if (allCountEl) {
+        var allN = Math.max(0, parseInt(allCountEl.textContent || '0') - 1);
+        allCountEl.textContent = allN;
+      }
       if (channelId) {
         var sidebarLink = document.querySelector('.sidebar-channel[data-channel-id="' + channelId + '"]');
         if (sidebarLink) {

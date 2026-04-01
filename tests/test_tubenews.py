@@ -21,7 +21,7 @@ from TubeNews import (
     rebuild_feed,
     rebuild_aggregate_feed,
     rebuild_user_feed,
-    rebuild_user_blog,
+    rebuild_user_feed_page,
     build_user_feed_xml,
     write_story_files,
     _resolve_early_config,
@@ -597,27 +597,27 @@ def test_rebuild_user_feed_multiple_channels(user_archive):
 
 
 # ---------------------------------------------------------------------------
-# rebuild_user_blog
+# rebuild_user_feed_page
 # ---------------------------------------------------------------------------
 
-def test_rebuild_user_blog_creates_html(user_archive):
+def test_rebuild_user_feed_page_creates_html(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     assert (user_archive / "_users" / "Jane_Doe" / "index.html").exists()
 
-def test_rebuild_user_blog_includes_subscribed_stories(user_archive):
+def test_rebuild_user_feed_page_includes_subscribed_stories(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
     assert "Alpha City Council" in content
 
-def test_rebuild_user_blog_excludes_unsubscribed_stories(user_archive):
+def test_rebuild_user_feed_page_excludes_unsubscribed_stories(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
     assert "Beta City Council" not in content
 
-def test_rebuild_user_blog_includes_old_stories(tmp_path, monkeypatch):
+def test_rebuild_user_feed_page_includes_old_stories(tmp_path, monkeypatch):
     """Stories from years ago must appear in the blog — no date filter."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
@@ -638,7 +638,7 @@ def test_rebuild_user_blog_includes_old_stories(tmp_path, monkeypatch):
     )
 
     user = {"name": "Test User", "channels": {"UC_OLD_ID": []}, "feed_token": "test-token-2"}
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     content = (tmp_path / "_users" / "Test_User" / "index.html").read_text()
     assert "Very Old Story" in content
 
@@ -800,7 +800,7 @@ def test_feed_and_blog_contain_same_story_titles(parity_archive):
     }
 
     feed_xml = build_user_feed_xml(user).decode()
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     blog_html = (parity_archive / "_users" / "Parity" / "index.html").read_text()
 
     expected_titles = [
@@ -823,7 +823,7 @@ def test_feed_and_blog_exclude_same_unsubscribed_stories(parity_archive):
     }
 
     feed_xml = build_user_feed_xml(user).decode()
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     blog_html = (parity_archive / "_users" / "Selective" / "index.html").read_text()
 
     assert "Story 1 from Channel A" in feed_xml
@@ -841,7 +841,7 @@ def test_feed_and_blog_empty_when_no_subscriptions(parity_archive):
     }
 
     feed_xml = build_user_feed_xml(user).decode()
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     blog_html = (parity_archive / "_users" / "Empty" / "index.html").read_text()
 
     assert "Channel A" not in feed_xml
@@ -873,7 +873,7 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
     user = {"name": "Time", "channels": {"UC_OLD_ID": []}, "feed_token": "time-tok"}
 
     feed_xml = build_user_feed_xml(user).decode()
-    rebuild_user_blog(user)
+    rebuild_user_feed_page(user)
     blog_html = (tmp_path / "_users" / "Time" / "index.html").read_text()
 
     assert "Ancient Story" in feed_xml,  "Old stories must appear in RSS feed"
@@ -1697,8 +1697,8 @@ def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
     assert b"Bad Story" not in result
 
 
-def test_rebuild_user_blog_skips_corrupt_story_file(tmp_path, monkeypatch):
-    """rebuild_user_blog must produce a page even when a story .md file is corrupt."""
+def test_rebuild_user_feed_page_skips_corrupt_story_file(tmp_path, monkeypatch):
+    """rebuild_user_feed_page must produce a page even when a story .md file is corrupt."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
@@ -1709,7 +1709,7 @@ def test_rebuild_user_blog_skips_corrupt_story_file(tmp_path, monkeypatch):
     (good_meeting / "02_Corrupt.md").write_bytes(b"\xff\xfe garbage \x00")
 
     user = {"name": "Alice", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-xyz"}
-    rebuild_user_blog(user)  # must not raise
+    rebuild_user_feed_page(user)  # must not raise
 
     html = (tmp_path / "_users" / "Alice" / "index.html").read_text()
     assert "Story 1 from Alpha City Council" in html

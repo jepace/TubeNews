@@ -27,9 +27,9 @@
         <input type="email" id="email" name="email" value="{{ u.email }}" required>
       </div>
       <div class="form-row">
-        <label for="blog_name">Blog name <span class="hint">(optional)</span></label>
-        <input type="text" id="blog_name" name="blog_name"
-               value="{{ u._data.get('blog_name', '') }}"
+        <label for="feed_name">Feed name <span class="hint">(optional)</span></label>
+        <input type="text" id="feed_name" name="feed_name"
+               value="{{ u._data.get('feed_name', '') }}"
                placeholder="TubeNews — {{ u.name }}">
       </div>
       <button type="submit">Save info</button>
@@ -106,21 +106,21 @@
     </form>
   </section>
 
-  <!-- ── RSS feed & blog ───────────────────────────────────────── -->
+  <!-- ── RSS feed & feed page ───────────────────────────────────────── -->
   <section class="admin-section">
     <h2>RSS feed URL</h2>
     <div class="feed-url-row">
+      <input type="text" class="feed-url-input" id="rss-url" value="{{ rss_url }}" readonly>
+      <button type="button" onclick="copyUrl('rss-url', this)" class="btn-copy">Copy</button>
+    </div>
+    <h2 style="margin-top:1rem;">Feed URL</h2>
+    <div class="feed-url-row">
       <input type="text" class="feed-url-input" id="feed-url" value="{{ feed_url }}" readonly>
       <button type="button" onclick="copyUrl('feed-url', this)" class="btn-copy">Copy</button>
-    </div>
-    <h2 style="margin-top:1rem;">Blog URL</h2>
-    <div class="feed-url-row">
-      <input type="text" class="feed-url-input" id="blog-url" value="{{ blog_url }}" readonly>
-      <button type="button" onclick="copyUrl('blog-url', this)" class="btn-copy">Copy</button>
-      <a href="{{ blog_url }}" target="_blank" class="btn-copy">Open</a>
+      <a href="{{ feed_url }}" target="_blank" class="btn-copy">Open</a>
     </div>
     <form method="post" action="{{ url_for('admin_rotate_token', uid=u.get_id()) }}"
-          class="inline-form" onsubmit="return confirm('Rotate the feed token? The current RSS and blog URLs will stop working.')">
+          class="inline-form" onsubmit="return confirm('Rotate the feed token? The current RSS and feed URLs will stop working.')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn-danger-sm" style="margin-top:0.75rem;">Rotate token</button>
     </form>

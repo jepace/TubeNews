@@ -649,44 +649,44 @@ button.btn-danger-sm {
 }
 button.btn-danger-sm:hover { background: #fee2e2; }
 
-/* ── Blog page ───────────────────────────────────────────────── */
+/* ── Feed page ───────────────────────────────────────────────── */
 
 
-.blog-header {
+.feed-header {
   margin-bottom: 1.75rem;
   padding-bottom: 1rem;
   border-bottom: 2px solid var(--border);
 }
 
-.blog-header h1 {
+.feed-header h1 {
   font-size: 1.5rem;
   margin-bottom: 0.25rem;
 }
 
-.blog-meta {
+.feed-meta {
   font-size: 0.875rem;
   color: var(--muted);
 }
 
-.blog-meta a { color: var(--accent); }
+.feed-meta a { color: var(--accent); }
 
 /* ---- Channel sidebar layout ---- */
 
-/* When the blog layout is active, let main stretch to full viewport width
+/* When the feed layout is active, let main stretch to full viewport width
    so the sidebar sits at the far left and the feed area is unrestricted. */
-main:has(.blog-layout) {
+main:has(.feed-layout) {
   max-width: none;
   padding-left: 0;
   padding-right: 0;
 }
 
-.blog-layout {
+.feed-layout {
   display: flex;
   align-items: flex-start;
   padding: 0 1rem; /* restore the 1rem horizontal breathing room */
 }
 
-.blog-page {
+.feed-page {
   flex: 1;
   min-width: 0;
   max-width: 640px;
@@ -760,9 +760,9 @@ main:has(.blog-layout) {
 .sidebar-toggle { display: none; }
 
 @media (max-width: 700px) {
-  .blog-layout { display: block; padding: 0 1rem; }
+  .feed-layout { display: block; padding: 0 1rem; }
 
-  .blog-page { margin-left: 0; }
+  .feed-page { margin-left: 0; }
 
   .channel-sidebar {
     display: none;
@@ -903,7 +903,7 @@ main:has(.blog-layout) {
   }
 }
 
-.blog-empty {
+.feed-empty {
   color: var(--muted);
   margin-top: 2rem;
   font-size: 0.95rem;

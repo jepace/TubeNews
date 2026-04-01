@@ -93,7 +93,7 @@
           {% set active = run.feeds | selectattr("stories_written", "gt", 0) | list %}
           {% if active %}
             {% for f in active %}
-              <a href="{{ url_for('channel_blog', channel_id=f.channel_id) }}">{{ f.channel_name }}</a> (+{{ f.stories_written }}){% if not loop.last %}, {% endif %}
+              <a href="{{ url_for('channel_feed', channel_id=f.channel_id) }}">{{ f.channel_name }}</a> (+{{ f.stories_written }}){% if not loop.last %}, {% endif %}
             {% endfor %}
           {% else %}
             <span class="muted">No new stories</span>
@@ -118,7 +118,7 @@
               {% for f in run.feeds %}
               <tr>
                 <td style="padding:3px 8px;">
-                  <a href="{{ url_for('channel_blog', channel_id=f.channel_id) }}">{{ f.channel_name }}</a>
+                  <a href="{{ url_for('channel_feed', channel_id=f.channel_id) }}">{{ f.channel_name }}</a>
                 </td>
                 <td style="padding:3px 8px; text-align:right; {% if f.stories_written == 0 %}color:var(--muted);{% endif %}">
                   {{ f.stories_written if f.stories_written else '—' }}
@@ -151,7 +151,7 @@
     <tbody>
       {% for ch in channel_stats %}
       <tr>
-        <td><a href="{{ url_for('channel_blog', channel_id=ch.channel_id) }}">{{ ch.channel_name }}</a></td>
+        <td><a href="{{ url_for('channel_feed', channel_id=ch.channel_id) }}">{{ ch.channel_name }}</a></td>
         <td>{{ ch.processed }}</td>
         <td>{{ ch.story_count }}</td>
         <td class="muted">{{ ch.last_processed | format_datetime }}</td>

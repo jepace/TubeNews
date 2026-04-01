@@ -221,32 +221,32 @@ def test_serve_feed_includes_timestamp_param(client, registered_user):
 # ---------------------------------------------------------------------------
 
 def test_serve_blog_public_returns_200(client, registered_user):
-    r = client.get(f"/blog/{registered_user['feed_token']}.html")
+    r = client.get(f"/feed/{registered_user['feed_token']}.html")
     assert r.status_code == 200
 
 
 def test_serve_blog_public_content_type_is_html(client, registered_user):
-    r = client.get(f"/blog/{registered_user['feed_token']}.html")
+    r = client.get(f"/feed/{registered_user['feed_token']}.html")
     assert "text/html" in r.content_type
 
 
 def test_serve_blog_public_invalid_token_returns_404(client, archive):
-    r = client.get("/blog/no-such-token.html")
+    r = client.get("/feed/no-such-token.html")
     assert r.status_code == 404
 
 
 def test_serve_blog_public_includes_subscribed_stories(client, registered_user):
-    r = client.get(f"/blog/{registered_user['feed_token']}.html")
+    r = client.get(f"/feed/{registered_user['feed_token']}.html")
     assert b"Alpha Council Approves Budget" in r.data
 
 
 def test_serve_blog_public_excludes_unsubscribed_stories(client, registered_user):
-    r = client.get(f"/blog/{registered_user['feed_token']}.html")
+    r = client.get(f"/feed/{registered_user['feed_token']}.html")
     assert b"Beta Council Discusses Zoning" not in r.data
 
 
-def test_serve_blog_without_extension_returns_200(client, registered_user):
-    r = client.get(f"/blog/{registered_user['feed_token']}")
+def test_serve_rss_without_extension_returns_200(client, registered_user):
+    r = client.get(f"/feed/{registered_user['feed_token']}")
     assert r.status_code == 200
 
 
@@ -296,35 +296,35 @@ def test_channel_blog_includes_rss_feed_link(logged_in_client):
 
 
 # ---------------------------------------------------------------------------
-# Admin all-stories blog (/admin/blog)
+# Admin all-stories blog (/admin/feed)
 # ---------------------------------------------------------------------------
 
 def test_admin_blog_requires_login(client, archive):
-    r = client.get("/admin/blog")
+    r = client.get("/admin/feed")
     assert r.status_code == 302
     assert "/login" in r.headers["Location"]
 
 
 def test_admin_blog_requires_admin(logged_in_client, archive):
-    r = logged_in_client.get("/admin/blog")
+    r = logged_in_client.get("/admin/feed")
     assert r.status_code == 403
 
 
 def test_admin_blog_returns_200(admin_client, archive):
-    r = admin_client.get("/admin/blog")
+    r = admin_client.get("/admin/feed")
     assert r.status_code == 200
 
 
 def test_admin_blog_shows_all_channel_stories(admin_client, archive):
     """All-stories view must include stories from every channel."""
-    r = admin_client.get("/admin/blog")
+    r = admin_client.get("/admin/feed")
     assert b"Alpha Council Approves Budget" in r.data
     assert b"Beta Council Discusses Zoning" in r.data
 
 
 def test_admin_blog_links_to_aggregate_feed(admin_client, archive):
     """All-stories view must link to the aggregate RSS feed."""
-    r = admin_client.get("/admin/blog")
+    r = admin_client.get("/admin/feed")
     assert b"/content/rss.xml" in r.data
 
 
@@ -369,7 +369,7 @@ def test_admin_story_delete_redirects_to_admin_all_stories(admin_client, archive
                           follow_redirects=False)
     assert r.status_code == 302
     assert "evil.com" not in r.headers["Location"]
-    assert "/admin/blog" in r.headers["Location"]
+    assert "/admin/feed" in r.headers["Location"]
 
 
 def test_admin_story_delete_404_for_missing_file(admin_client, archive, monkeypatch):
@@ -403,12 +403,12 @@ def test_admin_story_delete_rejects_path_traversal(admin_client, archive):
 
 
 def test_admin_blog_shows_delete_button_for_admin(admin_client, archive):
-    r = admin_client.get("/admin/blog")
+    r = admin_client.get("/admin/feed")
     assert b"admin/story/delete" in r.data
 
 
 def test_blog_hides_delete_button_for_regular_user(logged_in_client, archive):
-    r = logged_in_client.get("/blog")
+    r = logged_in_client.get("/feed")
     assert b"admin/story/delete" not in r.data
 
 
@@ -431,7 +431,7 @@ def test_login_with_channels_redirects_to_blog(client, registered_user):
         "password": "testpassword123",
     }, follow_redirects=False)
     assert r.status_code == 302
-    assert "/blog" in r.headers["Location"]
+    assert "/feed" in r.headers["Location"]
 
 
 def test_login_no_channels_redirects_to_account(client, archive):
@@ -1120,14 +1120,14 @@ def test_nav_badge_shown_when_unseen_channel_exists(client, archive):
 
     client.post("/login", data={"email": "partial@example.com", "password": "testpassword123"})
     # /blog renders for this user (they have a subscription); badge should appear
-    r = client.get("/blog")
+    r = client.get("/feed")
     assert b'nav-badge' in r.data
     assert b'>1<' in r.data
 
 
 def test_nav_badge_hidden_when_seen_channel_ids_absent(logged_in_client, archive):
     """No badge when seen_channel_ids key is absent (existing-user migration path)."""
-    r = logged_in_client.get("/blog")
+    r = logged_in_client.get("/feed")
     assert b'nav-badge' not in r.data
 
 
@@ -1153,14 +1153,14 @@ def test_nav_badge_hidden_after_account_visit(client, archive):
     client.post("/login", data={"email": "watcher@example.com", "password": "testpassword123"})
 
     # Badge present before visiting account (/blog renders since user has a subscription)
-    r = client.get("/blog")
+    r = client.get("/feed")
     assert b'nav-badge' in r.data
 
     # Visit account page — clears the badge
     client.get("/account")
 
     # Badge gone on subsequent page load
-    r = client.get("/blog")
+    r = client.get("/feed")
     assert b'nav-badge' not in r.data
 
 
@@ -1173,7 +1173,7 @@ def test_last_accessed_set_on_authenticated_request(logged_in_client, archive):
     import json as _json
     import web.app as webapp
 
-    logged_in_client.get("/blog")
+    logged_in_client.get("/feed")
 
     users_dir = webapp.STORAGE_ROOT / "_users"
     for uid_dir in users_dir.iterdir():
@@ -1206,7 +1206,7 @@ def test_last_accessed_not_written_when_fresh(logged_in_client, archive):
             uj.write_text(_json.dumps(d))
             break
 
-    logged_in_client.get("/blog")
+    logged_in_client.get("/feed")
 
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
@@ -1555,7 +1555,7 @@ def test_blog_route_filters_by_user_id(archive, monkeypatch):
     flask_app.config["WTF_CSRF_ENABLED"] = False
     with flask_app.test_client() as c:
         c.post("/login", data={"email": "alice@example.com", "password": "alicepassword123"})
-        r = c.get("/blog")
+        r = c.get("/feed")
 
     body = r.data.decode()
     assert "Alice Only Story" in body, "story tagged for this user must appear"
@@ -1590,7 +1590,7 @@ def test_blog_route_untagged_shows_to_all(archive, monkeypatch):
     flask_app.config["WTF_CSRF_ENABLED"] = False
     with flask_app.test_client() as c:
         c.post("/login", data={"email": "anyuser@example.com", "password": "anyuserpassword1"})
-        r = c.get("/blog")
+        r = c.get("/feed")
 
     body = r.data.decode()
     assert "Budget Approved" in body, "untagged stories must appear for any user"
@@ -2008,7 +2008,7 @@ def test_mark_all_read_redirects_to_blog(logged_in_client, archive, monkeypatch)
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     r = logged_in_client.post("/account/mark-all-read")
     assert r.status_code == 302
-    assert r.headers["Location"].endswith("/blog")
+    assert r.headers["Location"].endswith("/feed")
 
 
 def test_mark_all_unread_clears_read_articles_and_redirects(logged_in_client, archive, monkeypatch):
@@ -2025,7 +2025,7 @@ def test_mark_all_unread_clears_read_articles_and_redirects(logged_in_client, ar
         user_json.write_text(_json.dumps(data))
     r = logged_in_client.post("/account/mark-all-unread")
     assert r.status_code == 302
-    assert r.headers["Location"].endswith("/blog")
+    assert r.headers["Location"].endswith("/feed")
     # Verify read_articles is now empty for the logged-in user.
     for user_json in user_dir.glob("*/user.json"):
         import json as _json
@@ -2149,7 +2149,7 @@ def test_serve_blog_hides_read_stories(logged_in_client, archive, monkeypatch):
     parsed = _tn.parse_story_file(story_file)
     content_hash = parsed["content_hash"]
     logged_in_client.post("/account/mark-read", data={"content_hash": content_hash})
-    r = logged_in_client.get("/blog")
+    r = logged_in_client.get("/feed")
     assert r.status_code == 200
     assert b"Alpha Council Approves Budget" not in r.data
 
@@ -2452,7 +2452,7 @@ def test_login_locked_account_does_not_authenticate(client, archive):
 
     client.post("/login", data={"email": "locked2@example.com", "password": "correctpassword1"})
     # After "login", accessing a login-required page must still redirect to login
-    r = client.get("/blog", follow_redirects=False)
+    r = client.get("/feed", follow_redirects=False)
     assert r.status_code == 302
     assert "/login" in r.headers["Location"]
 
@@ -2617,7 +2617,7 @@ def test_serve_blog_channel_filter_returns_only_that_channel(client, archive, mo
     _make_user(archive / "_users", "Multi User", "multi@example.com",
                ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-abc")
     client.post("/login", data={"email": "multi@example.com", "password": "testpassword123"})
-    r = client.get("/blog?channel=UC_ALPHA_ID")
+    r = client.get("/feed?channel=UC_ALPHA_ID")
     assert r.status_code == 200
     assert b"Alpha Council Approves Budget" in r.data
     assert b"Beta Council Discusses Zoning" not in r.data
@@ -2631,7 +2631,7 @@ def test_serve_blog_channel_filter_unknown_returns_404(client, archive, monkeypa
     _make_user(archive / "_users", "Multi User", "multi2@example.com",
                ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-xyz")
     client.post("/login", data={"email": "multi2@example.com", "password": "testpassword123"})
-    r = client.get("/blog?channel=UC_NO_SUCH_ID")
+    r = client.get("/feed?channel=UC_NO_SUCH_ID")
     assert r.status_code == 404
 
 
@@ -2643,7 +2643,7 @@ def test_serve_blog_includes_sidebar_with_multiple_channels(client, archive, mon
     _make_user(archive / "_users", "Multi User", "multi3@example.com",
                ["UC_ALPHA_ID", "UC_BETA__ID"], token="multi-token-def")
     client.post("/login", data={"email": "multi3@example.com", "password": "testpassword123"})
-    r = client.get("/blog")
+    r = client.get("/feed")
     assert r.status_code == 200
     assert b"channel-sidebar" in r.data
     assert b"Alpha City Council" in r.data
@@ -2776,7 +2776,7 @@ def test_serve_blog_bundle_filter(logged_in_client, archive, monkeypatch):
         data["read_articles"] = []
         user_json.write_text(_json.dumps(data))
 
-    r = logged_in_client.get("/blog?bundle=alpha_only")
+    r = logged_in_client.get("/feed?bundle=alpha_only")
     assert r.status_code == 200
     assert b"Alpha Council Approves Budget" in r.data
     assert b"Beta Council Discusses Zoning" not in r.data
@@ -2797,7 +2797,7 @@ def test_serve_blog_unknown_bundle_returns_404(logged_in_client, archive, monkey
         data["read_articles"] = []
         user_json.write_text(_json.dumps(data))
 
-    r = logged_in_client.get("/blog?bundle=no_such_bundle")
+    r = logged_in_client.get("/feed?bundle=no_such_bundle")
     assert r.status_code == 404
 
 

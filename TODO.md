@@ -132,7 +132,7 @@ left unchanged.
 `tests/test_webapp.py` now covers `/admin/feeds` (list, add, delete) including
 auth guards, validation errors (missing fields, bad channel ID prefix,
 duplicate channel ID), and the happy path for each mutation.  Two new tests
-exercise `_get_user_stories()` focus filtering via the `/blog` Flask route
+exercise `_get_user_stories()` focus filtering via the `/feed` Flask route
 directly: one asserts that a user with focus "housing" sees only housing
 stories; the other confirms all stories appear when no focus is configured.
 261 tests pass.

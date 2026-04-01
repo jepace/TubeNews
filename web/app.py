@@ -195,7 +195,7 @@ class ChannelStat(TypedDict):
 
 
 class StoryDict(TypedDict):
-    """Fully-resolved story dict served to Flask templates and the blog/feed builders."""
+    """Fully-resolved story dict served to Flask templates and the feed builders."""
     title: str
     dateline: str
     body_html: str
@@ -368,18 +368,18 @@ def _base_url() -> str:
         return ""
 
 
-def _feed_url(token: str) -> str:
+def _rss_url(token: str) -> str:
     base = _base_url()
     if base:
         return f"{base}/feed/{token}.xml"
     return f"/feed/{token}.xml"
 
 
-def _blog_url(token: str) -> str:
+def _feed_url(token: str) -> str:
     base = _base_url()
     if base:
-        return f"{base}/blog/{token}.html"
-    return f"/blog/{token}.html"
+        return f"{base}/feed/{token}.html"
+    return f"/feed/{token}.html"
 
 
 def _prefs_to_classes(prefs: dict) -> str:
@@ -479,7 +479,7 @@ def _safe_next(url: str | None) -> str:
     """
     if url and url.startswith("/") and not url.startswith("//"):
         return url
-    return url_for("serve_blog")
+    return url_for("serve_feed")
 
 
 def _channel_info_for_dir(channel_dir: Path) -> ChannelInfo | None:
@@ -593,7 +593,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
     All processed stories are returned with no time cutoff — this is a full
-    archive browse, not a recency-filtered blog view.  Returns (None, []) if
+    archive browse, not a recency-filtered feed view.  Returns (None, []) if
     no matching channel archive is found.
     """
     if not STORAGE_ROOT.is_dir():
@@ -720,7 +720,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
 @app.route("/")
 def index():
     if current_user.is_authenticated:
-        return redirect(url_for("serve_blog"))
+        return redirect(url_for("serve_feed"))
     return redirect(url_for("login"))
 
 
@@ -882,7 +882,7 @@ def logout():
 
 @app.route("/feed/<token>.xml")
 @app.route("/feed/<token>")
-def serve_feed(token: str):
+def serve_rss(token: str):
     """Generate and serve a user's RSS feed by secret token — no login required."""
     if not USERS_ROOT.is_dir():
         abort(404)
@@ -899,10 +899,9 @@ def serve_feed(token: str):
     abort(404)
 
 
-@app.route("/blog/<token>.html")
-@app.route("/blog/<token>")
-def serve_blog_public(token: str):
-    """Render a user's blog by secret token — no login required."""
+@app.route("/feed/<token>.html")
+def serve_feed_public(token: str):
+    """Render a user's feed page by secret token — no login required."""
     if not USERS_ROOT.is_dir():
         abort(404)
     for user_json in USERS_ROOT.glob("*/user.json"):
@@ -911,8 +910,8 @@ def serve_blog_public(token: str):
             if data.get("feed_token") == token:
                 uid = user_json.parent.name
                 stories = _get_user_stories(data, uid)
-                blog_name = data.get("blog_name") or f"{data['name']}'s TubeNews"
-                return render_template("blog.html", stories=stories, blog_name=blog_name,
+                feed_name = data.get("feed_name") or f"{data['name']}'s TubeNews"
+                return render_template("feed.html", stories=stories, feed_name=feed_name,
                                        feed_path=f"/feed/{token}.xml",
                                        body_classes=_prefs_to_classes(data.get("preferences", {})))
         except Exception as exc:
@@ -921,19 +920,19 @@ def serve_blog_public(token: str):
     abort(404)
 
 
-@app.route("/blog")
+@app.route("/feed")
 @login_required
-def serve_blog():
+def serve_feed():
     """Render the logged-in user's unread (inbox) stories."""
     if not current_user.channel_ids:
-        flash("Subscribe to channels to start reading your blog.", "info")
+        flash("Subscribe to channels to start reading your feed.", "info")
         return redirect(url_for("account"))
     read_set = set(current_user._data.get("read_articles", []))
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") not in read_set]
     read_count = len(all_stories) - len(stories)
     starred_hashes = set(current_user._data.get("starred_articles", []))
-    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
     user_bundles = _user_bundles(current_user._data)
     bundle_counts = _bundle_counts(stories, user_bundles)
@@ -948,12 +947,12 @@ def serve_blog():
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
-    return render_template("blog.html", stories=stories, blog_name=blog_name,
+    return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            read_count=read_count, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
-                           current_view_url=url_for("serve_blog"))
+                           current_view_url=url_for("serve_feed"))
 
 
 @app.route("/read")
@@ -966,7 +965,7 @@ def serve_read():
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
     starred_hashes = set(current_user._data.get("starred_articles", []))
-    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
     user_bundles = _user_bundles(current_user._data)
     bundle_counts = _bundle_counts(stories, user_bundles)
@@ -981,7 +980,7 @@ def serve_read():
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
-    return render_template("blog.html", stories=stories, blog_name=blog_name,
+    return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_archive=True, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
@@ -1005,7 +1004,7 @@ def serve_all():
                    q in s["channel_name"].lower() or
                    q in s["dateline"].lower()]
     starred_hashes = set(current_user._data.get("starred_articles", []))
-    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
     user_bundles = _user_bundles(current_user._data)
     bundle_counts = _bundle_counts(stories, user_bundles)
@@ -1021,7 +1020,7 @@ def serve_all():
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     current_view = url_for("serve_all", q=query) if query else url_for("serve_all")
-    return render_template("blog.html", stories=stories, blog_name=blog_name,
+    return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_all=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
@@ -1038,7 +1037,7 @@ def serve_starred():
     starred_set = set(current_user._data.get("starred_articles", []))
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") in starred_set]
-    blog_name = current_user._data.get("blog_name") or f"{current_user.name}'s TubeNews"
+    feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
     user_bundles = _user_bundles(current_user._data)
     bundle_counts = _bundle_counts(stories, user_bundles)
@@ -1053,7 +1052,7 @@ def serve_starred():
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
-    return render_template("blog.html", stories=stories, blog_name=blog_name,
+    return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_starred=True, starred_hashes=starred_set,
                            channel_counts=counts, active_channel_id=active_channel_id,
@@ -1063,7 +1062,7 @@ def serve_starred():
 
 @app.route("/channel/<channel_id>")
 @login_required
-def channel_blog(channel_id: str):
+def channel_feed(channel_id: str):
     """Browse all stories for a single configured channel — no time cutoff."""
     channels = _load_channels()
     if not any(ch["channel_id"] == channel_id for ch in channels):
@@ -1074,7 +1073,7 @@ def channel_blog(channel_id: str):
     )
     archive_dir = _find_archive_dir_for_channel(channel_id)
     feed_path = f"/content/{archive_dir.name}/rss.xml" if archive_dir else None
-    return render_template("blog.html", stories=stories, blog_name=display_name,
+    return render_template("feed.html", stories=stories, feed_name=display_name,
                            feed_path=feed_path, channel_id=channel_id)
 
 
@@ -1138,8 +1137,8 @@ def account():
             lines = [ln for ln in lines if ln]
             channels_data[ch_id] = lines
         current_user._data["channels"] = channels_data
-        blog_name = request.form.get("blog_name", "").strip()
-        current_user._data["blog_name"] = blog_name
+        feed_name = request.form.get("feed_name", "").strip()
+        current_user._data["feed_name"] = feed_name
         current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
         current_user._save()
         flash("Subscriptions updated.", "success")
@@ -1155,8 +1154,8 @@ def account():
         channels=channels,
         subscribed=set(current_user.channel_ids),
         channel_focus=current_user._data.get("channels", {}),
-        feed_url=_feed_url(current_user.feed_token),
-        blog_url=_blog_url(current_user.feed_token) if current_user.channel_ids else None,
+        rss_url=_rss_url(current_user.feed_token),
+        feed_url=_feed_url(current_user.feed_token) if current_user.channel_ids else None,
         prefs=prefs,
         bundles=_user_bundles(current_user._data),
     )
@@ -1206,10 +1205,10 @@ def account_password():
 @app.route("/account/rotate-token", methods=["POST"])
 @login_required
 def account_rotate_token():
-    """Issue a new feed token for the logged-in user; invalidates old RSS/blog URLs."""
+    """Issue a new feed token for the logged-in user; invalidates old RSS/feed URLs."""
     current_user._data["feed_token"] = str(uuid.uuid4())
     current_user._save()
-    flash("Feed token rotated. Your old RSS and blog URLs are now invalid.", "success")
+    flash("Feed token rotated. Your old RSS and feed URLs are now invalid.", "success")
     return redirect(url_for("account"))
 
 
@@ -1266,7 +1265,7 @@ def account_mark_unread():
 @app.route("/account/mark-all-read", methods=["POST"])
 @login_required
 def account_mark_all_read():
-    """Mark all of the user's current stories as read, then redirect to /blog.
+    """Mark all of the user's current stories as read, then redirect to /feed.
 
     If a ``bundle_slug`` form field is present, only stories from that bundle's
     channels are marked.  If a ``channel_id`` form field is present, only
@@ -1288,10 +1287,10 @@ def account_mark_all_read():
     current_user._data["read_articles"] = sorted(read_set)
     current_user._save()
     if bundle_slug:
-        return redirect(url_for("serve_blog") + f"?bundle={bundle_slug}")
+        return redirect(url_for("serve_feed") + f"?bundle={bundle_slug}")
     if channel_id:
-        return redirect(url_for("serve_blog") + f"?channel={channel_id}")
-    return redirect(url_for("serve_blog"))
+        return redirect(url_for("serve_feed") + f"?channel={channel_id}")
+    return redirect(url_for("serve_feed"))
 
 
 @app.route("/account/mark-all-unread", methods=["POST"])
@@ -1328,10 +1327,10 @@ def account_mark_all_unread():
         current_user._data["read_articles"] = []
     current_user._save()
     if bundle_slug:
-        return redirect(url_for("serve_blog") + f"?bundle={bundle_slug}")
+        return redirect(url_for("serve_feed") + f"?bundle={bundle_slug}")
     if channel_id:
-        return redirect(url_for("serve_blog") + f"?channel={channel_id}")
-    return redirect(url_for("serve_blog"))
+        return redirect(url_for("serve_feed") + f"?channel={channel_id}")
+    return redirect(url_for("serve_feed"))
 
 
 @app.route("/account/mark-starred", methods=["POST"])
@@ -1553,8 +1552,8 @@ def admin_user(uid: str):
         u=user,
         channels=channels,
         subscribed=set(user.channel_ids),
+        rss_url=_rss_url(user.feed_token),
         feed_url=_feed_url(user.feed_token),
-        blog_url=_blog_url(user.feed_token),
     )
 
 
@@ -1579,7 +1578,7 @@ def admin_user_info(uid: str):
     old_email = user.email
     user._data["name"] = new_name
     user._data["email"] = new_email
-    user._data["blog_name"] = request.form.get("blog_name", "").strip()
+    user._data["feed_name"] = request.form.get("feed_name", "").strip()
     user._save()
     if new_email != old_email:
         _index_remove(old_email)
@@ -1940,11 +1939,11 @@ def admin_feeds():
     return render_template("admin_feeds.html", channels=channels, supadata=balance)
 
 
-@app.route("/admin/blog")
+@app.route("/admin/feed")
 @login_required
 @admin_required
 def admin_all_stories():
-    """Browse all stories from all channels — the blog counterpart to archive/rss.xml."""
+    """Browse all stories from all channels — the feed counterpart to archive/rss.xml."""
     stories = []
     if STORAGE_ROOT.is_dir():
         for channel_dir in STORAGE_ROOT.iterdir():
@@ -1985,7 +1984,7 @@ def admin_all_stories():
                     logger.debug(f"Skipping {meeting_dir}: {exc}")
                     continue
     stories.sort(key=lambda s: s["processed_at"], reverse=True)
-    return render_template("blog.html", stories=stories, blog_name="All Channels",
+    return render_template("feed.html", stories=stories, feed_name="All Channels",
                            feed_path="/content/rss.xml")
 
 
