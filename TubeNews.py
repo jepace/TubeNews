@@ -327,6 +327,28 @@ _YT_RSS_NS = {
 }
 
 
+def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
+    """Return True if *video_id* is a YouTube Short.
+
+    Makes a GET request (with redirect-following) to the standard watch URL.
+    If YouTube redirects to a ``/shorts/`` URL the video is a Short and should
+    be skipped — Shorts are rarely longer than 60 seconds and are unlikely to
+    contain the kind of substantive content TubeNews is designed to process.
+
+    Fails open: returns ``False`` on any network or HTTP error so a transient
+    failure never causes a real meeting video to be permanently skipped.
+    """
+    watch_url = f"https://www.youtube.com/watch?v={video_id}"
+    prefix = f"{feed_name}: " if feed_name else ""
+    try:
+        with requests.get(watch_url, allow_redirects=True, stream=True,
+                          timeout=REQUEST_TIMEOUT) as resp:
+            return "/shorts/" in resp.url
+    except Exception as exc:
+        logger.debug(f"{prefix}[{video_id}] Short check failed (treating as non-Short): {exc}")
+        return False
+
+
 def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
     """Fetch channel videos from YouTube's official Atom RSS feed.
 
@@ -1188,6 +1210,17 @@ def process_video(
             return "transcript_quota_exhausted", 0
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
         logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Processing new video{counter}")
+        if _is_youtube_short(video_id, feed_name=channel_name):
+            logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: YouTube Short — skipping permanently")
+            short_dir = feed_dir / f"{video_date}_{video_id}"
+            short_dir.mkdir(exist_ok=True)
+            (short_dir / "metadata.json").write_text(json.dumps({
+                "video_id": video_id,
+                "video_title": video_title,
+                "status": "ignored_short",
+                "processed_at": time.time(),
+            }))
+            return "skipped", 0
         logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
         transcript_text = fetch_transcript(
             video_id, supadata_client,
