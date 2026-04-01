@@ -908,3 +908,85 @@ main:has(.blog-layout) {
   margin-top: 2rem;
   font-size: 0.95rem;
 }
+
+/* ── Story comments ──────────────────────────────────────────── */
+
+.story-comments {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 0 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.sc-comment {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sc-comment:last-of-type { border-bottom: none; }
+
+.sc-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.2rem;
+  flex-wrap: wrap;
+}
+
+.sc-author { font-weight: 600; font-size: 0.85rem; }
+.sc-time   { font-size: 0.78rem; color: var(--muted); }
+.sc-you    { font-weight: 400; color: var(--muted); }
+
+.sc-body {
+  margin: 0;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sc-empty { color: var(--muted); font-size: 0.88rem; margin: 0.25rem 0 0.5rem; }
+
+.sc-delete {
+  margin-left: auto;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.sc-delete:hover { color: var(--bg); background: var(--danger, #c00); border-color: var(--danger, #c00); }
+
+.sc-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin-top: 0.75rem;
+}
+
+.sc-input {
+  flex: 1;
+  font-size: 0.88rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface, var(--bg));
+  color: var(--text);
+  resize: vertical;
+  font-family: inherit;
+  min-height: 2.5rem;
+}
+
+.sc-submit {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: flex-end;
+}
+.sc-submit:hover { background: var(--accent-hover, var(--accent)); filter: brightness(1.1); }
+.sc-submit:disabled { opacity: 0.6; cursor: default; }

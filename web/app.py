@@ -76,6 +76,10 @@ USERS_ROOT = STORAGE_ROOT / "_users"
 LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
 TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 
+# Path-component validation for comment routes.
+_SAFE_SLUG_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+_STORY_FILE_RE = re.compile(r'^\d{2}_[A-Za-z0-9_]+\.md$')
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -1346,6 +1350,89 @@ def account_mark_unstarred():
 
 
 # ---------------------------------------------------------------------------
+# Comment routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/comments/<channel_slug>/<meeting_id>/<basename>")
+@login_required
+def get_story_comments(channel_slug: str, meeting_id: str, basename: str):
+    """Return the comment list for a story as JSON.
+
+    User names are resolved lazily: if a commenter's account has been deleted,
+    their stored user_id will no longer resolve and the name shows as
+    'Deleted User' without any modification to the comment file.
+    """
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _SAFE_SLUG_RE.match(basename)):
+        abort(400)
+    comment_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}_comments.json"
+    if not comment_path.exists():
+        return jsonify([])
+    try:
+        comments = json.loads(comment_path.read_text(encoding="utf-8"))
+    except Exception:
+        return jsonify([])
+    name_cache: dict[str, str] = {}
+    my_id = current_user.get_id()
+    result = []
+    for i, c in enumerate(comments):
+        uid = c.get("user_id", "")
+        if uid not in name_cache:
+            try:
+                upath = USERS_ROOT / uid / "user.json"
+                name_cache[uid] = (json.loads(upath.read_text()).get("name", "Deleted User")
+                                   if upath.exists() else "Deleted User")
+            except Exception:
+                name_cache[uid] = "Deleted User"
+        result.append({
+            "idx": i,
+            "user_name": name_cache[uid],
+            "is_mine": uid == my_id,
+            "posted_at": c.get("posted_at", 0.0),
+            "body": c.get("body", ""),
+        })
+    return jsonify(result)
+
+
+@app.route("/comment", methods=["POST"])
+@login_required
+@limiter.limit("10 per minute")
+def post_comment():
+    """Append a comment to a story's comment file. Returns JSON."""
+    channel_slug = request.form.get("channel_slug", "").strip()
+    meeting_id = request.form.get("meeting_id", "").strip()
+    filename = request.form.get("filename", "").strip()
+    body = request.form.get("body", "").strip()[:2000]
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _STORY_FILE_RE.match(filename)):
+        abort(400)
+    if not body:
+        return jsonify({"ok": False, "error": "Comment cannot be empty."}), 400
+    basename = filename[:-3]
+    comment_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}_comments.json"
+    if not comment_path.parent.is_dir():
+        abort(404)
+    new_comment = {
+        "user_id": current_user.get_id(),
+        "user_name": current_user.name,
+        "posted_at": time.time(),
+        "body": body,
+    }
+    try:
+        existing = json.loads(comment_path.read_text(encoding="utf-8")) if comment_path.exists() else []
+    except Exception:
+        existing = []
+    existing.append(new_comment)
+    tmp = comment_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    tmp.rename(comment_path)
+    return jsonify({"ok": True, "count": len(existing)})
+
+
+# ---------------------------------------------------------------------------
 # Admin routes
 # ---------------------------------------------------------------------------
 
@@ -1720,6 +1807,39 @@ def admin_story_delete():
 
     flash(f'Story deleted: \u201c{story_title}\u201d', "info")
     return redirect(url_for("admin_all_stories"))
+
+
+@app.route("/admin/comment/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_comment_delete():
+    """Delete a single comment by index from a story's comment file. Returns JSON."""
+    channel_slug = request.form.get("channel_slug", "").strip()
+    meeting_id   = request.form.get("meeting_id",   "").strip()
+    filename     = request.form.get("filename",      "").strip()
+    try:
+        idx = int(request.form.get("idx", ""))
+    except (ValueError, TypeError):
+        abort(400)
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _STORY_FILE_RE.match(filename)):
+        abort(400)
+    basename = filename[:-3]
+    comment_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}_comments.json"
+    if not comment_path.exists():
+        abort(404)
+    try:
+        comments = json.loads(comment_path.read_text(encoding="utf-8"))
+    except Exception:
+        abort(500)
+    if idx < 0 or idx >= len(comments):
+        abort(400)
+    del comments[idx]
+    tmp = comment_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(comments, indent=2), encoding="utf-8")
+    tmp.rename(comment_path)
+    return jsonify({"ok": True})
 
 
 @app.route("/admin/feeds")
