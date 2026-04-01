@@ -2,10 +2,9 @@
 """TubeNews — monitor YouTube channels for new videos and generate news feeds.
 
 Workflow for each configured channel (feed):
-  1. Discover recent video IDs by scraping YouTube channel pages.
+  1. Discover recent video IDs via YouTube's official Atom RSS feed.
   2. Skip videos already in the local archive.
-  3. For genuinely new videos: fetch a transcript via the Supadata API and
-     scrape basic metadata (title, upload date) from the YouTube watch page.
+  3. For genuinely new videos: fetch a transcript via the Supadata API.
   4. Send the transcript to Google Gemini so it can extract focused news
      stories and write each story as a Markdown file.
   5. Rebuild the per-channel RSS feed and the site-wide aggregate feed.
@@ -30,7 +29,8 @@ import re
 import socket
 import threading
 import time
-from datetime import date, datetime, timedelta
+import xml.etree.ElementTree as ET
+from datetime import date, datetime
 from pathlib import Path
 from typing import TypedDict
 
@@ -94,15 +94,6 @@ if os.path.exists(_FREEBSD_CERT):
 # (including Supadata's underlying HTTP) respects it automatically.
 socket.setdefaulttimeout(REQUEST_TIMEOUT)
 
-# Mimic a real browser so YouTube doesn't serve a bot-detection page instead
-# of the normal HTML (which contains the metadata we need to scrape).
-YOUTUBE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    )
-}
-
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -155,7 +146,6 @@ class VideoInfo(TypedDict):
     id: str
     title: str
     date: str
-    is_live: bool
 
 
 class FeedConfig(TypedDict):
@@ -331,178 +321,68 @@ def _story_matches_focus(story_topics: list[str], focuses: list[str]) -> bool:
 # YouTube data-gathering
 # ---------------------------------------------------------------------------
 
-
-def _relative_date_to_iso(text: str) -> str:
-    """Convert a YouTube relative-date string to ``YYYY-MM-DD``.
-
-    YouTube's channel listing page provides publication dates as relative
-    strings (e.g. ``"11 days ago"``, ``"2 weeks ago"``).  We subtract the
-    implied offset from today to get an approximate calendar date.
-
-    For completed live-streams YouTube sometimes provides an exact date
-    (e.g. ``"Streamed live on Feb 24, 2026"``); we parse that precisely.
-
-    Falls back to today's date for any unrecognised format.
-    """
-    today = datetime.now()
-    lower = text.lower().strip()
-
-    # "Streamed live on Month DD, YYYY" or just "Month DD, YYYY"
-    exact = re.search(r"([a-z]+ \d{1,2},\s*\d{4})", lower)
-    if exact:
-        for fmt in ("%b %d, %Y", "%B %d, %Y"):
-            try:
-                return datetime.strptime(exact.group(1), fmt).strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-
-    # "N seconds/minutes/hours/days/weeks/months/years ago"
-    m = re.search(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", lower)
-    if m:
-        n, unit = int(m.group(1)), m.group(2)
-        days = {"second": 0, "minute": 0, "hour": 0, "day": n,
-                "week": n * 7, "month": n * 30, "year": n * 365}[unit]
-        return (today - timedelta(days=days)).strftime("%Y-%m-%d")
-
-    return today.strftime("%Y-%m-%d")
-
-
-def _parse_channel_page_metadata(html: str) -> dict[str, dict]:
-    """Extract per-video metadata from the ``ytInitialData`` JSON in a channel page.
-
-    YouTube embeds a large JSON blob (``var ytInitialData = {...};``) that
-    powers the video-card grid.  Each card's ``videoRenderer`` object contains
-    the video ID, title, relative publish date, and live-stream status.
-
-    Returns a ``{videoId: {title, date, is_live}}`` mapping.
-    Falls back to an empty dict if the JSON blob is absent or unparseable.
-    """
-    result: dict[str, dict] = {}
-
-    m = re.search(
-        r"var ytInitialData\s*=\s*(\{.*?\});\s*(?:var |</script>)",
-        html,
-        re.DOTALL,
-    )
-    if not m:
-        return result
-
-    try:
-        data = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return result
-
-    def walk(obj: object) -> None:
-        if isinstance(obj, dict):
-            if "videoId" in obj and "title" in obj:
-                vid = obj["videoId"]
-                runs = obj["title"].get("runs", [])
-                title = runs[0].get("text", "") if runs else obj["title"].get("simpleText", "")
-
-                relative = obj.get("publishedTimeText", {}).get("simpleText", "")
-                date = _relative_date_to_iso(relative) if relative else datetime.now().strftime("%Y-%m-%d")
-                logger.debug(f"  video {vid}: publishedTimeText={relative!r} → date={date}")
-
-                is_live = any(
-                    ov.get("thumbnailOverlayTimeStatusRenderer", {}).get("style")
-                    in ("LIVE", "UPCOMING")
-                    for ov in obj.get("thumbnailOverlays", [])
-                )
-
-                if vid not in result:
-                    result[vid] = {"title": title, "date": date, "is_live": is_live}
-
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
-
-    walk(data)
-    return result
+_YT_RSS_NS = {
+    "atom": "http://www.w3.org/2005/Atom",
+    "yt":   "http://www.youtube.com/xml/schemas/2015",
+}
 
 
 def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
-    """Scrape a channel's *videos* and *streams* tabs; return video metadata.
+    """Fetch channel videos from YouTube's official Atom RSS feed.
 
-    Both tabs are fetched concurrently.  Results are merged in a fixed order
-    (videos tab first, then streams) so the returned list is stable.
+    URL: ``https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID``
 
-    Parses the ``ytInitialData`` JSON blob embedded in each tab's HTML to
-    extract the video ID, title, approximate upload date, and live status for
-    every visible video.  The simple ``videoId`` regex is also run as a
-    fallback to ensure no IDs are missed if the JSON parse fails.
+    Returns up to 15 most-recent entries (the YouTube RSS limit), newest-first.
+    No API key, no HTML parsing, and no bot-detection headers required.
 
-    Returns an ordered list of dicts (most-recent first, duplicates removed)::
+    Live streams that are still in progress will not have a transcript ready
+    yet; :func:`fetch_transcript` handles that case by returning ``None``
+    (transient failure) so the video is retried on the next run.
 
-        {"id": str, "title": str, "date": "YYYY-MM-DD", "is_live": bool}
+    Returns an ordered list of dicts::
+
+        {"id": str, "title": str, "date": "YYYY-MM-DD"}
     """
-    tabs = ["videos", "streams"]
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     prefix = f"{feed_name}: " if feed_name else ""
-
-    def _fetch_tab(tab: str) -> tuple[str, str | None]:
-        url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
-        for attempt in range(3):
-            logger.debug(f"{prefix}YouTube: Fetching {tab} tab" + (f" (retry {attempt})" if attempt else ""))
-            try:
-                response = requests.get(url, headers=YOUTUBE_HEADERS, timeout=REQUEST_TIMEOUT)
-                if response.status_code == 200:
-                    return tab, response.text
-            except Exception as exc:
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-                else:
-                    logger.warning(f"{prefix}YouTube: {tab} tab failed after 3 attempts: {exc}")
-        return tab, None
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        tab_results = dict(executor.map(lambda t: _fetch_tab(t), tabs))
-
-    all_ids: list[str] = []
-    meta_lookup: dict[str, dict] = {}
-
-    for tab in tabs:
-        html = tab_results.get(tab)
-        if html is None:
+    resp = None
+    for attempt in range(3):
+        logger.debug(f"{prefix}YouTube RSS: Fetching feed" + (f" (retry {attempt})" if attempt else ""))
+        try:
+            r = requests.get(url, timeout=REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                resp = r
+                break
+            logger.warning(f"{prefix}YouTube RSS: HTTP {r.status_code}")
+        except Exception as exc:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            else:
+                logger.warning(f"{prefix}YouTube RSS: Failed after 3 attempts: {exc}")
+    if resp is None:
+        return []
+    try:
+        root = ET.fromstring(resp.text)
+    except ET.ParseError as exc:
+        logger.warning(f"{prefix}YouTube RSS: Could not parse feed XML: {exc}")
+        return []
+    videos: list[VideoInfo] = []
+    for entry in root.findall("atom:entry", _YT_RSS_NS):
+        vid_el   = entry.find("yt:videoId",    _YT_RSS_NS)
+        title_el = entry.find("atom:title",    _YT_RSS_NS)
+        pub_el   = entry.find("atom:published", _YT_RSS_NS)
+        if vid_el is None or not vid_el.text:
             continue
-        tab_meta = _parse_channel_page_metadata(html)
-        found = re.findall(r'"videoId":"([^"]{11})"', html)
-        if not found:
-            logger.warning(
-                f"{prefix}YouTube: Got 200 from {tab} tab but found 0 "
-                "video IDs — YouTube HTML structure may have changed."
-            )
-        elif not tab_meta:
-            if '"collectionThumbnailViewModel"' in html:
-                # Tab is showing playlist cards rather than individual videos
-                # (some channels organise streams this way). The regex finds
-                # false-positive IDs from playlist thumbnail URLs — skip them.
-                logger.debug(
-                    f"{prefix}YouTube: {tab} tab shows playlist cards, not "
-                    "individual videos — skipping."
-                )
-                continue
-            logger.warning(
-                f"{prefix}YouTube: Found {len(found)} video ID(s) on {tab} tab "
-                "but could not parse any titles or dates — "
-                "YouTube HTML structure may have changed "
-                f"(run: python3 helpers/dump_channel_html.py {channel_id} {tab})."
-            )
-        meta_lookup.update(tab_meta)
-        all_ids.extend(found)
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    seen: dict[str, dict] = {}
-    for vid in all_ids:
-        if vid not in seen:
-            m = meta_lookup.get(vid, {})
-            seen[vid] = {
-                "id": vid,
-                "title": m.get("title") or "",
-                "date": m.get("date") or today,
-                "is_live": m.get("is_live", False),
-            }
-    return list(seen.values())
+        pub = (pub_el.text or "").strip() if pub_el is not None else ""
+        date = pub[:10] if len(pub) >= 10 else datetime.now().strftime("%Y-%m-%d")
+        videos.append({
+            "id":    vid_el.text.strip(),
+            "title": (title_el.text or "").strip() if title_el is not None else "",
+            "date":  date,
+        })
+    if not videos:
+        logger.warning(f"{prefix}YouTube RSS: Feed returned 0 entries — channel ID may be wrong")
+    return videos
 
 
 
@@ -1241,7 +1121,6 @@ def process_video(
     video_id: str,
     video_title: str,
     video_date: str,
-    is_live: bool,
     feed: FeedConfig,
     feed_dir: Path,
     supadata_client: Supadata,
@@ -1276,8 +1155,8 @@ def process_video(
                                         *transcript_rate_limit_event* has been
                                         set; caller should stop processing
                                         further videos; *n_stories* is 0.
-        ``"skipped"``                 – transcript unavailable, live stream, AI
-                                        disabled, or AI returned nothing;
+        ``"skipped"``                 – transcript unavailable, AI disabled,
+                                        or AI returned nothing;
                                         *n_stories* is 0.  When Gemini returns
                                         an empty story list, a
                                         ``metadata.json`` with
@@ -1309,9 +1188,6 @@ def process_video(
             return "transcript_quota_exhausted", 0
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
         logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Processing new video{counter}")
-        if is_live:
-            logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Live stream — skipping, will retry next run")
-            return "skipped", 0
         logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
         transcript_text = fetch_transcript(
             video_id, supadata_client,
@@ -1524,7 +1400,6 @@ def process_feed(
             video_id=video_info["id"],
             video_title=video_info["title"],
             video_date=video_info["date"],
-            is_live=video_info["is_live"],
             feed=feed,
             feed_dir=feed_dir,
             supadata_client=supadata_client,
