@@ -1626,21 +1626,12 @@ def admin_run_now():
     if _is_running():
         flash("TubeNews is already running.", "info")
         return redirect(url_for("admin_runs"))
-    run_logs_dir = STORAGE_ROOT / "_run_logs"
-    run_logs_dir.mkdir(exist_ok=True)
-    # Open a placeholder log file; rename to run-{pid}.log once we have the PID.
-    tmp_log = run_logs_dir / ".run-starting.log"
-    with open(tmp_log, "w") as log_fh:
-        cmd = [sys.executable, str(TUBENEWS_PY)]
-        if request.form.get("debug"):
-            cmd.append("--debug")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_fh,
-            stderr=log_fh,
-            start_new_session=True,
-        )
-    tmp_log.rename(run_logs_dir / f"run-{proc.pid}.log")
+    cmd = [sys.executable, str(TUBENEWS_PY)]
+    if request.form.get("debug"):
+        cmd.append("--debug")
+    # TubeNews.py writes its own run-<pid>.log via a FileHandler added after
+    # lock acquisition, so no stdout/stderr redirect is needed here.
+    proc = subprocess.Popen(cmd, start_new_session=True)
     _web_ntfy("TubeNews: run started", f"Manual run triggered by {current_user.email}.")
     flash("TubeNews run started.", "success")
     return redirect(url_for("admin_runs") + "?starting=1")
