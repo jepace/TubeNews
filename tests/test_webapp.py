@@ -2861,3 +2861,122 @@ def test_mark_all_unread_with_bundle_slug(logged_in_client, archive, monkeypatch
         read = set(data.get("read_articles", []))
         assert alpha_hash not in read, "bundle mark-all-unread should have removed alpha hash"
         assert beta_hash in read, "bundle mark-all-unread must not touch other channels"
+
+# ---------------------------------------------------------------------------
+# Story comments
+# ---------------------------------------------------------------------------
+
+def test_get_comments_empty(logged_in_client, archive, monkeypatch):
+    """GET /comments/... returns [] when no comment file exists."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    r = logged_in_client.get("/comments/alpha_city/2026-01-15_VID12345678/01_Story")
+    assert r.status_code == 200
+    assert r.get_json() == []
+
+
+def test_post_comment_saves_to_file(logged_in_client, archive, monkeypatch):
+    """POST /comment must append a comment dict to the story's _comments.json."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    r = logged_in_client.post("/comment", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "Great reporting!",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    assert comment_path.exists()
+    comments = _json.loads(comment_path.read_text())
+    assert len(comments) == 1
+    assert comments[0]["body"] == "Great reporting!"
+
+
+def test_post_comment_requires_login(client, archive, monkeypatch):
+    """POST /comment without authentication must redirect to login."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    r = client.post("/comment", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "Hello",
+    })
+    assert r.status_code in (302, 401)
+
+
+def test_get_comments_returns_posted_comment(logged_in_client, archive, monkeypatch):
+    """GET /comments/... must return the comment that was just posted."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    logged_in_client.post("/comment", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "Test comment",
+    })
+    r = logged_in_client.get("/comments/alpha_city/2026-01-15_VID12345678/01_Story")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert len(data) == 1
+    assert data[0]["body"] == "Test comment"
+    assert data[0]["is_mine"] is True
+
+
+def test_post_comment_empty_body_rejected(logged_in_client, archive, monkeypatch):
+    """POST /comment with an empty body must return 400."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    r = logged_in_client.post("/comment", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "   ",
+    })
+    assert r.status_code == 400
+
+
+def test_admin_comment_delete_removes_comment(admin_client, archive, monkeypatch):
+    """POST /admin/comment/delete must remove the comment at the given index."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    # Write two comments directly to the file (admin_client user has no subscriptions).
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    comment_path.write_text(_json.dumps([
+        {"user_id": "uid1", "user_name": "Alice", "posted_at": 1.0, "body": "First comment"},
+        {"user_id": "uid2", "user_name": "Bob",   "posted_at": 2.0, "body": "Second comment"},
+    ]))
+    r = admin_client.post("/admin/comment/delete", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "idx":          "0",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+    remaining = _json.loads(comment_path.read_text())
+    assert len(remaining) == 1
+    assert remaining[0]["body"] == "Second comment"
+
+
+def test_post_comment_path_traversal_rejected(logged_in_client, archive, monkeypatch):
+    """POST /comment with path-traversal characters in channel_slug must return 400."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    r = logged_in_client.post("/comment", data={
+        "channel_slug": "../_users",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "Hello",
+    })
+    assert r.status_code == 400

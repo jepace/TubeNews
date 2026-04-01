@@ -154,7 +154,22 @@
                 data-filename="{{ story.story_filename }}"
                 data-confirm="Delete &ldquo;{{ story.title | e }}&rdquo;?&#10;This cannot be undone.">&#10060; Delete</button>
         {% endif %}
+        {% if current_user.is_authenticated and story.channel_slug and story.meeting_id and story.story_filename %}
+        <button type="button" class="tb-comments"
+                data-channel-slug="{{ story.channel_slug }}"
+                data-meeting-id="{{ story.meeting_id }}"
+                data-filename="{{ story.story_filename }}">&#128172; Comments</button>
+        {% endif %}
       </div>
+      {% if current_user.is_authenticated and story.channel_slug and story.meeting_id and story.story_filename %}
+      <div class="story-comments" style="display:none">
+        <div class="sc-list"></div>
+        <form class="sc-form">
+          <textarea class="sc-input" placeholder="Add a comment&hellip;" rows="2"></textarea>
+          <button type="button" class="sc-submit">Post</button>
+        </form>
+      </div>
+      {% endif %}
     </article>
     {% endfor %}
   {% else %}
@@ -439,6 +454,127 @@
           else { alert('Delete failed (' + r.status + ').'); }
         })
         .catch(function () { alert('Delete failed. Check your connection.'); });
+    });
+  });
+})();
+{% endif %}
+
+{% if current_user.is_authenticated %}
+(function () {
+  var csrfToken    = {{ csrf_token() | tojson }};
+  var commentUrl   = {{ url_for('post_comment') | tojson }};
+  {% if current_user.is_admin %}
+  var delCommentUrl = {{ url_for('admin_comment_delete') | tojson }};
+  {% endif %}
+  var isAdmin = {{ 'true' if current_user.is_admin else 'false' }};
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function fmtTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  }
+
+  function renderComments(section, comments) {
+    var list = section.querySelector('.sc-list');
+    if (!comments.length) {
+      list.innerHTML = '<p class="sc-empty">No comments yet. Be the first!</p>';
+      return;
+    }
+    list.innerHTML = comments.map(function (c) {
+      return '<div class="sc-comment" data-idx="' + c.idx + '">' +
+        '<div class="sc-comment-meta">' +
+        '<span class="sc-author">' + escHtml(c.user_name) +
+        (c.is_mine ? ' <span class="sc-you">(you)</span>' : '') + '</span>' +
+        '<span class="sc-time">' + fmtTime(c.posted_at) + '</span>' +
+        (isAdmin ? '<button class="sc-delete" data-idx="' + c.idx + '">&#10060;</button>' : '') +
+        '</div>' +
+        '<p class="sc-body">' + escHtml(c.body).replace(/\n/g, '<br>') + '</p>' +
+        '</div>';
+    }).join('');
+    if (isAdmin) {
+      list.querySelectorAll('.sc-delete').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (!confirm('Delete this comment?')) return;
+          var fd = new FormData();
+          fd.append('csrf_token', csrfToken);
+          fd.append('channel_slug', section.dataset.channelSlug);
+          fd.append('meeting_id',   section.dataset.meetingId);
+          fd.append('filename',     section.dataset.filename);
+          fd.append('idx',          btn.dataset.idx);
+          fetch(delCommentUrl, { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (res.ok) { loadComments(section); }
+              else { alert('Delete failed.'); }
+            })
+            .catch(function () { alert('Delete failed.'); });
+        });
+      });
+    }
+  }
+
+  function updateToggle(section, count) {
+    var btn = section.closest('article').querySelector('.tb-comments');
+    if (btn) btn.textContent = '&#128172; Comments' + (count ? ' (' + count + ')' : '');
+  }
+
+  function loadComments(section) {
+    var slug = section.dataset.channelSlug;
+    var mid  = section.dataset.meetingId;
+    var base = section.dataset.filename.replace(/\.md$/, '');
+    section.querySelector('.sc-list').innerHTML = '<p class="sc-empty">Loading\u2026</p>';
+    fetch('/comments/' + slug + '/' + mid + '/' + base)
+      .then(function (r) { return r.json(); })
+      .then(function (comments) {
+        renderComments(section, comments);
+        updateToggle(section, comments.length);
+      })
+      .catch(function () {
+        section.querySelector('.sc-list').innerHTML = '<p class="sc-empty">Could not load comments.</p>';
+      });
+  }
+
+  document.querySelectorAll('.tb-comments').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var section = btn.closest('article').querySelector('.story-comments');
+      if (section.style.display !== 'none') {
+        section.style.display = 'none';
+        return;
+      }
+      section.dataset.channelSlug = btn.dataset.channelSlug;
+      section.dataset.meetingId   = btn.dataset.meetingId;
+      section.dataset.filename    = btn.dataset.filename;
+      section.style.display = '';
+      loadComments(section);
+    });
+  });
+
+  document.querySelectorAll('.sc-submit').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var section  = btn.closest('.story-comments');
+      var textarea = section.querySelector('.sc-input');
+      var body = textarea.value.trim();
+      if (!body) { textarea.focus(); return; }
+      var fd = new FormData();
+      fd.append('csrf_token',   csrfToken);
+      fd.append('channel_slug', section.dataset.channelSlug);
+      fd.append('meeting_id',   section.dataset.meetingId);
+      fd.append('filename',     section.dataset.filename);
+      fd.append('body',         body);
+      btn.disabled = true;
+      fetch(commentUrl, { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res.ok) { textarea.value = ''; loadComments(section); }
+          else { alert(res.error || 'Failed to post comment.'); }
+        })
+        .catch(function () { alert('Failed to post comment.'); })
+        .finally(function () { btn.disabled = false; });
     });
   });
 })();
