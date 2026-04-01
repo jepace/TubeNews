@@ -128,6 +128,23 @@ def setup_logging(debug_mode: bool) -> None:
     )
 
 
+def _add_run_log_file_handler() -> None:
+    """Add a FileHandler writing to content/_run_logs/run-<pid>.log.
+
+    Called after the lock is acquired so only actual runs produce a log file.
+    The file is the same one the web UI's admin_run_log view reads, so both
+    web-UI-triggered runs and cron runs appear identically in the Runs page.
+    """
+    log_dir = STORAGE_ROOT / "_run_logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"run-{os.getpid()}.log"
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S"
+    ))
+    logging.getLogger().addHandler(fh)
+
+
 # ---------------------------------------------------------------------------
 # Data contracts (TypedDicts)
 # ---------------------------------------------------------------------------
@@ -1609,6 +1626,7 @@ def main() -> None:
         return
 
     try:
+        _add_run_log_file_handler()
         _main_body(args)
     finally:
         _release_lock()

@@ -756,8 +756,12 @@ def test_run_log_no_running_indicator_for_other_pid(admin_client, archive):
     assert b"Running" not in r.data
 
 
-def test_run_now_creates_log_in_run_logs_dir(admin_client, archive, monkeypatch):
-    """Run Now must write stdout/stderr into archive/_run_logs/run-{pid}.log."""
+def test_run_now_launches_process_without_stdout_redirect(admin_client, archive, monkeypatch):
+    """Run Now must start TubeNews.py without capturing stdout/stderr.
+
+    TubeNews.py writes its own run-<pid>.log via a FileHandler, so the web UI
+    no longer needs to redirect output.
+    """
     fake_pid = 55555
     mock_proc = MagicMock()
     mock_proc.pid = fake_pid
@@ -765,10 +769,9 @@ def test_run_now_creates_log_in_run_logs_dir(admin_client, archive, monkeypatch)
     monkeypatch.setattr(subprocess, "Popen", mock_popen)
     admin_client.post("/admin/run-now")
     _, kwargs = mock_popen.call_args
-    # stdout and stderr must be the same open file handle (not DEVNULL).
-    assert kwargs["stdout"] is kwargs["stderr"]
-    # The log file must now exist under _run_logs/ with the PID name.
-    assert (archive / "_run_logs" / f"run-{fake_pid}.log").exists()
+    # No stdout/stderr capture — TubeNews.py handles its own log file.
+    assert "stdout" not in kwargs
+    assert "stderr" not in kwargs
 
 
 def test_admin_runs_shows_log_link_for_run_with_log(admin_client, archive):
