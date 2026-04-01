@@ -888,8 +888,8 @@ def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str 
     (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
-def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
-    """Generate ``archive/users/<id>/index.html`` — a static blog page for a user.
+def rebuild_user_feed_page(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
+    """Generate ``archive/users/<id>/index.html`` — a static feed page for a user.
 
     Pulls stories from the user's subscribed channels (same logic as
     :func:`rebuild_user_feed`) and renders them as a self-contained HTML page
@@ -905,7 +905,7 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
     user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"TubeNews: Rebuilding blog for {name}")
+    logger.info(f"TubeNews: Rebuilding feed page for {name}")
 
     all_stories: list[dict] = []
     for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and not d.name.startswith("_")]:
@@ -940,7 +940,7 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
     CSS = """
         body { font-family: Georgia, serif; margin: 0; padding: 0;
                color: #222; background: #fafaf8; }
-        .blog-content { max-width: 740px; margin: 0 auto; padding: 30px 20px 40px; }
+        .feed-content { max-width: 740px; margin: 0 auto; padding: 30px 20px 40px; }
         h1 { font-size: 1.6em; border-bottom: 2px solid #333; padding-bottom: 8px; }
         .meta { font-size: 0.85em; color: #666; margin-bottom: 28px; }
         article { border-bottom: 1px solid #ddd; padding: 24px 0; }
@@ -987,7 +987,7 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
             f"</article>"
         )
 
-    page_title = user.get("blog_name") or f"TubeNews — {name}"
+    page_title = user.get("feed_name") or f"TubeNews — {name}"
     meta_line = (
         f"{len(all_stories)} stories from {len(subscribed)} channel{'s' if len(subscribed) != 1 else ''}"
     )
@@ -1002,22 +1002,22 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
 <title>{page_title}</title>
 {rss_link}
 <style>
-        nav.blog-nav {{
+        nav.feed-nav {{
             background: #fff; border-bottom: 1px solid #d1d5db;
             padding: 0 1.5rem; height: 52px;
             display: flex; align-items: center; justify-content: space-between;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         }}
-        nav.blog-nav .nav-left {{ display: flex; align-items: center; gap: 1.5rem; }}
-        nav.blog-nav a {{ color: #2563eb; text-decoration: none; font-size: 0.9rem; }}
-        nav.blog-nav a:hover {{ text-decoration: underline; }}
-        nav.blog-nav .nav-brand {{ font-weight: 700; font-size: 1.1rem; }}
-        nav.blog-nav .nav-rss {{ display: flex; align-items: center; }}
+        nav.feed-nav .nav-left {{ display: flex; align-items: center; gap: 1.5rem; }}
+        nav.feed-nav a {{ color: #2563eb; text-decoration: none; font-size: 0.9rem; }}
+        nav.feed-nav a:hover {{ text-decoration: underline; }}
+        nav.feed-nav .nav-brand {{ font-weight: 700; font-size: 1.1rem; }}
+        nav.feed-nav .nav-rss {{ display: flex; align-items: center; }}
         {CSS}
 </style>
 </head>
 <body>
-<nav class="blog-nav">
+<nav class="feed-nav">
   <div class="nav-left">
     <a href="/" class="nav-brand">TubeNews</a>
     <a href="/dashboard">My feed</a>
@@ -1030,7 +1030,7 @@ def rebuild_user_blog(user: dict[str, object], base_url: str = "", user_id: str 
     </svg>
   </a>
 </nav>
-<div class="blog-content">
+<div class="feed-content">
 <h1>{page_title}</h1>
 <p class="meta">{meta_line}</p>
 {"".join(story_blocks) if story_blocks else "<p>No stories yet.</p>"}

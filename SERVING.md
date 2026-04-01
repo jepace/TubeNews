@@ -98,12 +98,12 @@ Set `base_url` in `TubeNews.json` to the public root of your server
 | URL | What you get |
 |---|---|
 | `/` | Login / dashboard |
-| `/dashboard` | Subscribe to channels, copy your feed and blog URLs |
+| `/dashboard` | Subscribe to channels, copy your feed URLs |
 | `/admin` | Manage users and channels |
 | `/content/rss.xml` | Regional aggregate feed |
 | `/content/<channel>/rss.xml` | Per-channel feed |
 | `/feed/<token>.xml` | Your personal RSS feed (token shown on dashboard) |
-| `/blog/<token>.html` | Your personal blog page (shareable, no login required) |
+| `/feed/<token>.html` | Your personal feed page (shareable, no login required) |
 
 ---
 
@@ -270,15 +270,15 @@ For the scraper on a schedule, add a systemd timer or use cron (see above).
 
 ---
 
-## User Feeds and Blog Pages
+## User Feeds
 
-Each registered user gets a personal RSS feed and blog page served at
+Each registered user gets a personal RSS feed and feed page served at
 token-based URLs shown on the dashboard:
 
 | URL | What it serves |
 |---|---|
 | `/feed/<token>.xml` | Personal RSS feed — add to any feed reader |
-| `/blog/<token>.html` | Personal blog page — shareable, no login required |
+| `/feed/<token>.html` | Personal feed page — shareable, no login required |
 
 Both URLs use the same token and are safe to share. The token is shown on the
 dashboard and can be reset by an admin if needed (resetting invalidates the
@@ -309,7 +309,7 @@ rename the key to `"content_dir"`.
 
 ## Per-Channel Focus Filtering
 
-By default a user's feed and blog show all stories from their subscribed
+By default a user's feed and feed page show all stories from their subscribed
 channels. Each user can optionally narrow what they see on a per-channel basis:
 
 1. Go to `/dashboard`

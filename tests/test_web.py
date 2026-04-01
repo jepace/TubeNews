@@ -1,7 +1,7 @@
 """Unit tests for web/app.py helpers.
 
 Focus areas:
-- URL generation (_feed_url, _blog_url): must return relative paths when
+- URL generation (_rss_url, _feed_url): must return relative paths when
   base_url is not configured, and absolute paths only when it is.  This
   has broken twice — once with _external=True producing https:// links
   when HTTPS was not set up.  These tests are the regression guard.
@@ -9,7 +9,7 @@ Focus areas:
   HTML class string applied to <html>.
 - Flask route integration: hit real routes via test_client and verify
   the HTML rendered to the browser never contains absolute https:// URLs
-  in feed/blog URL fields.  Helper-function unit tests alone are not
+  in feed/rss URL fields.  Helper-function unit tests alone are not
   enough — they don't catch bugs in how routes call or pass those helpers.
 
 Import note: app.py reads TubeNews.json at import time for the secret
@@ -34,7 +34,61 @@ os.environ.setdefault("TUBENEWS_SECRET_KEY", "test-secret-key-for-testing-only-x
 # Add the web/ directory so we can `import app` directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
-from app import _feed_url, _blog_url, _prefs_to_classes  # noqa: E402
+from app import _rss_url, _feed_url, _prefs_to_classes  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# _rss_url — no base_url configured
+# ---------------------------------------------------------------------------
+
+def test_rss_url_no_base_is_root_relative():
+    """Without base_url the RSS URL must be root-relative, not absolute."""
+    with patch("app._base_url", return_value=""):
+        url = _rss_url("mytoken")
+    assert url == "/feed/mytoken.xml"
+
+
+def test_rss_url_no_base_has_no_scheme():
+    """Without base_url the URL must not contain a scheme (http/https)."""
+    with patch("app._base_url", return_value=""):
+        url = _rss_url("mytoken")
+    assert not url.startswith("http")
+
+
+def test_rss_url_no_base_no_hostname():
+    """Without base_url the URL must not embed a hostname."""
+    with patch("app._base_url", return_value=""):
+        url = _rss_url("tok123")
+    assert "localhost" not in url
+    assert "127.0.0.1" not in url
+    assert "://" not in url
+
+
+def test_rss_url_ends_with_xml():
+    with patch("app._base_url", return_value=""):
+        assert _rss_url("tok").endswith(".xml")
+
+
+def test_rss_url_contains_token():
+    token = "abc123def456"
+    with patch("app._base_url", return_value=""):
+        assert token in _rss_url(token)
+
+
+# ---------------------------------------------------------------------------
+# _rss_url — base_url configured
+# ---------------------------------------------------------------------------
+
+def test_rss_url_with_base_uses_base():
+    with patch("app._base_url", return_value="https://example.com"):
+        url = _rss_url("mytoken")
+    assert url == "https://example.com/feed/mytoken.xml"
+
+
+def test_rss_url_with_base_no_double_slash():
+    with patch("app._base_url", return_value="https://example.com"):
+        url = _rss_url("tok")
+    assert "//" not in url.replace("https://", "")
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +99,7 @@ def test_feed_url_no_base_is_root_relative():
     """Without base_url the feed URL must be root-relative, not absolute."""
     with patch("app._base_url", return_value=""):
         url = _feed_url("mytoken")
-    assert url == "/feed/mytoken.xml"
+    assert url == "/feed/mytoken.html"
 
 
 def test_feed_url_no_base_has_no_scheme():
@@ -64,9 +118,9 @@ def test_feed_url_no_base_no_hostname():
     assert "://" not in url
 
 
-def test_feed_url_ends_with_xml():
+def test_feed_url_ends_with_html():
     with patch("app._base_url", return_value=""):
-        assert _feed_url("tok").endswith(".xml")
+        assert _feed_url("tok").endswith(".html")
 
 
 def test_feed_url_contains_token():
@@ -82,7 +136,7 @@ def test_feed_url_contains_token():
 def test_feed_url_with_base_uses_base():
     with patch("app._base_url", return_value="https://example.com"):
         url = _feed_url("mytoken")
-    assert url == "https://example.com/feed/mytoken.xml"
+    assert url == "https://example.com/feed/mytoken.html"
 
 
 def test_feed_url_with_base_no_double_slash():
@@ -92,77 +146,23 @@ def test_feed_url_with_base_no_double_slash():
 
 
 # ---------------------------------------------------------------------------
-# _blog_url — no base_url configured
+# RSS and feed URL symmetry
 # ---------------------------------------------------------------------------
 
-def test_blog_url_no_base_is_root_relative():
-    """Without base_url the blog URL must be root-relative, not absolute."""
-    with patch("app._base_url", return_value=""):
-        url = _blog_url("mytoken")
-    assert url == "/blog/mytoken.html"
-
-
-def test_blog_url_no_base_has_no_scheme():
-    """Without base_url the URL must not contain a scheme (http/https)."""
-    with patch("app._base_url", return_value=""):
-        url = _blog_url("mytoken")
-    assert not url.startswith("http")
-
-
-def test_blog_url_no_base_no_hostname():
-    """Without base_url the URL must not embed a hostname."""
-    with patch("app._base_url", return_value=""):
-        url = _blog_url("tok123")
-    assert "localhost" not in url
-    assert "127.0.0.1" not in url
-    assert "://" not in url
-
-
-def test_blog_url_ends_with_html():
-    with patch("app._base_url", return_value=""):
-        assert _blog_url("tok").endswith(".html")
-
-
-def test_blog_url_contains_token():
-    token = "abc123def456"
-    with patch("app._base_url", return_value=""):
-        assert token in _blog_url(token)
-
-
-# ---------------------------------------------------------------------------
-# _blog_url — base_url configured
-# ---------------------------------------------------------------------------
-
-def test_blog_url_with_base_uses_base():
-    with patch("app._base_url", return_value="https://example.com"):
-        url = _blog_url("mytoken")
-    assert url == "https://example.com/blog/mytoken.html"
-
-
-def test_blog_url_with_base_no_double_slash():
-    with patch("app._base_url", return_value="https://example.com"):
-        url = _blog_url("tok")
-    assert "//" not in url.replace("https://", "")
-
-
-# ---------------------------------------------------------------------------
-# Feed and blog URL symmetry
-# ---------------------------------------------------------------------------
-
-def test_feed_and_blog_urls_share_token():
-    """The same token must appear in both the feed and blog URLs."""
+def test_rss_and_feed_urls_share_token():
+    """The same token must appear in both the RSS and feed URLs."""
     token = "shared-token-xyz"
     with patch("app._base_url", return_value=""):
+        rss = _rss_url(token)
         feed = _feed_url(token)
-        blog = _blog_url(token)
+    assert token in rss
     assert token in feed
-    assert token in blog
 
 
-def test_feed_and_blog_urls_differ():
-    """Feed and blog URLs must be distinct paths."""
+def test_rss_and_feed_urls_differ():
+    """RSS and feed URLs must be distinct paths."""
     with patch("app._base_url", return_value=""):
-        assert _feed_url("tok") != _blog_url("tok")
+        assert _rss_url("tok") != _feed_url("tok")
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ def test_prefs_classes_are_space_separated():
 # Flask route integration tests
 #
 # These tests make real HTTP requests through app.test_client() and inspect
-# the rendered HTML.  Unit tests on _feed_url/_blog_url are necessary but
+# the rendered HTML.  Unit tests on _rss_url/_feed_url are necessary but
 # not sufficient: they don't catch bugs where a route calls the wrong helper,
 # passes the result incorrectly, or a template renders a different variable.
 # ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ def flask_env(tmp_path, monkeypatch):
 
     - WTF_CSRF_ENABLED disabled so POST forms work without tokens.
     - CONFIG_FILE points to a temp TubeNews.json with no base_url set,
-      so _feed_url/_blog_url must return root-relative paths.
+      so _rss_url/_feed_url must return root-relative paths.
     - USERS_ROOT points to tmp_path/_users.
     - Admin is logged in via the real /login route before yielding.
     """
@@ -324,25 +324,25 @@ def flask_env(tmp_path, monkeypatch):
 
 # ── Admin edit-user page ──────────────────────────────────────────────────
 
-def test_admin_edit_user_feed_url_is_root_relative(flask_env):
+def test_admin_edit_user_rss_url_is_root_relative(flask_env):
     """RSS feed URL shown on admin edit-user page must be a root-relative path."""
     client, _, target_id = flask_env
     html = client.get(f"/admin/user/{target_id}").data.decode()
     assert 'value="/feed/target-feed-token-abc.xml"' in html
 
 
-def test_admin_edit_user_blog_url_is_root_relative(flask_env):
-    """Blog URL shown on admin edit-user page must be a root-relative path."""
+def test_admin_edit_user_feed_url_is_root_relative(flask_env):
+    """Feed (story page) URL shown on admin edit-user page must be a root-relative path."""
     client, _, target_id = flask_env
     html = client.get(f"/admin/user/{target_id}").data.decode()
-    assert 'value="/blog/target-feed-token-abc.html"' in html
+    assert 'value="/feed/target-feed-token-abc.html"' in html
 
 
-def test_admin_edit_user_feed_url_no_https(flask_env):
-    """Feed URL on admin edit-user page must never contain https:// when base_url is unset."""
+def test_admin_edit_user_rss_url_no_https(flask_env):
+    """RSS URL on admin edit-user page must never contain https:// when base_url is unset."""
     client, _, target_id = flask_env
     html = client.get(f"/admin/user/{target_id}").data.decode()
-    # Find the feed URL input value and assert it's not absolute.
+    # Find the RSS URL input value and assert it's not absolute.
     assert "https://localhost" not in html
     assert "https://127" not in html
     # The token must appear in a relative context only.
@@ -355,12 +355,12 @@ def test_admin_edit_user_feed_url_no_https(flask_env):
     assert "http://" not in prefix
 
 
-def test_admin_edit_user_blog_url_no_https(flask_env):
-    """Blog URL on admin edit-user page must never contain https:// when base_url is unset."""
+def test_admin_edit_user_feed_url_no_https(flask_env):
+    """Feed URL on admin edit-user page must never contain https:// when base_url is unset."""
     client, _, target_id = flask_env
     html = client.get(f"/admin/user/{target_id}").data.decode()
     token = "target-feed-token-abc"
-    # Find the second occurrence (blog URL comes after feed URL).
+    # Find the second occurrence (feed URL comes after RSS URL).
     first = html.find(token)
     idx = html.find(token, first + 1)
     assert idx != -1
@@ -397,8 +397,8 @@ def test_account_feed_url_is_root_relative(flask_env):
     assert "https://127" not in html
 
 
-def test_account_blog_url_is_root_relative(flask_env):
-    """Blog URL on the account page must be root-relative when base_url is unset."""
+def test_account_feed_page_url_is_root_relative(flask_env):
+    """Feed (story page) URL on the account page must be root-relative when base_url is unset."""
     client, admin_id, _ = flask_env
     import app as wa
     user = wa._find_user_by_id(admin_id)
@@ -409,7 +409,7 @@ def test_account_blog_url_is_root_relative(flask_env):
         user._save()
         resp = client.get("/account")
     html = resp.data.decode()
-    assert "/blog/admin-feed-token-xyz.html" in html
+    assert "/feed/admin-feed-token-xyz.html" in html
     assert "https://localhost" not in html
     assert "https://127" not in html
 
@@ -432,8 +432,8 @@ def test_admin_edit_user_feed_url_uses_configured_base_url(flask_env, tmp_path):
     assert "https://news.example.com/feed/target-feed-token-abc.xml" in html
 
 
-def test_admin_edit_user_blog_url_uses_configured_base_url(flask_env, tmp_path):
-    """When base_url IS set, the blog URL must be absolute using that base."""
+def test_admin_edit_user_feed_url_uses_configured_base_url(flask_env, tmp_path):
+    """When base_url IS set, the feed URL must be absolute using that base."""
     client, _, target_id = flask_env
     import app as wa
     config_file = tmp_path / "TubeNews.json"
@@ -444,4 +444,4 @@ def test_admin_edit_user_blog_url_uses_configured_base_url(flask_env, tmp_path):
         "base_url": "https://news.example.com",
     }))
     html = client.get(f"/admin/user/{target_id}").data.decode()
-    assert "https://news.example.com/blog/target-feed-token-abc.html" in html
+    assert "https://news.example.com/feed/target-feed-token-abc.html" in html

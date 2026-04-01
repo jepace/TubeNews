@@ -1,0 +1,873 @@
+{% extends "base.html" %}
+{% block title %}{{ feed_name }}{% endblock %}
+
+{% block header_sub %}
+<div class="header-sub">
+  <div class="hs-left">
+    {% if channel_counts is defined and channel_counts and not channel_id %}
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776;</button>
+    {% endif %}
+    <span class="hs-feed-name">{{ feed_name }}</span>
+    {% if current_user.is_authenticated and not channel_id %}
+      {% set _ch = ('?bundle=' ~ active_bundle_slug) if active_bundle_slug is defined and active_bundle_slug else (('?channel=' ~ active_channel_id) if active_channel_id is defined and active_channel_id else '') %}
+      <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_feed') }}{{ _ch }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>
+      <a class="hs-tab{% if is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_starred') }}{{ _ch }}">Starred<span class="tab-count" id="starred-badge"{% if not starred_hashes %} style="display:none"{% endif %}>{{ starred_hashes|length }}</span></a>
+      <a class="hs-tab{% if is_archive %} hs-tab-active{% endif %}" href="{{ url_for('serve_read') }}{{ _ch }}">Read</a>
+      <a class="hs-tab{% if is_all %} hs-tab-active{% endif %}" href="{{ url_for('serve_all') }}{{ _ch }}">All</a>
+    {% elif channel_id %}
+      <a class="hs-tab" href="{{ url_for('serve_feed') }}">Unread</a>
+      <a class="hs-tab" href="{{ url_for('serve_starred') }}">Starred</a>
+      <a class="hs-tab" href="{{ url_for('serve_read') }}">Read</a>
+      <span class="hs-tab hs-tab-active">All</span>
+    {% endif %}
+  </div>
+  <div class="hs-center">
+    {% if current_user.is_authenticated and not channel_id and stories %}
+      {% if not is_archive %}
+      <form method="post" action="{{ url_for('account_mark_all_read') }}" style="display:contents">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if active_bundle_slug is defined and active_bundle_slug %}
+        <input type="hidden" name="bundle_slug" value="{{ active_bundle_slug }}">
+        {% elif active_channel_id is defined and active_channel_id %}
+        <input type="hidden" name="channel_id" value="{{ active_channel_id }}">
+        {% endif %}
+        <button type="submit" class="btn-sm">Mark All Read</button>
+      </form>
+      {% endif %}
+      {% if is_archive or is_all %}
+      <form method="post" action="{{ url_for('account_mark_all_unread') }}" style="display:contents">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if active_bundle_slug is defined and active_bundle_slug %}
+        <input type="hidden" name="bundle_slug" value="{{ active_bundle_slug }}">
+        {% elif active_channel_id is defined and active_channel_id %}
+        <input type="hidden" name="channel_id" value="{{ active_channel_id }}">
+        {% endif %}
+        <button type="submit" class="btn-sm">Mark All Unread</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </div>
+  <div class="hs-right">
+    {% if current_user.is_authenticated and not channel_id %}
+    <form method="get" action="{{ url_for('serve_all') }}" class="hs-search">
+      <input type="search" name="q" value="{{ query|default('') }}"
+             placeholder="Search…" class="search-input"
+             title="Search all stories">
+    </form>
+    {% endif %}
+    {% if channel_id %}
+    <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
+    {% endif %}
+    {% if feed_path %}
+    <a class="hs-rss" href="{{ feed_path }}">RSS</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="feed-layout">
+{% if channel_counts is defined and channel_counts and not channel_id %}
+<aside class="channel-sidebar" id="channel-sidebar">
+  {% set total = channel_counts | sum(attribute='count') %}
+  {% set _any_filter = (active_channel_id is defined and active_channel_id) or (active_bundle_slug is defined and active_bundle_slug) %}
+  <a class="sidebar-channel sc-all{% if not _any_filter %} sc-active{% endif %}"
+     href="{{ current_view_url }}">
+    <span class="sc-name">All Channels</span>
+    <span class="sc-count">{{ total }}</span>
+  </a>
+  {% if bundles is defined and bundles %}
+  <div class="sc-bundles">
+    {% for bundle in bundles %}
+    <a class="sidebar-channel sc-bundle{% if active_bundle_slug is defined and active_bundle_slug == bundle.slug %} sc-active{% endif %}"
+       href="{{ current_view_url }}?bundle={{ bundle.slug }}">
+      <span class="sc-name">{{ bundle.name }}</span>
+      <span class="sc-count">{{ bundle.count }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% for ch in channel_counts %}
+  <a class="sidebar-channel{% if active_channel_id == ch.channel_id %} sc-active{% endif %}"
+     href="{{ current_view_url }}?channel={{ ch.channel_id }}"
+     data-channel-id="{{ ch.channel_id }}">
+    <span class="sc-name">{{ ch.channel_name }}</span>
+    <span class="sc-count">{{ ch.count }}</span>
+  </a>
+  {% endfor %}
+</aside>
+{% endif %}
+<div class="feed-page">
+
+  {% if query is defined and query %}
+  <p class="search-results-info">
+    Showing {{ stories|length }} result{% if stories|length != 1 %}s{% endif %} for <strong>{{ query | e }}</strong>
+    &nbsp;<a href="{{ url_for('serve_all') }}" class="search-clear">Clear</a>
+  </p>
+  {% endif %}
+
+  {% if stories %}
+    {% for story in stories %}
+    <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}" data-channel-id="{{ story.channel_id }}">
+      <h2>{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</h2>
+      <p class="story-dateline">{{ story.dateline }}</p>
+      <p class="story-source">
+        {{ story.channel_name }}{% if story.video_title %} &mdash; <em>{{ story.video_title }}</em>{% endif %}
+      </p>
+      <p class="story-links">
+        <a class="story-watch" href="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}" target="_blank" rel="noopener">&#9654; Watch source</a>
+        {% if story.channel_slug and story.meeting_id %}
+        <span class="story-links-sep">&middot;</span>
+        <a class="story-transcript" href="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}" target="_blank" rel="noopener">&#128221; Read transcript</a>
+        {% endif %}
+      </p>
+      <div class="story-body">{{ story.body_html | safe }}</div>
+      <div class="story-toolbar"
+           data-title="{{ story.title | e }}"
+           data-dateline="{{ story.dateline | e }}"
+           data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}"
+           data-youtube="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}"
+           data-content-hash="{{ story.content_hash | e }}"
+           {% if story.channel_slug and story.meeting_id %}
+           data-transcript="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}"
+           {% endif %}>
+        <button type="button" class="tb-copy-text" title="Copy article text">&#128203; Copy Article</button>
+        <button type="button" class="tb-copy-link" title="Copy link to this article">&#128279; Copy Link</button>
+        <a class="tb-email" href="#" title="Share via email">&#128231; Email</a>
+        <button type="button" class="tb-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
+        {% if current_user.is_authenticated and not channel_id %}
+          {% if is_archive %}
+          <button type="button" class="tb-unread" title="Mark as unread">&#10003; Mark Unread</button>
+          {% else %}
+          <button type="button" class="tb-read" title="Mark as read">&#10003; Mark Read</button>
+          {% endif %}
+          {% if story.content_hash in (starred_hashes | default([])) %}
+          <button type="button" class="tb-unstar" title="Unstar">&#9733; Starred</button>
+          {% else %}
+          <button type="button" class="tb-star" title="Star">&#9734; Star</button>
+          {% endif %}
+        {% endif %}
+        {% if current_user.is_authenticated and current_user.is_admin and story.story_filename %}
+        <button type="button" class="tb-delete"
+                data-channel="{{ story.channel_slug }}"
+                data-meeting="{{ story.meeting_id }}"
+                data-filename="{{ story.story_filename }}"
+                data-confirm="Delete &ldquo;{{ story.title | e }}&rdquo;?&#10;This cannot be undone.">&#10060; Delete</button>
+        {% endif %}
+        {% if current_user.is_authenticated and story.channel_slug and story.meeting_id and story.story_filename %}
+        <button type="button" class="tb-comments"
+                data-channel-slug="{{ story.channel_slug }}"
+                data-meeting-id="{{ story.meeting_id }}"
+                data-filename="{{ story.story_filename }}">&#128172; Comments{% if story.comment_count %} ({{ story.comment_count }}){% endif %}</button>
+        {% endif %}
+      </div>
+      {% if current_user.is_authenticated and story.channel_slug and story.meeting_id and story.story_filename %}
+      <div class="story-comments" style="display:none">
+        <div class="sc-list"></div>
+        <form class="sc-form">
+          <textarea class="sc-input" placeholder="Add a comment&hellip;" rows="2"></textarea>
+          <button type="button" class="sc-submit">Post</button>
+        </form>
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  {% else %}
+    {% if is_starred %}
+    <p class="feed-empty">No starred stories yet. Use the &#9734; button or press <kbd>s</kbd> to star a story.</p>
+    {% elif is_archive %}
+    <p class="feed-empty">No read articles yet. Mark articles as read from your <a href="{{ url_for('serve_feed') }}">inbox</a>.</p>
+    {% else %}
+    <p class="feed-empty">No unread stories.{% if read_count %} <a href="{{ url_for('serve_read') }}">View {{ read_count }} archived article{% if read_count != 1 %}s{% endif %}</a>.{% else %} Check back after the next TubeNews run.{% endif %}</p>
+    {% endif %}
+  {% endif %}
+</div>{# end .feed-page #}
+</div>{# end .feed-layout #}
+
+<script>
+(function () {
+  function flash(el, msg) {
+    var orig = el.textContent;
+    el.textContent = msg;
+    setTimeout(function () { el.textContent = orig; }, 1800);
+  }
+
+  function plainText(bar) {
+    var article = bar.closest('article');
+    var bodyEl  = article.querySelector('.story-body');
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bodyEl.innerHTML;
+    tmp.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li').forEach(function (el) {
+      el.after('\n\n');
+    });
+    tmp.querySelectorAll('br').forEach(function (el) { el.after('\n'); });
+    var bodyText = (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+
+    var youtube    = bar.dataset.youtube    || '';
+    var transcript = bar.dataset.transcript
+                     ? window.location.origin + bar.dataset.transcript : '';
+    var link       = articleLink(bar.dataset.anchor);
+
+    var header = bar.dataset.title + '\n' + bar.dataset.dateline;
+    if (youtube) header += '\n' + youtube;
+
+    var footer = 'Feed: ' + link;
+    if (transcript) footer += '\nTranscript: ' + transcript;
+
+    return header + '\n\n' + bodyText + '\n\n' + footer;
+  }
+
+  function articleLink(anchor) {
+    return window.location.href.split('#')[0] + '#' + anchor;
+  }
+
+  function copyText(text, btn, msg) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { flash(btn, msg); });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+      flash(btn, msg);
+    }
+  }
+
+  var hasNativeShare = typeof navigator.share === 'function';
+
+  document.querySelectorAll('.story-toolbar').forEach(function (bar) {
+    var title  = bar.dataset.title;
+    var anchor = bar.dataset.anchor;
+
+    // "Copy article" always works — on iOS it copies full text; on desktop the
+    // share sheet doesn't exist so this is the only way to get the full text.
+    bar.querySelector('.tb-copy-text').addEventListener('click', function () {
+      copyText(plainText(bar), this, 'Copied!');
+    });
+
+    if (hasNativeShare) {
+      // iOS/mobile: add a native share button that opens the OS share sheet
+      // (covers AirDrop, Messages, copy-link, etc.).  "Copy article" above stays
+      // active for copying the full text — clipboard works in secure contexts;
+      // on plain HTTP the copy button degrades gracefully.
+      var nativeBtn = document.createElement('button');
+      nativeBtn.type = 'button';
+      nativeBtn.className = 'tb-native';
+      nativeBtn.textContent = '\uD83D\uDCE4 Share';
+      nativeBtn.title = 'Share via system share sheet';
+      bar.insertBefore(nativeBtn, bar.firstChild);
+      nativeBtn.addEventListener('click', function () {
+        navigator.share({ title: title, url: articleLink(anchor) }).catch(function (err) {
+          // AbortError = user dismissed the sheet — ignore.
+          // Any other error (e.g. HTTP context on Chrome/iOS) — fall back to
+          // copying the link so the user gets something useful.
+          if (err && err.name !== 'AbortError') {
+            copyText(articleLink(anchor), nativeBtn, 'Link copied!');
+          }
+        });
+      });
+      // Hide the redundant buttons (copy-link, email, mastodon) since the share
+      // sheet handles them.
+      ['tb-copy-link', 'tb-email', 'tb-mastodon'].forEach(function (cls) {
+        var el = bar.querySelector('.' + cls);
+        if (el) el.style.display = 'none';
+      });
+    } else {
+      bar.querySelector('.tb-copy-link').addEventListener('click', function () {
+        copyText(articleLink(anchor), this, 'Copied!');
+      });
+
+      bar.querySelector('.tb-email').addEventListener('click', function (e) {
+        e.preventDefault();
+        window.location.href = 'mailto:?subject=' + encodeURIComponent(title)
+                             + '&body=' + encodeURIComponent(plainText(bar));
+      });
+
+      bar.querySelector('.tb-mastodon').addEventListener('click', function () {
+        var text = title + '\n' + articleLink(anchor);
+        window.open('https://toot.kytta.dev/?text=' + encodeURIComponent(text),
+                    '_blank', 'noopener,width=600,height=400');
+      });
+    }
+  });
+})();
+
+{% if current_user.is_authenticated %}
+(function () {
+  var csrfToken = {{ csrf_token() | tojson }};
+  var markReadUrl     = {{ url_for('account_mark_read')     | tojson }};
+  var markUnreadUrl   = {{ url_for('account_mark_unread')   | tojson }};
+  var markStarredUrl  = {{ url_for('account_mark_starred')  | tojson }};
+  var markUnstarredUrl= {{ url_for('account_mark_unstarred')| tojson }};
+  var isAll     = {{ (is_all     or False) | tojson }};
+  var isStarred = {{ (is_starred or False) | tojson }};
+  var unreadBadgeEl  = document.getElementById('unread-badge');
+  var starredBadgeEl = document.getElementById('starred-badge');
+  function setBadge(el, n) {
+    el.textContent = n;
+    el.style.display = n > 0 ? '' : 'none';
+  }
+
+  function postHash(url, hash, onSuccess) {
+    var fd = new FormData();
+    fd.append('csrf_token', csrfToken);
+    fd.append('content_hash', hash);
+    fetch(url, { method: 'POST', body: fd })
+      .then(function (r) {
+        if (r.ok) { onSuccess(); }
+        else { alert('Action failed (' + r.status + ').'); }
+      })
+      .catch(function () { alert('Action failed. Check your connection.'); });
+  }
+
+  function scrollToFocused() {
+    var el = document.querySelector('.story-focused');
+    if (!el) return;
+    var headerH = 0;
+    document.querySelectorAll('header, .header-sub').forEach(function (h) {
+      var s = window.getComputedStyle(h).position;
+      if (s === 'sticky' || s === 'fixed') headerH += h.getBoundingClientRect().height;
+    });
+    var rect = el.getBoundingClientRect();
+    if (rect.top < headerH + 8) {
+      window.scrollBy({ top: rect.top - headerH - 8, behavior: 'smooth' });
+    }
+  }
+
+  function fadeRemove(article) {
+    var channelId = article.dataset.channelId || '';
+    article.style.transition = 'opacity 0.3s';
+    article.style.opacity = '0';
+    setTimeout(function () {
+      article.remove();
+      if (unreadBadgeEl) setBadge(unreadBadgeEl, Math.max(0, parseInt(unreadBadgeEl.textContent || '0') - 1));
+      var allCountEl = document.querySelector('.sc-all .sc-count');
+      if (allCountEl) {
+        var allN = Math.max(0, parseInt(allCountEl.textContent || '0') - 1);
+        allCountEl.textContent = allN;
+      }
+      if (channelId) {
+        var sidebarLink = document.querySelector('.sidebar-channel[data-channel-id="' + channelId + '"]');
+        if (sidebarLink) {
+          var countEl = sidebarLink.querySelector('.sc-count');
+          if (countEl) {
+            var n = Math.max(0, parseInt(countEl.textContent || '0') - 1);
+            if (n === 0) { sidebarLink.remove(); }
+            else { countEl.textContent = n; }
+          }
+        }
+      }
+      scrollToFocused();
+    }, 300);
+  }
+
+  function attachReadBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-toolbar');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markReadUrl, hash, function () {
+        if (isAll) {
+          btn.removeEventListener('click', handler);
+          btn.className = 'tb-unread';
+          btn.title = 'Mark as unread';
+          btn.textContent = '\u2713 Mark Unread';
+          attachUnreadBtn(btn);
+        } else {
+          fadeRemove(btn.closest('article'));
+        }
+      });
+    });
+  }
+
+  function attachUnreadBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-toolbar');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markUnreadUrl, hash, function () {
+        if (isAll) {
+          btn.removeEventListener('click', handler);
+          btn.className = 'tb-read';
+          btn.title = 'Mark as read';
+          btn.textContent = '\u2713 Mark Read';
+          attachReadBtn(btn);
+        } else {
+          fadeRemove(btn.closest('article'));
+        }
+      });
+    });
+  }
+
+  function attachStarBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-toolbar');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markStarredUrl, hash, function () {
+        btn.removeEventListener('click', handler);
+        btn.className = 'tb-unstar';
+        btn.title = 'Unstar';
+        btn.innerHTML = '&#9733; Starred';
+        if (starredBadgeEl) setBadge(starredBadgeEl, parseInt(starredBadgeEl.textContent || '0') + 1);
+        attachUnstarBtn(btn);
+      });
+    });
+  }
+
+  function attachUnstarBtn(btn) {
+    btn.addEventListener('click', function handler() {
+      var bar  = btn.closest('.story-toolbar');
+      var hash = bar.dataset.contentHash;
+      if (!hash) return;
+      postHash(markUnstarredUrl, hash, function () {
+        btn.removeEventListener('click', handler);
+        if (starredBadgeEl) setBadge(starredBadgeEl, Math.max(0, parseInt(starredBadgeEl.textContent || '0') - 1));
+        if (isStarred) {
+          fadeRemove(btn.closest('article'));
+        } else {
+          btn.className = 'tb-star';
+          btn.title = 'Star';
+          btn.innerHTML = '&#9734; Star';
+          attachStarBtn(btn);
+        }
+      });
+    });
+  }
+
+  document.querySelectorAll('.tb-read').forEach(attachReadBtn);
+  document.querySelectorAll('.tb-unread').forEach(attachUnreadBtn);
+  document.querySelectorAll('.tb-star').forEach(attachStarBtn);
+  document.querySelectorAll('.tb-unstar').forEach(attachUnstarBtn);
+})();
+{% endif %}
+
+{% if current_user.is_authenticated and current_user.is_admin %}
+(function () {
+  var deleteUrl = {{ url_for('admin_story_delete') | tojson }};
+  var csrfToken = {{ csrf_token() | tojson }};
+  document.querySelectorAll('.tb-delete').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (!confirm(btn.dataset.confirm || 'Delete this story?\nThis cannot be undone.')) return;
+      var fd = new FormData();
+      fd.append('csrf_token', csrfToken);
+      fd.append('channel_slug', btn.dataset.channel);
+      fd.append('meeting_id', btn.dataset.meeting);
+      fd.append('filename', btn.dataset.filename);
+      fetch(deleteUrl, { method: 'POST', body: fd })
+        .then(function (r) {
+          if (r.ok) { window.location.reload(); }
+          else { alert('Delete failed (' + r.status + ').'); }
+        })
+        .catch(function () { alert('Delete failed. Check your connection.'); });
+    });
+  });
+})();
+{% endif %}
+
+{% if current_user.is_authenticated %}
+(function () {
+  var csrfToken     = {{ csrf_token() | tojson }};
+  var commentUrl    = {{ url_for('post_comment') | tojson }};
+  var delCommentUrl = {{ url_for('comment_delete') | tojson }};
+  var editCommentUrl = {{ url_for('comment_edit') | tojson }};
+  var isAdmin = {{ 'true' if current_user.is_admin else 'false' }};
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function fmtTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  }
+
+  function renderComments(section, comments) {
+    var list = section.querySelector('.sc-list');
+    if (!comments.length) {
+      list.innerHTML = '<p class="sc-empty">No comments yet. Be the first!</p>';
+      return;
+    }
+    list.innerHTML = comments.map(function (c) {
+      var canDelete = c.is_mine || isAdmin;
+      var canEdit   = c.is_mine;
+      return '<div class="sc-comment" data-idx="' + c.idx + '">' +
+        '<div class="sc-comment-meta">' +
+        '<span class="sc-author">' + escHtml(c.user_name) +
+        (c.is_mine ? ' <span class="sc-you">(you)</span>' : '') + '</span>' +
+        '<span class="sc-time">' + fmtTime(c.posted_at) + (c.edited_at ? ' (edited)' : '') + '</span>' +
+        (canEdit   ? '<button class="sc-edit"   data-idx="' + c.idx + '">Edit</button>'  : '') +
+        (canDelete ? '<button class="sc-delete" data-idx="' + c.idx + '">&#10060;</button>' : '') +
+        '</div>' +
+        '<p class="sc-body">' + escHtml(c.body).replace(/\n/g, '<br>') + '</p>' +
+        '</div>';
+    }).join('');
+    list.querySelectorAll('.sc-delete').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!confirm('Delete this comment?')) return;
+        var fd = new FormData();
+        fd.append('csrf_token', csrfToken);
+        fd.append('channel_slug', section.dataset.channelSlug);
+        fd.append('meeting_id',   section.dataset.meetingId);
+        fd.append('filename',     section.dataset.filename);
+        fd.append('idx',          btn.dataset.idx);
+        fetch(delCommentUrl, { method: 'POST', body: fd })
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (res.ok) { loadComments(section); }
+            else { alert('Delete failed.'); }
+          })
+          .catch(function () { alert('Delete failed.'); });
+      });
+    });
+    list.querySelectorAll('.sc-edit').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var commentEl = btn.closest('.sc-comment');
+        var bodyEl    = commentEl.querySelector('.sc-body');
+        var existing  = bodyEl.innerText || bodyEl.textContent;
+        // Replace body with inline textarea + save/cancel
+        commentEl.querySelector('.sc-comment-meta').querySelectorAll('.sc-edit').forEach(function (b) { b.disabled = true; });
+        var ta = document.createElement('textarea');
+        ta.className = 'sc-input sc-edit-input';
+        ta.rows = 3;
+        ta.value = existing;
+        var saveBtn   = document.createElement('button');
+        saveBtn.type  = 'button';
+        saveBtn.className = 'sc-submit sc-save';
+        saveBtn.textContent = 'Save';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-sm sc-cancel';
+        cancelBtn.textContent = 'Cancel';
+        bodyEl.replaceWith(ta);
+        commentEl.appendChild(saveBtn);
+        commentEl.appendChild(cancelBtn);
+        btn.disabled = true;
+        cancelBtn.addEventListener('click', function () { loadComments(section); });
+        saveBtn.addEventListener('click', function () {
+          var newBody = ta.value.trim();
+          if (!newBody) { ta.focus(); return; }
+          var fd = new FormData();
+          fd.append('csrf_token', csrfToken);
+          fd.append('channel_slug', section.dataset.channelSlug);
+          fd.append('meeting_id',   section.dataset.meetingId);
+          fd.append('filename',     section.dataset.filename);
+          fd.append('idx',          btn.dataset.idx);
+          fd.append('body',         newBody);
+          saveBtn.disabled = true;
+          fetch(editCommentUrl, { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (res.ok) { loadComments(section); }
+              else { alert(res.error || 'Edit failed.'); saveBtn.disabled = false; }
+            })
+            .catch(function () { alert('Edit failed.'); saveBtn.disabled = false; });
+        });
+      });
+    });
+  }
+
+  function updateToggle(section, count) {
+    var btn = section.closest('article').querySelector('.tb-comments');
+    if (btn) btn.innerHTML = '&#128172; Comments' + (count ? ' (' + count + ')' : '');
+  }
+
+  function loadComments(section) {
+    var slug = section.dataset.channelSlug;
+    var mid  = section.dataset.meetingId;
+    var base = section.dataset.filename.replace(/\.md$/, '');
+    section.querySelector('.sc-list').innerHTML = '<p class="sc-empty">Loading\u2026</p>';
+    fetch('/comments/' + slug + '/' + mid + '/' + base)
+      .then(function (r) { return r.json(); })
+      .then(function (comments) {
+        renderComments(section, comments);
+        updateToggle(section, comments.length);
+      })
+      .catch(function () {
+        section.querySelector('.sc-list').innerHTML = '<p class="sc-empty">Could not load comments.</p>';
+      });
+  }
+
+  document.querySelectorAll('.tb-comments').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var section = btn.closest('article').querySelector('.story-comments');
+      if (section.style.display !== 'none') {
+        section.style.display = 'none';
+        return;
+      }
+      section.dataset.channelSlug = btn.dataset.channelSlug;
+      section.dataset.meetingId   = btn.dataset.meetingId;
+      section.dataset.filename    = btn.dataset.filename;
+      section.style.display = '';
+      loadComments(section);
+    });
+  });
+
+  document.querySelectorAll('.sc-submit').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var section  = btn.closest('.story-comments');
+      var textarea = section.querySelector('.sc-input');
+      var body = textarea.value.trim();
+      if (!body) { textarea.focus(); return; }
+      var fd = new FormData();
+      fd.append('csrf_token',   csrfToken);
+      fd.append('channel_slug', section.dataset.channelSlug);
+      fd.append('meeting_id',   section.dataset.meetingId);
+      fd.append('filename',     section.dataset.filename);
+      fd.append('body',         body);
+      btn.disabled = true;
+      fetch(commentUrl, { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res.ok) { textarea.value = ''; loadComments(section); }
+          else { alert(res.error || 'Failed to post comment.'); }
+        })
+        .catch(function () { alert('Failed to post comment.'); })
+        .finally(function () { btn.disabled = false; });
+    });
+  });
+})();
+{% endif %}
+</script>
+
+<style>
+.story-focused {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+#kb-help {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 300;
+  align-items: center;
+  justify-content: center;
+}
+#kb-help-panel {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 2rem;
+  max-width: 400px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+#kb-help-panel h3 { margin: 0 0 1rem; font-size: 1rem; }
+#kb-help-panel table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+#kb-help-panel td { padding: .3rem .4rem .3rem 0; vertical-align: top; }
+#kb-help-panel td:first-child {
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-right: 1rem;
+}
+#kb-help-close {
+  margin-top: 1.2rem;
+  float: right;
+  cursor: pointer;
+  padding: .3rem .8rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: .9rem;
+}
+</style>
+
+<div id="kb-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+  <div id="kb-help-panel">
+    <h3>Keyboard shortcuts</h3>
+    <table>
+      <tr><td>j / k / ↓ / ↑</td><td>Next / previous story</td></tr>
+      <tr><td>o</td><td>Open YouTube source</td></tr>
+      <tr><td>t</td><td>Read transcript</td></tr>
+      {% if current_user.is_authenticated and not channel_id %}
+        {% if is_archive %}
+      <tr><td>u</td><td>Mark story unread</td></tr>
+        {% else %}
+      <tr><td>e</td><td>Mark story as read</td></tr>
+        {% endif %}
+      {% endif %}
+      {% if current_user.is_authenticated and not channel_id %}
+      <tr><td>s</td><td>Star / unstar story</td></tr>
+      {% endif %}
+      {% if current_user.is_authenticated and current_user.is_admin %}
+      <tr><td>#</td><td>Delete story (admin)</td></tr>
+      {% endif %}
+      <tr><td>g i</td><td>Go to inbox</td></tr>
+      <tr><td>g s</td><td>Go to starred</td></tr>
+      <tr><td>g a</td><td>Go to read</td></tr>
+      <tr><td>?</td><td>Show / hide this help</td></tr>
+      <tr><td>Esc / Enter</td><td>Close this help</td></tr>
+    </table>
+    <button id="kb-help-close">Close</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  if (!document.querySelectorAll) return;
+  var helpEl   = document.getElementById('kb-help');
+  var closeBtn = document.getElementById('kb-help-close');
+  var focusIdx = -1;
+
+  function getArticles() {
+    return Array.from(document.querySelectorAll('article.story'));
+  }
+
+  function stickyHeaderHeight() {
+    var h = 0;
+    document.querySelectorAll('header, .header-sub').forEach(function (el) {
+      var pos = window.getComputedStyle(el).position;
+      if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
+    });
+    return h;
+  }
+
+  function scrollToStory(el) {
+    var offset = stickyHeaderHeight() + 8;
+    var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
+    window.scrollTo({ top: top, behavior: 'smooth' });
+  }
+
+  function setFocus(idx) {
+    var articles = getArticles();
+    if (!articles.length) return;
+    var prev = articles[focusIdx];
+    if (prev) prev.classList.remove('story-focused');
+    focusIdx = Math.max(0, Math.min(idx, articles.length - 1));
+    var el = articles[focusIdx];
+    if (el) {
+      el.classList.add('story-focused');
+      scrollToStory(el);
+    }
+  }
+
+  // Immediately move the focus ring off the departing article and onto the
+  // next one (or previous if at the end), then adjust focusIdx so j/k still
+  // works correctly after the article is removed from the DOM.
+  function advanceFocus(articles, idx) {
+    articles[idx].classList.remove('story-focused');
+    if (articles.length === 1) { focusIdx = -1; return; }
+    var goNext = idx < articles.length - 1;
+    var target = goNext ? articles[idx + 1] : articles[idx - 1];
+    target.classList.add('story-focused');
+    // Only scroll when moving backward — the next article is already visible
+    // below the current one and will slide naturally into place after removal.
+    // Scrolling forward causes a double-bounce when the removed article collapses.
+    if (!goNext) { scrollToStory(target); focusIdx = idx - 1; }
+  }
+
+  // Clicking story text (not a button/link) focuses that story for keyboard nav.
+  document.querySelectorAll('article.story').forEach(function (article, idx) {
+    article.addEventListener('click', function (e) {
+      if (e.target.closest('a, button, input, select, textarea')) return;
+      setFocus(idx);
+    });
+  });
+
+  function showHelp() { helpEl.style.display = 'flex'; }
+  function hideHelp() { helpEl.style.display = 'none'; }
+
+  closeBtn.addEventListener('click', hideHelp);
+  helpEl.addEventListener('click', function (e) { if (e.target === helpEl) hideHelp(); });
+
+  var pendingG = false;
+  var gTimer   = null;
+  var isStarred = {{ (is_starred or False) | tojson }};
+
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    var key = e.key;
+
+    if (key === 'Escape' || (key === 'Enter' && helpEl.style.display === 'flex')) { hideHelp(); return; }
+    if (key === '?') { e.preventDefault(); helpEl.style.display === 'flex' ? hideHelp() : showHelp(); return; }
+
+    if (pendingG) {
+      clearTimeout(gTimer);
+      pendingG = false;
+      if (key === 'i') { window.location.href = '/blog';    return; }
+      if (key === 's') { window.location.href = '/starred'; return; }
+      if (key === 'a') { window.location.href = '/read';    return; }
+      return;
+    }
+    if (key === 'g') {
+      pendingG = true;
+      gTimer = setTimeout(function () { pendingG = false; }, 1000);
+      e.preventDefault();
+      return;
+    }
+
+    var articles = getArticles();
+    if (!articles.length) return;
+
+    if (key === 'j' || key === 'ArrowDown') {
+      e.preventDefault();
+      setFocus(focusIdx < 0 ? 0 : focusIdx + 1);
+    } else if (key === 'k' || key === 'ArrowUp') {
+      e.preventDefault();
+      setFocus(focusIdx <= 0 ? 0 : focusIdx - 1);
+    } else if (key === 'o') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var watchLink = articles[focusIdx].querySelector('.story-watch');
+        if (watchLink) window.open(watchLink.href, '_blank', 'noopener');
+      }
+    } else if (key === 't') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var txLink = articles[focusIdx].querySelector('.story-transcript');
+        if (txLink) window.open(txLink.href, '_blank', 'noopener');
+      }
+    } else if (key === 'e') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var readBtn = articles[focusIdx].querySelector('.tb-read');
+        if (readBtn) {
+          advanceFocus(articles, focusIdx);
+          readBtn.click();
+        }
+      }
+    } else if (key === 'u') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var unreadBtn = articles[focusIdx].querySelector('.tb-unread');
+        if (unreadBtn) {
+          advanceFocus(articles, focusIdx);
+          unreadBtn.click();
+        }
+      }
+    } else if (key === 's') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var starBtn = articles[focusIdx].querySelector('.tb-star, .tb-unstar');
+        if (starBtn) {
+          if (isStarred && starBtn.classList.contains('tb-unstar')) {
+            advanceFocus(articles, focusIdx);
+          }
+          starBtn.click();
+        }
+      }
+    } else if (key === '#') {
+      if (focusIdx >= 0 && articles[focusIdx]) {
+        var delBtn = articles[focusIdx].querySelector('.tb-delete');
+        if (delBtn) delBtn.click();
+      }
+    }
+  });
+})();
+(function () {
+  var btn = document.getElementById('sidebar-toggle');
+  var sb = document.getElementById('channel-sidebar');
+  if (!btn || !sb) return;
+  btn.addEventListener('click', function () {
+    var open = sb.classList.toggle('sidebar-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+})();
+</script>
+{% endblock %}

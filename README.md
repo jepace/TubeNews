@@ -2,7 +2,7 @@
 
 Turn any YouTube channel into a personalised news feed.
 
-TubeNews monitors YouTube channels, transcribes new videos via [Supadata](https://supadata.ai), and uses Google Gemini AI to write AP-style news stories from the content. Each user gets a personalised feed filtered to the topics they care about, served through a web UI with subscriptions, an inbox, and shareable blog pages.
+TubeNews monitors YouTube channels, transcribes new videos via [Supadata](https://supadata.ai), and uses Google Gemini AI to write AP-style news stories from the content. Each user gets a personalised feed filtered to the topics they care about, served through a web UI with subscriptions, an inbox, and shareable feed pages.
 
 ## What It Does
 
