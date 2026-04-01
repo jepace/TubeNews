@@ -340,6 +340,11 @@
     setTimeout(function () {
       article.remove();
       if (unreadBadgeEl) setBadge(unreadBadgeEl, Math.max(0, parseInt(unreadBadgeEl.textContent || '0') - 1));
+      var allCountEl = document.querySelector('.sc-all .sc-count');
+      if (allCountEl) {
+        var allN = Math.max(0, parseInt(allCountEl.textContent || '0') - 1);
+        allCountEl.textContent = allN;
+      }
       if (channelId) {
         var sidebarLink = document.querySelector('.sidebar-channel[data-channel-id="' + channelId + '"]');
         if (sidebarLink) {
