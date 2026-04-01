@@ -945,8 +945,7 @@ main:has(.blog-layout) {
 
 .sc-empty { color: var(--muted); font-size: 0.88rem; margin: 0.25rem 0 0.5rem; }
 
-.sc-delete {
-  margin-left: auto;
+.sc-delete, .sc-edit {
   font-size: 0.75rem;
   padding: 0.1rem 0.4rem;
   background: transparent;
@@ -955,7 +954,14 @@ main:has(.blog-layout) {
   border-radius: var(--radius);
   cursor: pointer;
 }
+.sc-delete { margin-left: auto; }
+.sc-edit   { margin-left: auto; margin-right: 0.25rem; }
 .sc-delete:hover { color: var(--bg); background: var(--danger, #c00); border-color: var(--danger, #c00); }
+.sc-edit:hover   { color: var(--bg); background: var(--accent);       border-color: var(--accent); }
+
+.sc-edit-input { display: block; width: 100%; margin-top: 0.25rem; }
+.sc-save   { margin-top: 0.4rem; margin-right: 0.4rem; }
+.sc-cancel { margin-top: 0.4rem; }
 
 .sc-form {
   display: flex;

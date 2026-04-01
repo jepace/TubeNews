@@ -578,6 +578,17 @@ def _bundle_counts(stories: list[StoryDict], bundles: list[dict]) -> list[dict]:
     return result
 
 
+def _story_comment_count(story_file: Path) -> int:
+    """Return the number of comments for a story file, or 0 if none."""
+    comment_file = story_file.with_name(story_file.stem + "_comments.json")
+    if not comment_file.exists():
+        return 0
+    try:
+        return len(json.loads(comment_file.read_text(encoding="utf-8")))
+    except Exception:
+        return 0
+
+
 def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
@@ -630,6 +641,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                     "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
                     "channel_id": channel_id,
+                    "comment_count": _story_comment_count(entry["file"]),
                 })
             except Exception as exc:
                 logger.debug(f"Skipping {entry['file']}: {exc}")
@@ -692,6 +704,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "processed_at": entry["meta"].get("processed_at", 0),
                 "content_hash": s.get("content_hash", ""),
                 "channel_id": entry["channel_id"],
+                "comment_count": _story_comment_count(entry["file"]),
             })
         except Exception as exc:
             logger.debug(f"Skipping {entry['file']}: {exc}")
@@ -1386,13 +1399,16 @@ def get_story_comments(channel_slug: str, meeting_id: str, basename: str):
                                    if upath.exists() else "Deleted User")
             except Exception:
                 name_cache[uid] = "Deleted User"
-        result.append({
+        entry: dict = {
             "idx": i,
             "user_name": name_cache[uid],
             "is_mine": uid == my_id,
             "posted_at": c.get("posted_at", 0.0),
             "body": c.get("body", ""),
-        })
+        }
+        if "edited_at" in c:
+            entry["edited_at"] = c["edited_at"]
+        result.append(entry)
     return jsonify(result)
 
 
@@ -1430,6 +1446,79 @@ def post_comment():
     tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     tmp.rename(comment_path)
     return jsonify({"ok": True, "count": len(existing)})
+
+
+@app.route("/comment/delete", methods=["POST"])
+@login_required
+def comment_delete():
+    """Delete a comment. Allowed for the comment owner or any admin."""
+    channel_slug = request.form.get("channel_slug", "").strip()
+    meeting_id   = request.form.get("meeting_id",   "").strip()
+    filename     = request.form.get("filename",      "").strip()
+    try:
+        idx = int(request.form.get("idx", ""))
+    except (ValueError, TypeError):
+        abort(400)
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _STORY_FILE_RE.match(filename)):
+        abort(400)
+    basename = filename[:-3]
+    comment_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}_comments.json"
+    if not comment_path.exists():
+        abort(404)
+    try:
+        comments = json.loads(comment_path.read_text(encoding="utf-8"))
+    except Exception:
+        abort(500)
+    if idx < 0 or idx >= len(comments):
+        abort(400)
+    my_id = current_user.get_id()
+    if comments[idx].get("user_id") != my_id and not current_user.is_admin:
+        abort(403)
+    del comments[idx]
+    tmp = comment_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(comments, indent=2), encoding="utf-8")
+    tmp.rename(comment_path)
+    return jsonify({"ok": True})
+
+
+@app.route("/comment/edit", methods=["POST"])
+@login_required
+def comment_edit():
+    """Edit a comment body. Allowed only for the comment owner."""
+    channel_slug = request.form.get("channel_slug", "").strip()
+    meeting_id   = request.form.get("meeting_id",   "").strip()
+    filename     = request.form.get("filename",      "").strip()
+    body         = request.form.get("body",          "").strip()[:2000]
+    try:
+        idx = int(request.form.get("idx", ""))
+    except (ValueError, TypeError):
+        abort(400)
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _STORY_FILE_RE.match(filename)):
+        abort(400)
+    if not body:
+        return jsonify({"ok": False, "error": "Comment cannot be empty."}), 400
+    basename = filename[:-3]
+    comment_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}_comments.json"
+    if not comment_path.exists():
+        abort(404)
+    try:
+        comments = json.loads(comment_path.read_text(encoding="utf-8"))
+    except Exception:
+        abort(500)
+    if idx < 0 or idx >= len(comments):
+        abort(400)
+    if comments[idx].get("user_id") != current_user.get_id():
+        abort(403)
+    comments[idx]["body"] = body
+    comments[idx]["edited_at"] = time.time()
+    tmp = comment_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(comments, indent=2), encoding="utf-8")
+    tmp.rename(comment_path)
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------
