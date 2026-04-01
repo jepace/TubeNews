@@ -2968,6 +2968,140 @@ def test_admin_comment_delete_removes_comment(admin_client, archive, monkeypatch
     assert remaining[0]["body"] == "Second comment"
 
 
+def test_comment_delete_owner_can_delete_own_comment(logged_in_client, archive, monkeypatch):
+    """POST /comment/delete allows the comment owner to delete their own comment."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    # Post a comment as the logged-in user, then delete it.
+    logged_in_client.post("/comment", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "My own comment",
+    })
+    r = logged_in_client.post("/comment/delete", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "idx":          "0",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    assert _json.loads(comment_path.read_text()) == []
+
+
+def test_comment_delete_non_owner_rejected(logged_in_client, archive, monkeypatch):
+    """POST /comment/delete returns 403 when the requester does not own the comment."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    comment_path.write_text(_json.dumps([
+        {"user_id": "someone-elses-uuid", "user_name": "Other", "posted_at": 1.0, "body": "Not mine"},
+    ]))
+    r = logged_in_client.post("/comment/delete", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "idx":          "0",
+    })
+    assert r.status_code == 403
+
+
+def test_comment_delete_admin_can_delete_any_comment(admin_client, archive, monkeypatch):
+    """POST /comment/delete allows an admin to delete any comment."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    comment_path.write_text(_json.dumps([
+        {"user_id": "someone-elses-uuid", "user_name": "Other", "posted_at": 1.0, "body": "Other comment"},
+    ]))
+    r = admin_client.post("/comment/delete", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "idx":          "0",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+
+
+def test_comment_edit_owner_can_edit_own_comment(logged_in_client, archive, monkeypatch):
+    """POST /comment/edit allows the owner to update their comment body."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    # Post a comment, then edit it.
+    logged_in_client.post("/comment", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "body":         "Original body",
+    })
+    r = logged_in_client.post("/comment/edit", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "idx":          "0",
+        "body":         "Edited body",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    comments = _json.loads(comment_path.read_text())
+    assert comments[0]["body"] == "Edited body"
+    assert "edited_at" in comments[0]
+
+
+def test_comment_edit_non_owner_rejected(logged_in_client, archive, monkeypatch):
+    """POST /comment/edit returns 403 when the requester does not own the comment."""
+    import json as _json
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "_users")
+    comment_path = archive / "alpha_city" / "2026-01-15_VID12345678" / "01_Story_comments.json"
+    comment_path.write_text(_json.dumps([
+        {"user_id": "someone-elses-uuid", "user_name": "Other", "posted_at": 1.0, "body": "Not mine"},
+    ]))
+    r = logged_in_client.post("/comment/edit", data={
+        "channel_slug": "alpha_city",
+        "meeting_id":   "2026-01-15_VID12345678",
+        "filename":     "01_Story.md",
+        "idx":          "0",
+        "body":         "Attempted edit",
+    })
+    assert r.status_code == 403
+
+
+def test_story_comment_count_returns_zero_when_no_file(tmp_path):
+    """_story_comment_count returns 0 when no comment file exists."""
+    import web.app as _wa
+    story_file = tmp_path / "01_Story.md"
+    story_file.write_text("# Title\n*Dateline*\n\nBody.\n")
+    assert _wa._story_comment_count(story_file) == 0
+
+
+def test_story_comment_count_returns_correct_count(tmp_path):
+    """_story_comment_count returns the number of comments in the file."""
+    import json as _json
+    import web.app as _wa
+    story_file = tmp_path / "01_Story.md"
+    story_file.write_text("# Title\n*Dateline*\n\nBody.\n")
+    comment_file = tmp_path / "01_Story_comments.json"
+    comment_file.write_text(_json.dumps([
+        {"user_id": "u1", "body": "A", "posted_at": 1.0},
+        {"user_id": "u2", "body": "B", "posted_at": 2.0},
+    ]))
+    assert _wa._story_comment_count(story_file) == 2
+
+
 def test_post_comment_path_traversal_rejected(logged_in_client, archive, monkeypatch):
     """POST /comment with path-traversal characters in channel_slug must return 400."""
     import web.app as _wa

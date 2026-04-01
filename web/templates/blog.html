@@ -158,7 +158,7 @@
         <button type="button" class="tb-comments"
                 data-channel-slug="{{ story.channel_slug }}"
                 data-meeting-id="{{ story.meeting_id }}"
-                data-filename="{{ story.story_filename }}">&#128172; Comments</button>
+                data-filename="{{ story.story_filename }}">&#128172; Comments{% if story.comment_count %} ({{ story.comment_count }}){% endif %}</button>
         {% endif %}
       </div>
       {% if current_user.is_authenticated and story.channel_slug and story.meeting_id and story.story_filename %}
@@ -461,11 +461,10 @@
 
 {% if current_user.is_authenticated %}
 (function () {
-  var csrfToken    = {{ csrf_token() | tojson }};
-  var commentUrl   = {{ url_for('post_comment') | tojson }};
-  {% if current_user.is_admin %}
-  var delCommentUrl = {{ url_for('admin_comment_delete') | tojson }};
-  {% endif %}
+  var csrfToken     = {{ csrf_token() | tojson }};
+  var commentUrl    = {{ url_for('post_comment') | tojson }};
+  var delCommentUrl = {{ url_for('comment_delete') | tojson }};
+  var editCommentUrl = {{ url_for('comment_edit') | tojson }};
   var isAdmin = {{ 'true' if current_user.is_admin else 'false' }};
 
   function escHtml(s) {
@@ -486,41 +485,87 @@
       return;
     }
     list.innerHTML = comments.map(function (c) {
+      var canDelete = c.is_mine || isAdmin;
+      var canEdit   = c.is_mine;
       return '<div class="sc-comment" data-idx="' + c.idx + '">' +
         '<div class="sc-comment-meta">' +
         '<span class="sc-author">' + escHtml(c.user_name) +
         (c.is_mine ? ' <span class="sc-you">(you)</span>' : '') + '</span>' +
-        '<span class="sc-time">' + fmtTime(c.posted_at) + '</span>' +
-        (isAdmin ? '<button class="sc-delete" data-idx="' + c.idx + '">&#10060;</button>' : '') +
+        '<span class="sc-time">' + fmtTime(c.posted_at) + (c.edited_at ? ' (edited)' : '') + '</span>' +
+        (canEdit   ? '<button class="sc-edit"   data-idx="' + c.idx + '">Edit</button>'  : '') +
+        (canDelete ? '<button class="sc-delete" data-idx="' + c.idx + '">&#10060;</button>' : '') +
         '</div>' +
         '<p class="sc-body">' + escHtml(c.body).replace(/\n/g, '<br>') + '</p>' +
         '</div>';
     }).join('');
-    if (isAdmin) {
-      list.querySelectorAll('.sc-delete').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          if (!confirm('Delete this comment?')) return;
+    list.querySelectorAll('.sc-delete').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!confirm('Delete this comment?')) return;
+        var fd = new FormData();
+        fd.append('csrf_token', csrfToken);
+        fd.append('channel_slug', section.dataset.channelSlug);
+        fd.append('meeting_id',   section.dataset.meetingId);
+        fd.append('filename',     section.dataset.filename);
+        fd.append('idx',          btn.dataset.idx);
+        fetch(delCommentUrl, { method: 'POST', body: fd })
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (res.ok) { loadComments(section); }
+            else { alert('Delete failed.'); }
+          })
+          .catch(function () { alert('Delete failed.'); });
+      });
+    });
+    list.querySelectorAll('.sc-edit').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var commentEl = btn.closest('.sc-comment');
+        var bodyEl    = commentEl.querySelector('.sc-body');
+        var existing  = bodyEl.innerText || bodyEl.textContent;
+        // Replace body with inline textarea + save/cancel
+        commentEl.querySelector('.sc-comment-meta').querySelectorAll('.sc-edit').forEach(function (b) { b.disabled = true; });
+        var ta = document.createElement('textarea');
+        ta.className = 'sc-input sc-edit-input';
+        ta.rows = 3;
+        ta.value = existing;
+        var saveBtn   = document.createElement('button');
+        saveBtn.type  = 'button';
+        saveBtn.className = 'sc-submit sc-save';
+        saveBtn.textContent = 'Save';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-sm sc-cancel';
+        cancelBtn.textContent = 'Cancel';
+        bodyEl.replaceWith(ta);
+        commentEl.appendChild(saveBtn);
+        commentEl.appendChild(cancelBtn);
+        btn.disabled = true;
+        cancelBtn.addEventListener('click', function () { loadComments(section); });
+        saveBtn.addEventListener('click', function () {
+          var newBody = ta.value.trim();
+          if (!newBody) { ta.focus(); return; }
           var fd = new FormData();
           fd.append('csrf_token', csrfToken);
           fd.append('channel_slug', section.dataset.channelSlug);
           fd.append('meeting_id',   section.dataset.meetingId);
           fd.append('filename',     section.dataset.filename);
           fd.append('idx',          btn.dataset.idx);
-          fetch(delCommentUrl, { method: 'POST', body: fd })
+          fd.append('body',         newBody);
+          saveBtn.disabled = true;
+          fetch(editCommentUrl, { method: 'POST', body: fd })
             .then(function (r) { return r.json(); })
             .then(function (res) {
               if (res.ok) { loadComments(section); }
-              else { alert('Delete failed.'); }
+              else { alert(res.error || 'Edit failed.'); saveBtn.disabled = false; }
             })
-            .catch(function () { alert('Delete failed.'); });
+            .catch(function () { alert('Edit failed.'); saveBtn.disabled = false; });
         });
       });
-    }
+    });
   }
 
   function updateToggle(section, count) {
     var btn = section.closest('article').querySelector('.tb-comments');
-    if (btn) btn.textContent = '&#128172; Comments' + (count ? ' (' + count + ')' : '');
+    if (btn) btn.innerHTML = '&#128172; Comments' + (count ? ' (' + count + ')' : '');
   }
 
   function loadComments(section) {
