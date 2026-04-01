@@ -127,6 +127,7 @@ Defined in `web/app.py`:
 
 | Function | Description |
 |---|---|
+| `_is_youtube_short(video_id)` | Returns `True` if the video is a YouTube Short by following the watch URL redirect and checking for `/shorts/` in the final URL. Fails open (returns `False`) on any network error so a transient check failure never skips a real video. |
 | `discover_videos(channel_id)` | Fetches YouTube's official Atom RSS feed (`feeds/videos.xml?channel_id=…`); returns `list[VideoInfo]` (up to 15 most-recent, exact ISO dates). Retries up to 3 times on network errors. |
 | `fetch_transcript(video_id, supadata_client, ..., transcript_rate_limit_event=None)` | Fetches timed transcript segments from Supadata; returns formatted string or None. When a quota-exhausted error is detected (HTTP 402 or `SupadataError` with a credit-related `error` code), sets `transcript_rate_limit_event` before returning None so callers can stop immediately. When Supadata raises an exception whose message contains `"live streaming"`, returns `None` (transient) so the video is retried next run without being permanently marked. |
 
@@ -287,7 +288,7 @@ Story body text in AP inverted pyramid style...
 }
 ```
 
-`status` values: `"processed"` | `"ignored_too_old"` | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried)
+`status` values: `"processed"` | `"ignored_too_old"` | `"ignored_short"` (video is a YouTube Short; will not be retried) | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried)
 
 `processed_focuses` is a sorted list of all focus strings for which Gemini has been called on this video. Old `metadata.json` files that pre-date this field have no `processed_focuses` key and are treated as fully processed (not re-run).
 

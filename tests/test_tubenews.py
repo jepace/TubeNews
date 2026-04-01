@@ -1902,6 +1902,133 @@ def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
     assert not _needs_processing("VID_NO_TX", feed_dir)
 
 
+# ---------------------------------------------------------------------------
+# _is_youtube_short / Shorts filtering
+# ---------------------------------------------------------------------------
+
+def test_is_youtube_short_returns_true_on_shorts_redirect(monkeypatch):
+    """_is_youtube_short returns True when YouTube redirects to /shorts/ URL."""
+    import TubeNews
+
+    class _ShortResp:
+        url = "https://www.youtube.com/shorts/abc12345678"
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+
+    monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _ShortResp())
+    assert TubeNews._is_youtube_short("abc12345678") is True
+
+
+def test_is_youtube_short_returns_false_for_normal_video(monkeypatch):
+    """_is_youtube_short returns False when the URL stays on /watch."""
+    import TubeNews
+
+    class _WatchResp:
+        url = "https://www.youtube.com/watch?v=abc12345678"
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+
+    monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _WatchResp())
+    assert TubeNews._is_youtube_short("abc12345678") is False
+
+
+def test_is_youtube_short_fails_open_on_network_error(monkeypatch):
+    """_is_youtube_short returns False (fail open) on any exception."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews.requests, "get",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            TubeNews.requests.exceptions.ConnectionError("refused")))
+    assert TubeNews._is_youtube_short("abc12345678") is False
+
+
+def test_process_video_skips_shorts_permanently(tmp_path, monkeypatch):
+    """When _is_youtube_short returns True, process_video writes ignored_short metadata."""
+    import json as _json
+    import TubeNews
+    from TubeNews import _needs_processing
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: True)
+
+    feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
+    feed_dir = tmp_path / "test_channel"
+    feed_dir.mkdir()
+
+    from unittest.mock import MagicMock
+    status, n = TubeNews.process_video(
+        video_id="SHORT1234567",
+        video_title="Short Dance Video",
+        video_date="2026-03-01",
+        feed=feed,
+        feed_dir=feed_dir,
+        supadata_client=MagicMock(),
+        config={"gemini_api_key": "k", "gemini_model": "m"},
+        ai_disabled=False,
+    )
+    assert status == "skipped"
+    assert n == 0
+
+    meeting_dirs = [d for d in feed_dir.iterdir() if d.is_dir() and "SHORT1234567" in d.name]
+    assert len(meeting_dirs) == 1
+    meta = _json.loads((meeting_dirs[0] / "metadata.json").read_text())
+    assert meta["status"] == "ignored_short"
+    assert not _needs_processing("SHORT1234567", feed_dir)
+
+
+def test_process_video_short_check_not_called_for_cached_transcript(tmp_path, monkeypatch):
+    """When a cached transcript exists, the Shorts check is bypassed."""
+    import TubeNews
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    short_check_calls = []
+    monkeypatch.setattr(TubeNews, "_is_youtube_short",
+                        lambda *a, **kw: short_check_calls.append(1) or True)
+    monkeypatch.setattr(TubeNews, "call_gemini_api", lambda *a, **kw: [])
+
+    feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
+    feed_dir = tmp_path / "test_channel"
+    # Pre-create a meeting dir with a transcript (simulates partial previous run).
+    meeting_dir = feed_dir / "2026-03-01_VID_CACHED"
+    meeting_dir.mkdir(parents=True)
+    (meeting_dir / "transcript.txt").write_text("0s --> Some content")
+
+    from unittest.mock import MagicMock
+    TubeNews.process_video(
+        video_id="VID_CACHED",
+        video_title="Cached Meeting",
+        video_date="2026-03-01",
+        feed=feed,
+        feed_dir=feed_dir,
+        supadata_client=MagicMock(),
+        config={"gemini_api_key": "k", "gemini_model": "m"},
+        ai_disabled=False,
+    )
+    assert short_check_calls == [], "Short check must not be called when transcript is cached"
+
+
+def test_process_feed_skips_short_video(tmp_path, monkeypatch):
+    """process_feed marks a Short as ignored_short and reports 0 stories."""
+    import TubeNews
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "SHORT1234567", "title": "Cool Short", "date": yesterday},
+    ])
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: True)
+    fetch_calls = []
+    monkeypatch.setattr(TubeNews, "fetch_transcript",
+                        lambda *a, **kw: fetch_calls.append(1) or "transcript")
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    _, _, stories_written = process_feed(
+        feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"}, None
+    )
+    assert stories_written == 0
+    assert fetch_calls == [], "Supadata must not be called for a Short"
+
+
 def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch):
     """process_feed must stop processing further videos once transcript quota is exhausted."""
     import threading
