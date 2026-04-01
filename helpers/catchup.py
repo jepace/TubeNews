@@ -8,12 +8,18 @@ dozens of old meetings that aren't relevant any more.
 
 How it works
 ------------
-For each configured channel, this script scrapes the ``/videos`` and
-``/streams`` tabs on YouTube and writes a minimal ``metadata.json`` stub
+For each configured channel, this script fetches YouTube's official Atom
+RSS feed and writes a minimal ``metadata.json`` stub
 (``status: "ignored_too_old"``) into a new archive directory for every
 video ID found.  TubeNews treats any directory that already contains a
 ``metadata.json`` as done and skips it, so only videos published *after*
-this script runs will be picked up by the main scraper.
+this script runs will be picked up by TubeNews.
+
+Note: YouTube's RSS feed returns the 15 most recent videos.  If a channel
+has more than 15 existing videos and you need them all marked, run this
+script as soon as possible after adding the channel — before the 16th new
+video is posted — or create stubs manually for any older video IDs you need
+to suppress.
 
 Usage::
 
@@ -23,8 +29,8 @@ Safe to re-run: videos that already have an archive directory are skipped.
 """
 
 import json
-import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import requests
@@ -47,11 +53,9 @@ try:
 except Exception:
     STORAGE_ROOT = BASE_DIR / "content"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    )
+_YT_RSS_NS = {
+    "atom": "http://www.w3.org/2005/Atom",
+    "yt":   "http://www.youtube.com/xml/schemas/2015",
 }
 
 sys.path.insert(0, str(BASE_DIR))
@@ -66,10 +70,11 @@ from tubenews_utils import slugify  # noqa: E402
 def catchup() -> None:
     """Iterate every configured channel and stub out all visible video IDs.
 
-    For each video ID found on the channel's ``/videos`` and ``/streams``
-    tabs, a ``2000-01-01_<id>/metadata.json`` stub is created with
-    ``status: "ignored_too_old"``.  TubeNews will skip any video whose
-    archive directory already contains a ``metadata.json``.
+    Fetches YouTube's official Atom RSS feed for each channel (returns up to
+    15 most-recent videos) and creates a ``2000-01-01_<id>/metadata.json``
+    stub with ``status: "ignored_too_old"`` for each video found.  TubeNews
+    will skip any video whose archive directory already contains a
+    ``metadata.json``.
 
     Videos that already have an archive directory (from a previous run or a
     prior TubeNews session) are left untouched.
@@ -93,20 +98,21 @@ def catchup() -> None:
         feed_dir = STORAGE_ROOT / chan_slug
         feed_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect video IDs from both the /videos and /streams tabs.
+        # Fetch video IDs from the official YouTube Atom RSS feed.
         found_ids: list[str] = []
-        for tab in ("videos", "streams"):
-            url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
-            try:
-                r = requests.get(url, headers=HEADERS, timeout=15)
-                r.raise_for_status()
-                found_ids.extend(re.findall(r'"videoId":"([^"]{11})"', r.text))
-            except Exception as exc:
-                print(f"    [!] Warning: could not fetch /{tab} tab: {exc}")
+        url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        try:
+            r = requests.get(url, timeout=15)
+            r.raise_for_status()
+            root = ET.fromstring(r.text)
+            for entry in root.findall("atom:entry", _YT_RSS_NS):
+                vid_el = entry.find("yt:videoId", _YT_RSS_NS)
+                if vid_el is not None and vid_el.text:
+                    found_ids.append(vid_el.text.strip())
+        except Exception as exc:
+            print(f"    [!] Warning: could not fetch RSS feed: {exc}")
 
-        # Deduplicate while preserving order (dict.fromkeys trick).
-        found_ids = list(dict.fromkeys(found_ids))
-        print(f"    Found {len(found_ids)} video IDs on YouTube.")
+        print(f"    Found {len(found_ids)} video IDs in RSS feed.")
 
         new_count = 0
         for v_id in found_ids:

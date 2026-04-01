@@ -34,7 +34,7 @@ TubeNews/
 ├── helpers/
 │   ├── catchup.py           # Mark all existing videos as "too old" (first-run util)
 │   ├── check_quota.py       # Test Gemini API key quota across models
-│   ├── dump_channel_html.py # Dump raw ytInitialData JSON for debugging YouTube scraper changes
+│   ├── dump_channel_html.py # Dump raw ytInitialData JSON (legacy debug tool — no longer used by main scraper)
 │   └── reset_password.py    # Emergency CLI password reset (for locked-out admins)
 └── web/
     ├── app.py               # Flask web UI (user accounts, subscriptions, admin)
@@ -46,12 +46,12 @@ TubeNews/
 ## Architecture & Data Flow
 
 ```
-YouTube Channel Pages (HTML scrape)
+YouTube channel Atom RSS feed
          │
-         ▼  list of {id, title, date, is_live}
+         ▼  list of {id, title, date}
   discover_videos()
-         │  (parses ytInitialData JSON embedded in channel page;
-         │   title and approximate date extracted here — no per-video watch-page request)
+         │  (fetches https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID;
+         │   returns up to 15 most-recent entries with exact ISO dates)
          │
          ▼  IDs not yet in content store
   process_feed() ──► process_video() (one per new video)
@@ -93,7 +93,7 @@ Defined at the top of `TubeNews.py` (and importable into `web/app.py`):
 
 | TypedDict | Fields | Used by |
 |---|---|---|
-| `VideoInfo` | `id`, `title`, `date`, `is_live` (all `str`/`bool`) | `discover_videos()` return type |
+| `VideoInfo` | `id`, `title`, `date` (all `str`) | `discover_videos()` return type |
 | `FeedConfig` | `channel_id`, `channel_name`, `focus` (all `str`) | Config array entries; `rebuild_feed`, `process_feed`, `process_video` parameters |
 | `GeminiStory` | `title`, `dateline`, `content` (`str`), `start_time_seconds` (`int`), `topics` (`list[str]`) | `call_gemini_api()` return type; `write_story_files()` input |
 | `ParsedStory` | `title`, `dateline`, `body_html` (`str`), `start_seconds` (`int`), `topics` (`list[str]`), `content_hash` (`str`), `user_ids` (`list[str]`) | `parse_story_file()` return type; imported by `web/app.py` |
@@ -127,10 +127,8 @@ Defined in `web/app.py`:
 
 | Function | Description |
 |---|---|
-| `_relative_date_to_iso(text)` | Converts a YouTube relative-date string (e.g. `"11 days ago"`) to `YYYY-MM-DD`; parses exact dates from completed-stream text |
-| `_parse_channel_page_metadata(html)` | Extracts `{videoId → {title, date, is_live}}` from the `ytInitialData` JSON blob embedded in a channel listing page |
-| `discover_videos(channel_id)` | Scrapes the channel's `videos` and `streams` tabs; returns `list[VideoInfo]` |
-| `fetch_transcript(video_id, supadata_client, ..., transcript_rate_limit_event=None)` | Fetches timed transcript segments from Supadata; returns formatted string or None. When a quota-exhausted error is detected (HTTP 402 or `SupadataError` with a credit-related `error` code), sets `transcript_rate_limit_event` before returning None so callers can stop immediately. |
+| `discover_videos(channel_id)` | Fetches YouTube's official Atom RSS feed (`feeds/videos.xml?channel_id=…`); returns `list[VideoInfo]` (up to 15 most-recent, exact ISO dates). Retries up to 3 times on network errors. |
+| `fetch_transcript(video_id, supadata_client, ..., transcript_rate_limit_event=None)` | Fetches timed transcript segments from Supadata; returns formatted string or None. When a quota-exhausted error is detected (HTTP 402 or `SupadataError` with a credit-related `error` code), sets `transcript_rate_limit_event` before returning None so callers can stop immediately. When Supadata raises an exception whose message contains `"live streaming"`, returns `None` (transient) so the video is retried next run without being permanently marked. |
 
 ### AI story generation
 
@@ -307,7 +305,7 @@ Story body text in AP inverted pyramid style...
 | `feeds[].channel_name` | Yes | Human-readable name; used to create `content/` subfolder |
 | `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. |
-| `request_timeout` | No | Seconds before giving up on YouTube scrape and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
+| `request_timeout` | No | Seconds before giving up on YouTube RSS and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `gemini_call_delay` | No | Seconds to sleep between consecutive Gemini API calls within a single video's focus passes (default: `5`). Keeps call rate well under the 15 RPM free-tier limit. Set to `0` to disable. |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
@@ -324,7 +322,7 @@ Story body text in AP inverted pyramid style...
 |---|---|---|
 | `helpers/catchup.py` | Marks all visible videos as ignored | Before first run on a channel with existing videos |
 | `helpers/check_quota.py` | Tests Gemini API key quota across models | When AI calls fail with 429 errors |
-| `helpers/dump_channel_html.py` | Dumps raw `ytInitialData` JSON for a channel tab; accepts optional `channel_id` and `tab` (`videos`\|`streams`) positional args, falls back to first configured channel / videos tab | When YouTube scraper stops finding videos/titles — inspect structure changes |
+| `helpers/dump_channel_html.py` | Dumps raw `ytInitialData` JSON for a channel tab (legacy diagnostic tool — no longer used by the main pipeline, which now uses the RSS feed) | Kept for historical reference; not needed for normal operation |
 | `helpers/reset_password.py` | Resets a user's password from the CLI | When the admin is locked out and can't log in to use the admin panel |
 
 ---
@@ -337,7 +335,7 @@ pytest tests/ -v
 
 | File | Covers |
 |---|---|
-| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_feed_url`, `_blog_url`), user preferences |
 | `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 
@@ -349,8 +347,9 @@ All tests use `tmp_path` fixtures — no network calls and no real archive neede
 
 ### External Dependencies and Fragility
 
-- **YouTube HTML scraping** (`discover_videos`, `_parse_channel_page_metadata`) parses the `ytInitialData` JSON blob embedded in channel listing pages. YouTube can change this structure at any time. If videos stop being discovered or titles/dates stop appearing, check whether the `videoId`, `title.runs`, or `publishedTimeText` JSON paths have changed. The simple `videoId` regex fallback ensures IDs are still found even if the richer metadata parse fails.
-- **Approximate dates:** The channel listing page only provides relative dates ("11 days ago"). `_relative_date_to_iso` converts these to approximate calendar dates by subtracting from today. Completed livestreams often include the exact date in the text ("Streamed live on Mar 14, 2026") and are parsed precisely.
+- **YouTube RSS feed** (`discover_videos`) fetches `https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID` — YouTube's official, stable Atom feed. It returns up to 15 most-recent videos with exact ISO 8601 publication dates. No API key, no HTML parsing, no bot-detection concerns. If video discovery stops working entirely, verify the channel ID is correct and the feed URL returns valid XML. The `helpers/dump_channel_html.py` script is kept as a legacy diagnostic tool but is no longer part of the normal workflow.
+- **Live stream handling:** The RSS feed includes in-progress livestreams with no indication they are live. When `fetch_transcript` is called for such a video, Supadata raises an exception whose message contains `"live streaming"`; `fetch_transcript` catches this and returns `None` (transient failure), so `process_video` skips the video without writing `metadata.json` and it is retried on the next run. The cost is one extra Supadata API call per live video per run until the stream ends.
+- **RSS video limit:** The YouTube Atom feed returns at most 15 entries. This is sufficient for incremental processing (new videos since the last run). `helpers/catchup.py` uses the same RSS feed, so on a first-time setup it marks the 15 most-recent videos as already processed; for channels with a deeper backlog, older stubs must be created manually or the operator must run `catchup.py` before the 16th new video is posted.
 - **Supadata API** is a paid proxy service. Check account quota if transcripts stop working. The `Transcript` object returned by `supadata_client.transcript()` exposes only `content`, `lang`, and `available_langs`.
 - **Gemini API** has rate limits per project. Use `helpers/check_quota.py` to test. If one project is exhausted, create a new Google Cloud project and generate a fresh key.
 

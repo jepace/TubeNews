@@ -17,14 +17,13 @@ from TubeNews import (
     slugify,
     parse_story_file,
     process_feed,
+    discover_videos,
     rebuild_feed,
     rebuild_aggregate_feed,
     rebuild_user_feed,
     rebuild_user_blog,
     build_user_feed_xml,
     write_story_files,
-    _relative_date_to_iso,
-    _parse_channel_page_metadata,
     _resolve_early_config,
     _acquire_lock,
     _release_lock,
@@ -313,173 +312,114 @@ def test_rebuild_aggregate_feed_no_base_url_omits_self_link(multi_channel_archiv
 
 
 # ---------------------------------------------------------------------------
-# _relative_date_to_iso
+# discover_videos — RSS-based implementation
 # ---------------------------------------------------------------------------
 
-def test_relative_date_days_ago():
-    expected = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("5 days ago") == expected
+def _make_rss_feed(entries: list[dict]) -> str:
+    """Build a minimal YouTube Atom RSS feed string for testing.
 
-def test_relative_date_singular_day():
-    expected = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("1 day ago") == expected
+    Each entry dict may have keys: video_id, title, published.
+    """
+    entry_xml = ""
+    for e in entries:
+        entry_xml += f"""
+  <entry>
+    <yt:videoId>{e['video_id']}</yt:videoId>
+    <title>{e.get('title', '')}</title>
+    <published>{e.get('published', '2026-03-15T10:30:00+00:00')}</published>
+  </entry>"""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>Test Channel</title>{entry_xml}
+</feed>"""
 
-def test_relative_date_weeks_ago():
-    expected = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("2 weeks ago") == expected
-
-def test_relative_date_months_ago():
-    expected = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("2 months ago") == expected
-
-def test_relative_date_hours_ago_returns_today():
-    # Hours map to 0 days, so result should be today.
-    expected = datetime.now().strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("3 hours ago") == expected
-
-def test_relative_date_streamed_live_exact():
-    assert _relative_date_to_iso("Streamed live on Feb 24, 2026") == "2026-02-24"
-
-def test_relative_date_streamed_live_full_month_name():
-    # YouTube uses full month names for completed livestreams, e.g. "March 25, 2026"
-    assert _relative_date_to_iso("Streamed live on March 25, 2026") == "2026-03-25"
-
-def test_relative_date_streamed_prefix():
-    # "Streamed 2 days ago" was broken because re.match anchors at start of string
-    expected = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("Streamed 2 days ago") == expected
-
-def test_relative_date_streamed_weeks():
-    expected = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("Streamed 1 week ago") == expected
-
-def test_relative_date_exact_month_day_year():
-    assert _relative_date_to_iso("Mar 14, 2026") == "2026-03-14"
-
-def test_relative_date_full_month_name():
-    assert _relative_date_to_iso("March 14, 2026") == "2026-03-14"
-
-def test_relative_date_unknown_returns_today():
-    expected = datetime.now().strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("some unrecognised format xyz") == expected
-
-def test_relative_date_empty_string_returns_today():
-    expected = datetime.now().strftime("%Y-%m-%d")
-    assert _relative_date_to_iso("") == expected
-
-
-# ---------------------------------------------------------------------------
-# _parse_channel_page_metadata
-# ---------------------------------------------------------------------------
-
-def _make_yt_html(video_obj: dict) -> str:
-    """Wrap a video renderer dict in minimal ytInitialData HTML."""
-    data = {"tabs": [video_obj]}
-    blob = json.dumps(data)
-    return f"var ytInitialData = {blob};</script>"
-
-
-def test_parse_channel_page_metadata_extracts_video():
-    video = {
-        "videoId": "abc123xyz",
-        "title": {"runs": [{"text": "Test Council Meeting"}]},
-        "publishedTimeText": {"simpleText": "5 days ago"},
-        "thumbnailOverlays": [],
-    }
-    result = _parse_channel_page_metadata(_make_yt_html(video))
-    assert "abc123xyz" in result
-    assert result["abc123xyz"]["title"] == "Test Council Meeting"
-    assert result["abc123xyz"]["is_live"] is False
-
-
-def test_parse_channel_page_metadata_simpletext_title():
-    """YouTube sometimes uses simpleText instead of runs for the title field."""
-    video = {
-        "videoId": "simple1xyzz",
-        "title": {"simpleText": "03 16 26 Joint CC & SA Meeting"},
-        "publishedTimeText": {"simpleText": "4 days ago"},
-        "thumbnailOverlays": [],
-    }
-    result = _parse_channel_page_metadata(_make_yt_html(video))
-    assert result["simple1xyzz"]["title"] == "03 16 26 Joint CC & SA Meeting"
-
-def test_parse_channel_page_metadata_no_yt_initial_data():
-    result = _parse_channel_page_metadata("<html><body>No data here</body></html>")
-    assert result == {}
-
-def test_parse_channel_page_metadata_invalid_json():
-    result = _parse_channel_page_metadata("var ytInitialData = {NOT VALID JSON};</script>")
-    assert result == {}
-
-def test_parse_channel_page_metadata_detects_live():
-    video = {
-        "videoId": "live123xyz",
-        "title": {"runs": [{"text": "Live Meeting"}]},
-        "publishedTimeText": {"simpleText": "1 minute ago"},
-        "thumbnailOverlays": [
-            {"thumbnailOverlayTimeStatusRenderer": {"style": "LIVE"}}
-        ],
-    }
-    result = _parse_channel_page_metadata(_make_yt_html(video))
-    assert result["live123xyz"]["is_live"] is True
-
-def test_parse_channel_page_metadata_detects_upcoming():
-    video = {
-        "videoId": "soon123xyz",
-        "title": {"runs": [{"text": "Upcoming Meeting"}]},
-        "publishedTimeText": {"simpleText": "1 hour ago"},
-        "thumbnailOverlays": [
-            {"thumbnailOverlayTimeStatusRenderer": {"style": "UPCOMING"}}
-        ],
-    }
-    result = _parse_channel_page_metadata(_make_yt_html(video))
-    assert result["soon123xyz"]["is_live"] is True
-
-def test_parse_channel_page_metadata_no_duplicate_ids():
-    # Same videoId appearing twice in the walk should only be recorded once.
-    video = {
-        "videoId": "dup123xyzz",
-        "title": {"runs": [{"text": "Dupe"}]},
-        "publishedTimeText": {"simpleText": "1 day ago"},
-        "thumbnailOverlays": [],
-        "nested": {
-            "videoId": "dup123xyzz",
-            "title": {"runs": [{"text": "Dupe Again"}]},
-            "thumbnailOverlays": [],
-        },
-    }
-    result = _parse_channel_page_metadata(_make_yt_html(video))
-    assert len([k for k in result if k == "dup123xyzz"]) == 1
-
-
-# ---------------------------------------------------------------------------
-# discover_videos — metadata-parse degradation warning
-# ---------------------------------------------------------------------------
 
 class _MockResponse:
-    def __init__(self, text, status_code=200):
+    def __init__(self, text="", status_code=200):
         self.text = text
         self.status_code = status_code
 
-def test_discover_videos_warns_when_ids_found_but_metadata_parse_fails(monkeypatch, caplog):
-    """When the regex finds video IDs but _parse_channel_page_metadata returns nothing,
-    discover_videos must emit a warning so silent YouTube structure changes are surfaced."""
+
+def test_discover_videos_returns_id_title_date(monkeypatch):
+    """discover_videos parses video ID, title, and ISO date from the RSS feed."""
+    import TubeNews
+    xml = _make_rss_feed([
+        {"video_id": "abc12345678", "title": "Council Meeting", "published": "2026-03-15T10:30:00+00:00"},
+    ])
+    monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _MockResponse(xml))
+    results = TubeNews.discover_videos("UCtest1234567890")
+    assert len(results) == 1
+    assert results[0]["id"] == "abc12345678"
+    assert results[0]["title"] == "Council Meeting"
+    assert results[0]["date"] == "2026-03-15"
+
+
+def test_discover_videos_returns_multiple_entries(monkeypatch):
+    """discover_videos returns all entries in feed order."""
+    import TubeNews
+    xml = _make_rss_feed([
+        {"video_id": "vid111111111", "title": "Meeting 1", "published": "2026-03-20T00:00:00+00:00"},
+        {"video_id": "vid222222222", "title": "Meeting 2", "published": "2026-03-10T00:00:00+00:00"},
+    ])
+    monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _MockResponse(xml))
+    results = TubeNews.discover_videos("UCtest1234567890")
+    assert [v["id"] for v in results] == ["vid111111111", "vid222222222"]
+
+
+def test_discover_videos_returns_empty_on_http_error(monkeypatch):
+    """discover_videos returns [] when the server returns a non-200 status."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews.requests, "get",
+                        lambda *a, **kw: _MockResponse(status_code=404))
+    results = TubeNews.discover_videos("UCtest1234567890")
+    assert results == []
+
+
+def test_discover_videos_returns_empty_on_malformed_xml(monkeypatch):
+    """discover_videos returns [] when the feed XML cannot be parsed."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews.requests, "get",
+                        lambda *a, **kw: _MockResponse(text="this is not xml"))
+    results = TubeNews.discover_videos("UCtest1234567890")
+    assert results == []
+
+
+def test_discover_videos_returns_empty_on_network_failure(monkeypatch):
+    """discover_videos returns [] after all retry attempts fail."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews.time, "sleep", lambda _: None)
+    monkeypatch.setattr(TubeNews.requests, "get",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            TubeNews.requests.exceptions.ConnectionError("refused")))
+    results = TubeNews.discover_videos("UCtest1234567890")
+    assert results == []
+
+
+def test_discover_videos_warns_on_empty_feed(monkeypatch, caplog):
+    """discover_videos emits a warning when the feed has no entries."""
     import logging
     import TubeNews
-
-    # Raw HTML that contains a videoId the regex will find, but no valid ytInitialData blob.
-    bare_html = '"videoId":"abcde12345z" some other content'
-
+    empty_feed = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>Empty Channel</title>
+</feed>"""
     monkeypatch.setattr(TubeNews.requests, "get",
-                        lambda *a, **kw: _MockResponse(bare_html))
-
+                        lambda *a, **kw: _MockResponse(empty_feed))
     with caplog.at_level(logging.WARNING):
         results = TubeNews.discover_videos("UCtest1234567890", feed_name="TestCh")
+    assert results == []
+    assert any("0 entries" in r.message for r in caplog.records)
 
-    assert any("titles or dates" in r.message for r in caplog.records), \
-        "Must warn when IDs are found but metadata parse returns nothing"
-    # IDs are still returned (fallback works).
-    assert any(v["id"] == "abcde12345z" for v in results)
+
+def test_discover_videos_no_is_live_field(monkeypatch):
+    """VideoInfo dicts returned by discover_videos must not contain is_live."""
+    import TubeNews
+    xml = _make_rss_feed([{"video_id": "abc12345678", "title": "T"}])
+    monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _MockResponse(xml))
+    results = TubeNews.discover_videos("UCtest1234567890")
+    assert "is_live" not in results[0]
 
 
 # ---------------------------------------------------------------------------
@@ -550,9 +490,9 @@ def test_new_feed_marks_older_videos_ignored_too_old(tmp_path, monkeypatch):
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     videos = [
-        {"id": "VID_NEWEST_1", "title": "Meeting 1", "date": yesterday, "is_live": False},
-        {"id": "VID_OLDER_2", "title": "Meeting 2", "date": yesterday, "is_live": False},
-        {"id": "VID_OLDEST_3", "title": "Meeting 3", "date": yesterday, "is_live": False},
+        {"id": "VID_NEWEST_1", "title": "Meeting 1", "date": yesterday},
+        {"id": "VID_OLDER_2", "title": "Meeting 2", "date": yesterday},
+        {"id": "VID_OLDEST_3", "title": "Meeting 3", "date": yesterday},
     ]
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: videos)
     monkeypatch.setattr(TubeNews, "process_video", lambda **kw: ("skipped", 0))
@@ -580,8 +520,8 @@ def test_new_feed_ignored_stubs_are_idempotent(tmp_path, monkeypatch):
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     videos = [
-        {"id": "VID_NEWEST_1", "title": "Meeting 1", "date": yesterday, "is_live": False},
-        {"id": "VID_OLDER_2", "title": "Meeting 2", "date": yesterday, "is_live": False},
+        {"id": "VID_NEWEST_1", "title": "Meeting 1", "date": yesterday},
+        {"id": "VID_OLDER_2", "title": "Meeting 2", "date": yesterday},
     ]
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: videos)
     monkeypatch.setattr(TubeNews, "process_video", lambda **kw: ("skipped", 0))
@@ -1587,7 +1527,7 @@ def test_process_feed_processes_new_video(tmp_path, monkeypatch):
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
-        {"id": "VID_NEW_AAAA", "title": "Council Meeting", "date": yesterday, "is_live": False},
+        {"id": "VID_NEW_AAAA", "title": "Council Meeting", "date": yesterday},
     ])
     monkeypatch.setattr(TubeNews, "fetch_transcript",
                         lambda *a, **kw: "0:00 --> The council discussed housing.")
@@ -1626,7 +1566,7 @@ def test_process_feed_skips_video_with_no_transcript(tmp_path, monkeypatch):
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
-        {"id": "VID_NO_TRANS", "title": "Council Meeting", "date": yesterday, "is_live": False},
+        {"id": "VID_NO_TRANS", "title": "Council Meeting", "date": yesterday},
     ])
     monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: None)
     gemini_called = []
@@ -1650,7 +1590,7 @@ def test_process_feed_propagates_ai_rate_limit(tmp_path, monkeypatch):
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
-        {"id": "VID_RATE_LIM", "title": "Council Meeting", "date": yesterday, "is_live": False},
+        {"id": "VID_RATE_LIM", "title": "Council Meeting", "date": yesterday},
     ])
     monkeypatch.setattr(TubeNews, "fetch_transcript",
                         lambda *a, **kw: "0:00 --> Transcript text.")
@@ -1673,7 +1613,7 @@ def test_process_feed_gemini_no_stories_writes_no_stories_metadata(tmp_path, mon
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
-        {"id": "VID_NO_STORY", "title": "Council Meeting", "date": yesterday, "is_live": False},
+        {"id": "VID_NO_STORY", "title": "Council Meeting", "date": yesterday},
     ])
     monkeypatch.setattr(TubeNews, "fetch_transcript",
                         lambda *a, **kw: "0:00 --> Transcript text.")
@@ -1940,7 +1880,6 @@ def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
         video_id="VID_NO_TX",
         video_title="March Meeting",
         video_date="2026-03-01",
-        is_live=False,
         feed=feed,
         feed_dir=feed_dir,
         supadata_client=MagicMock(),
@@ -1971,8 +1910,8 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
-        {"id": "VID_A", "title": "Meeting A", "date": yesterday, "is_live": False},
-        {"id": "VID_B", "title": "Meeting B", "date": yesterday, "is_live": False},
+        {"id": "VID_A", "title": "Meeting A", "date": yesterday},
+        {"id": "VID_B", "title": "Meeting B", "date": yesterday},
     ])
 
     calls = []
