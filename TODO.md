@@ -27,7 +27,7 @@ would require restructuring that state propagation.
 
 ### Storage architecture
 
-The current storage model is intentionally simple:
+~~The current storage model is intentionally simple:
 
 - **Feeds** are stored as a JSON array in `TubeNews.json` under `feeds`.
   This is the operator config file — read directly by the CLI tool at startup.
@@ -54,7 +54,7 @@ All three references to it are in `web/app.py` only (`admin_runs`,
 `admin_run_now`, `admin_run_log`) — `TubeNews.py` does not write there — so
 moving `_run_logs/` to a sibling directory only requires updating those three
 references together. The admin Runs page will continue to work as long as all
-three are updated in the same change.
+three are updated in the same change.~~ **Done — see Completed Items (state directory restructure and channels.json migration).**
 
 ~~**If the user count grows large enough that glob-scanning on every login/lookup
 becomes a bottleneck**, consider adding a lightweight `content/_users/index.json`
@@ -62,7 +62,7 @@ that maps email → uuid. The per-user files stay as-is; the index just speeds u
 `_find_user_by_email()`. Rebuild the index on registration, deletion, and email
 change. No schema migration needed for existing user directories.~~ **Done — see Completed Items.**
 
-**If `TubeNews.json` becomes unwieldy** (many feeds + many server config keys),
+~~**If `TubeNews.json` becomes unwieldy** (many feeds + many server config keys),
 consider splitting it:
 
 - `TubeNews.json` — server/runtime config only: API keys, model name, base URL,
@@ -72,7 +72,7 @@ consider splitting it:
 Both files would live in the project root. `TubeNews.py` and `web/app.py` would
 need small updates to load from two files. This separation makes it easier to
 check `feeds.json` into version control (no secrets) while keeping
-`TubeNews.json` gitignored.
+`TubeNews.json` gitignored.~~ **Done — see Completed Items (channels.json migration).**
 
 ---
 
@@ -136,6 +136,40 @@ exercise `_get_user_stories()` focus filtering via the `/feed` Flask route
 directly: one asserts that a user with focus "housing" sees only housing
 stories; the other confirms all stories appear when no focus is configured.
 261 tests pass.
+
+### State directory restructure (April 2026)
+
+Internal state moved out of `content/` into a sibling `state/` directory.
+`_run_logs/` → `state/run_logs/`, `_users/` → `state/users/`, `.tubenews.lock`
+→ `state/.tubenews.lock`, Supadata balance cache → `state/supadata_balance.json`.
+`resolve_roots(config_file, base_dir)` added to `tubenews_utils.py` to resolve
+both roots from `content_dir` / `state_dir` config keys. All scanners, route
+handlers, and tests updated. Existing installs migrate automatically: the web UI
+and scraper create `state/` on first run; no data in `content/` needs to move
+(story files remain in `content/`).
+
+### channels.json migration (April 2026)
+
+Channel configuration moved from `feeds[]` in `TubeNews.json` to
+`state/channels.json`. `_save_channels()` in `web/app.py` writes atomically to
+`state/channels.json`. `_read_channels(config)` in `TubeNews.py` and
+`_load_channels()` in `web/app.py` both read from `state/channels.json` with
+fallback to `config["feeds"]` for migration compatibility. `channels.json.sample`
+added to the repo. The `feeds[]` key in `TubeNews.json` is no longer written by
+the application but continues to be read as a fallback until operators migrate.
+
+### WebSub `--daemon` mode (April 2026)
+
+YouTube PubSubHubbub push support added via `python3 TubeNews.py --daemon`. Two
+threads: `_wsb_receiver_thread` (HTTP server on `websub_daemon_port`) receives
+and verifies signed push payloads; `_wsb_processor_thread` wakes every
+`websub_check_interval_minutes` and dispatches queued notifications older than
+`websub_min_age_minutes`. Push queue stored in `state/queue/push_queue.json`;
+subscription state in `state/subscriptions.json`. Subscribe/unsubscribe called
+automatically from `admin_feed_add` / `admin_feed_delete` in the web UI. Renewal
+is self-managed: re-subscribe all on daemon startup; re-subscribe expiring
+subscriptions (within 24 h) on each processor cycle. Lease = 604 800 s (7 days);
+hub = `https://pubsubhubbub.appspot.com/subscribe`.
 
 ### Windows datetime portability fixed (March 2026)
 

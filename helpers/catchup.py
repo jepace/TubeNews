@@ -36,35 +36,38 @@ from pathlib import Path
 import requests
 
 # ---------------------------------------------------------------------------
-# Resolve paths the same way TubeNews.py does so archive_dir is respected.
+# Resolve paths the same way TubeNews.py does so content_dir/state_dir
+# settings in TubeNews.json are respected.
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 
-try:
-    _cfg = json.loads(CONFIG_FILE.read_text())
-    _content_dir = _cfg.get("content_dir", "")
-    if _content_dir:
-        _p = Path(_content_dir)
-        STORAGE_ROOT = _p if _p.is_absolute() else (BASE_DIR / _p).resolve()
-    else:
-        STORAGE_ROOT = BASE_DIR / "content"
-except Exception:
-    STORAGE_ROOT = BASE_DIR / "content"
+sys.path.insert(0, str(BASE_DIR))
+from tubenews_utils import resolve_roots, slugify  # noqa: E402
+
+STORAGE_ROOT, STATE_ROOT = resolve_roots(CONFIG_FILE, BASE_DIR)
 
 _YT_RSS_NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "yt":   "http://www.youtube.com/xml/schemas/2015",
 }
 
-sys.path.insert(0, str(BASE_DIR))
-from tubenews_utils import slugify  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
+
+
+def _read_channels(config: dict) -> list[dict]:
+    """Return configured channels from state/channels.json or TubeNews.json feeds[]."""
+    channels_file = STATE_ROOT / "channels.json"
+    if channels_file.exists():
+        try:
+            return json.loads(channels_file.read_text())
+        except Exception:
+            pass
+    return config.get("feeds", [])
 
 
 def catchup() -> None:
@@ -86,9 +89,9 @@ def catchup() -> None:
     except json.JSONDecodeError as exc:
         sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
 
-    feeds = config.get("feeds", [])
+    feeds = _read_channels(config)
     if not feeds:
-        sys.exit("No feeds configured in TubeNews.json — nothing to do.")
+        sys.exit("No channels configured in state/channels.json — nothing to do.")
 
     for feed in feeds:
         channel_name = feed["channel_name"]

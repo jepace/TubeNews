@@ -48,40 +48,32 @@ from supadata import Supadata, SupadataError
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
 
-def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, int]:
+from tubenews_utils import resolve_roots  # noqa: E402
+
+
+def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, Path, int]:
     """Read path/network settings from *config_file* before main() runs.
 
-    Returns ``(STORAGE_ROOT, REQUEST_TIMEOUT)``.  All keys are optional;
-    sensible defaults are returned when the file is absent or a key is missing.
+    Returns ``(STORAGE_ROOT, STATE_ROOT, REQUEST_TIMEOUT)``.  All keys are
+    optional; sensible defaults are returned when the file is absent or a key
+    is missing.
 
     Args:
         config_file: Path to TubeNews.json.
-        base_dir:    Directory used to resolve relative ``content_dir`` paths.
+        base_dir:    Directory used to resolve relative path keys.
     """
+    storage_root, state_root = resolve_roots(config_file, base_dir)
     try:
         cfg = json.loads(config_file.read_text())
-
-        # content_dir — where processed content is stored.
-        # Absolute paths are used as-is; relative paths resolve from base_dir.
-        content_dir = cfg.get("content_dir", "")
-        if content_dir:
-            p = Path(content_dir)
-            storage_root = p if p.is_absolute() else (base_dir / p).resolve()
-        else:
-            storage_root = base_dir / "content"
-
-        # request_timeout — seconds before giving up on YouTube / Supadata calls.
         request_timeout = int(cfg.get("request_timeout", 15))
-
     except Exception as exc:
         logging.warning(f"Failed to load config; using defaults: {exc}")
-        storage_root = base_dir / "content"
         request_timeout = 15
+    return storage_root, state_root, request_timeout
 
-    return storage_root, request_timeout
 
-
-STORAGE_ROOT, REQUEST_TIMEOUT = _resolve_early_config(CONFIG_FILE, BASE_DIR)
+STORAGE_ROOT, STATE_ROOT, REQUEST_TIMEOUT = _resolve_early_config(CONFIG_FILE, BASE_DIR)
+STATE_ROOT.mkdir(parents=True, exist_ok=True)
 
 # FreeBSD ships its CA bundle in a non-standard location; tell Python where
 # to find it so HTTPS requests succeed. On Linux/macOS this path won't exist
@@ -120,13 +112,13 @@ def setup_logging(debug_mode: bool) -> None:
 
 
 def _add_run_log_file_handler() -> None:
-    """Add a FileHandler writing to content/_run_logs/run-<pid>.log.
+    """Add a FileHandler writing to state/run_logs/run-<pid>.log.
 
     Called after the lock is acquired so only actual runs produce a log file.
     The file is the same one the web UI's admin_run_log view reads, so both
     web-UI-triggered runs and cron runs appear identically in the Runs page.
     """
-    log_dir = STORAGE_ROOT / "_run_logs"
+    log_dir = STATE_ROOT / "run_logs"
     log_dir.mkdir(exist_ok=True)
     log_path = log_dir / f"run-{os.getpid()}.log"
     fh = logging.FileHandler(log_path, encoding="utf-8")
@@ -881,7 +873,7 @@ def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str 
         user_id:  UUID directory name for the user. Falls back to slugify(name) if omitted.
     """
     name = user["name"]
-    user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
+    user_dir = STATE_ROOT / "users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"TubeNews: Rebuilding user feed for {name}")
     xml_bytes = build_user_feed_xml(user, base_url=base_url, user_id=user_id)
@@ -902,7 +894,7 @@ def rebuild_user_feed_page(user: dict[str, object], base_url: str = "", user_id:
     """
     name = user["name"]
     subscribed = set(user.get("channels", {}).keys())
-    user_dir = STORAGE_ROOT / "_users" / (user_id or slugify(name))
+    user_dir = STATE_ROOT / "users" / (user_id or slugify(name))
     user_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"TubeNews: Rebuilding feed page for {name}")
@@ -1097,7 +1089,7 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str
         focus_map[f] = []  # feed-level: no user restriction
         focus_order.append(f)
 
-    users_dir = STORAGE_ROOT / "_users"
+    users_dir = STATE_ROOT / "users"
     if users_dir.is_dir():
         for uid_dir in sorted(users_dir.iterdir()):
             if not uid_dir.is_dir():
@@ -1327,6 +1319,8 @@ def process_feed(
     config: dict,
     ai_rate_limit_event: threading.Event | None = None,
     transcript_rate_limit_event: threading.Event | None = None,
+    *,
+    forced_video_ids: list[str] | None = None,
 ) -> tuple[bool, bool, int]:
     """Process all new videos for one configured channel.
 
@@ -1340,6 +1334,13 @@ def process_feed(
     *transcript_rate_limit_event* is an optional shared :class:`threading.Event`.
     When set (Supadata quota exhausted), processing stops immediately for all
     remaining videos across all channels.
+
+    *forced_video_ids* is an optional list of specific video IDs to process.
+    When provided, :func:`discover_videos` is skipped and the same-day hold
+    check is bypassed.  Used by the WebSub daemon to process specific pushed
+    videos.  Each ID is looked up in the existing archive directory for its
+    metadata; the title and date fall back to ``"[title unknown]"`` and
+    today's date when no archive entry is found.
 
     Returns:
         A ``(content_changed, ai_rate_limited, stories_written)`` tuple.
@@ -1365,6 +1366,64 @@ def process_feed(
     # Collect the union of all focus strings for this channel (feed config +
     # all subscriber preferences), capped at MAX_FOCUSES_PER_CHANNEL.
     focuses = _collect_channel_focuses(feed["channel_id"], feed.get("focus", ""))
+
+    if forced_video_ids is not None:
+        # WebSub daemon path: skip RSS discovery; build synthetic VideoInfo entries.
+        today_str = date.today().isoformat()
+        videos_to_process = []
+        for vid in forced_video_ids:
+            if not _needs_processing(vid, feed_dir):
+                continue
+            # Try to resolve title/date from an existing archive dir.
+            existing = next(
+                (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(vid)),
+                None,
+            )
+            title = "[title unknown]"
+            vid_date = today_str
+            if existing:
+                meta_path = existing / "metadata.json"
+                if meta_path.exists():
+                    try:
+                        m = json.loads(meta_path.read_text())
+                        title = m.get("video_title", title)
+                        vid_date = existing.name.split("_")[0] or today_str
+                    except Exception:
+                        pass
+            videos_to_process.append({"id": vid, "title": title, "date": vid_date})
+        if not videos_to_process:
+            logger.info(f"{channel_name}: TubeNews: No new videos in push queue")
+            return content_changed, ai_rate_limited, stories_written
+        logger.info(f"{channel_name}: TubeNews: Processing {len(videos_to_process)} pushed video(s)")
+        total = len(videos_to_process)
+        for video_num, video_info in enumerate(videos_to_process, start=1):
+            ai_disabled = ai_rate_limited or (
+                ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
+            )
+            result, n = process_video(
+                video_id=video_info["id"],
+                video_title=video_info["title"],
+                video_date=video_info["date"],
+                feed=feed,
+                feed_dir=feed_dir,
+                supadata_client=supadata_client,
+                config=config,
+                ai_disabled=ai_disabled,
+                video_num=video_num,
+                total_videos=total,
+                focuses=focuses,
+                transcript_rate_limit_event=transcript_rate_limit_event,
+            )
+            if result == "content_written":
+                content_changed = True
+                stories_written += n
+            elif result == "ai_rate_limited":
+                ai_rate_limited = True
+                if ai_rate_limit_event is not None:
+                    ai_rate_limit_event.set()
+            elif result == "transcript_quota_exhausted":
+                break
+        return content_changed, ai_rate_limited, stories_written
 
     all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
     if not all_videos:
@@ -1459,6 +1518,425 @@ def process_feed(
 
 
 # ---------------------------------------------------------------------------
+# Channel config — read from state/channels.json
+# ---------------------------------------------------------------------------
+
+
+def _read_channels() -> list[FeedConfig]:
+    """Return the list of configured channels.
+
+    Reads ``state/channels.json`` first.  Falls back to the ``feeds`` key in
+    ``TubeNews.json`` for backward compatibility with installs that have not
+    yet been migrated.  Returns ``[]`` when neither source can be read.
+    """
+    channels_file = STATE_ROOT / "channels.json"
+    if channels_file.exists():
+        try:
+            return json.loads(channels_file.read_text())
+        except Exception as exc:
+            logger.warning(f"TubeNews: Could not read state/channels.json: {exc}")
+    # Fallback: read feeds[] from TubeNews.json (pre-migration layout).
+    try:
+        return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# WebSub (PubSubHubbub) — subscription lifecycle helpers
+# ---------------------------------------------------------------------------
+
+_WSB_HUB = "https://pubsubhubbub.appspot.com/subscribe"
+_WSB_LEASE = 604800  # 7 days
+
+
+def _wsb_topic(channel_id: str) -> str:
+    """Return the YouTube Atom feed URL used as the WebSub topic for *channel_id*."""
+    return f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={channel_id}"
+
+
+def _wsb_record_subscription(channel_id: str, callback_url: str) -> None:
+    """Write or update the subscription record for *channel_id* in ``state/subscriptions.json``."""
+    path = STATE_ROOT / "subscriptions.json"
+    try:
+        subs: dict = json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        subs = {}
+    subs[channel_id] = {
+        "subscribed_at": time.time(),
+        "lease_seconds": _WSB_LEASE,
+        "callback_url": callback_url,
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(subs, indent=2))
+    tmp.replace(path)
+
+
+def _wsb_remove_subscription(channel_id: str) -> None:
+    """Remove the subscription record for *channel_id* from ``state/subscriptions.json``."""
+    path = STATE_ROOT / "subscriptions.json"
+    if not path.exists():
+        return
+    try:
+        subs: dict = json.loads(path.read_text())
+    except Exception:
+        return
+    subs.pop(channel_id, None)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(subs, indent=2))
+    tmp.replace(path)
+
+
+def _wsb_subscribe(channel_id: str, config: dict) -> bool:
+    """Subscribe to WebSub push notifications for *channel_id*.
+
+    POSTs to the YouTube PubSubHubbub hub requesting a 7-day lease.
+    Records the subscription in ``state/subscriptions.json`` on success.
+
+    Returns:
+        ``True`` on success (HTTP 202), ``False`` on failure or when
+        ``websub_callback_url`` / ``websub_secret`` are not configured.
+    """
+    cb = config.get("websub_callback_url", "")
+    sec = config.get("websub_secret", "")
+    if not cb or not sec:
+        return False
+    try:
+        r = requests.post(_WSB_HUB, data={
+            "hub.mode": "subscribe",
+            "hub.topic": _wsb_topic(channel_id),
+            "hub.callback": cb,
+            "hub.secret": sec,
+            "hub.lease_seconds": _WSB_LEASE,
+        }, timeout=10)
+        ok = r.status_code == 202
+        if ok:
+            _wsb_record_subscription(channel_id, cb)
+            logger.debug(f"WebSub: subscribed channel {channel_id}")
+        else:
+            logger.warning(f"WebSub: subscribe returned HTTP {r.status_code} for {channel_id}")
+        return ok
+    except Exception as exc:
+        logger.warning(f"WebSub: subscribe failed for {channel_id}: {exc}")
+        return False
+
+
+def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
+    """Unsubscribe from WebSub push notifications for *channel_id*.
+
+    POSTs an unsubscribe request to the hub and removes the record from
+    ``state/subscriptions.json`` on success.
+
+    Returns:
+        ``True`` on success (HTTP 202), ``False`` on failure or when
+        ``websub_callback_url`` / ``websub_secret`` are not configured.
+    """
+    cb = config.get("websub_callback_url", "")
+    sec = config.get("websub_secret", "")
+    if not cb or not sec:
+        return False
+    try:
+        r = requests.post(_WSB_HUB, data={
+            "hub.mode": "unsubscribe",
+            "hub.topic": _wsb_topic(channel_id),
+            "hub.callback": cb,
+            "hub.secret": sec,
+        }, timeout=10)
+        ok = r.status_code == 202
+        if ok:
+            _wsb_remove_subscription(channel_id)
+            logger.debug(f"WebSub: unsubscribed channel {channel_id}")
+        else:
+            logger.warning(f"WebSub: unsubscribe returned HTTP {r.status_code} for {channel_id}")
+        return ok
+    except Exception as exc:
+        logger.warning(f"WebSub: unsubscribe failed for {channel_id}: {exc}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Push queue helpers — used by --daemon mode
+# ---------------------------------------------------------------------------
+
+
+def _read_push_queue(min_age_minutes: float) -> list[dict]:
+    """Return queue entries whose ``queued_at`` timestamp is old enough to process.
+
+    An entry is considered ripe when ``queued_at`` is at least
+    *min_age_minutes* minutes in the past.  This delay lets auto-captions
+    finish and live streams end before we fetch the transcript.
+
+    Args:
+        min_age_minutes: Minimum age in minutes before an entry is returned.
+
+    Returns:
+        List of ripe queue dicts, each with ``video_id``, ``channel_id``,
+        and ``queued_at`` keys.  Returns ``[]`` when the queue file is absent
+        or cannot be parsed.
+    """
+    path = STATE_ROOT / "queue" / "push_queue.json"
+    if not path.exists():
+        return []
+    try:
+        items: list[dict] = json.loads(path.read_text())
+    except Exception:
+        return []
+    cutoff = time.time() - min_age_minutes * 60
+    return [i for i in items if i.get("queued_at", 0) <= cutoff]
+
+
+def _remove_from_queue(processed_ids: set[str]) -> None:
+    """Remove entries for *processed_ids* from ``state/queue/push_queue.json``.
+
+    Entries whose ``video_id`` is not in *processed_ids* are kept unchanged.
+    No-op when the queue file is absent.
+
+    Args:
+        processed_ids: Set of video ID strings to remove.
+    """
+    path = STATE_ROOT / "queue" / "push_queue.json"
+    if not path.exists():
+        return
+    try:
+        items: list[dict] = json.loads(path.read_text())
+    except Exception:
+        return
+    remaining = [i for i in items if i.get("video_id") not in processed_ids]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(remaining, indent=2))
+    tmp.replace(path)
+
+
+# ---------------------------------------------------------------------------
+# --daemon mode — WebSub receiver + processor threads
+# ---------------------------------------------------------------------------
+
+import hashlib as _hashlib
+import hmac as _hmac
+import http.server as _http_server
+
+
+def _wsb_receiver_thread(config: dict) -> None:
+    """Thread 1: HTTP server that receives and validates WebSub push payloads.
+
+    Listens on ``127.0.0.1:{websub_daemon_port}`` (default 8675).
+
+    * ``GET /`` — hub subscription verification: checks that ``hub.topic``
+      matches a known channel feed URL, then echoes back ``hub.challenge``.
+    * ``POST /`` — push payload: verifies the HMAC-SHA1 ``X-Hub-Signature``
+      header, parses the Atom XML for ``yt:videoId`` and ``yt:channelId``,
+      and writes (or updates) an entry in ``state/queue/push_queue.json``.
+
+    Runs until the process exits (daemon thread).
+    """
+    port = int(config.get("websub_daemon_port", 8675))
+    secret = config.get("websub_secret", "").encode()
+    channels = _read_channels()
+    known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
+
+    queue_dir = STATE_ROOT / "queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    queue_path = queue_dir / "push_queue.json"
+    queue_lock = threading.Lock()
+
+    _YT_NS = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt":   "http://www.youtube.com/xml/schemas/2015",
+    }
+
+    class _Handler(_http_server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):  # silence access log
+            logger.debug("WebSub receiver: " + fmt % args)
+
+        def do_GET(self):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            topic = (qs.get("hub.topic") or [""])[0]
+            challenge = (qs.get("hub.challenge") or [""])[0]
+            if topic not in known_topics or not challenge:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(challenge.encode())
+            logger.info(f"WebSub: verified subscription for channel {known_topics[topic]}")
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+
+            sig_header = self.headers.get("X-Hub-Signature", "")
+            if secret and sig_header.startswith("sha1="):
+                expected = _hmac.new(secret, body, _hashlib.sha1).hexdigest()
+                if not _hmac.compare_digest(sig_header[5:], expected):
+                    self.send_response(403)
+                    self.end_headers()
+                    logger.warning("WebSub: rejected push — HMAC mismatch")
+                    return
+
+            try:
+                root = ET.fromstring(body)
+            except ET.ParseError:
+                self.send_response(400)
+                self.end_headers()
+                return
+
+            now = time.time()
+            new_entries: list[dict] = []
+            for entry in root.findall("atom:entry", _YT_NS):
+                vid_el = entry.find("yt:videoId", _YT_NS)
+                ch_el = entry.find("yt:channelId", _YT_NS)
+                if vid_el is not None and ch_el is not None:
+                    new_entries.append({
+                        "video_id": vid_el.text.strip(),
+                        "channel_id": ch_el.text.strip(),
+                        "queued_at": now,
+                    })
+
+            if new_entries:
+                with queue_lock:
+                    try:
+                        existing: list[dict] = (
+                            json.loads(queue_path.read_text()) if queue_path.exists() else []
+                        )
+                    except Exception:
+                        existing = []
+                    by_vid = {e["video_id"]: e for e in existing}
+                    for ne in new_entries:
+                        by_vid[ne["video_id"]] = ne  # keep latest queued_at
+                    updated = list(by_vid.values())
+                    tmp = queue_path.with_suffix(".tmp")
+                    tmp.write_text(json.dumps(updated, indent=2))
+                    tmp.replace(queue_path)
+                ids = ", ".join(e["video_id"] for e in new_entries)
+                logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
+
+            self.send_response(204)
+            self.end_headers()
+
+    server = _http_server.HTTPServer(("127.0.0.1", port), _Handler)
+    logger.info(f"WebSub: receiver listening on 127.0.0.1:{port}")
+    server.serve_forever()
+
+
+def _wsb_processor_thread(config: dict) -> None:
+    """Thread 2: periodically checks the push queue and processes ripe entries.
+
+    On each wake-up:
+
+    1. **Renewal check:** re-subscribes any channel whose WebSub lease expires
+       within the next 24 hours.
+    2. **Queue processing:** reads ripe entries (older than
+       ``websub_min_age_minutes``), acquires the run lock, calls
+       :func:`process_feed` for each affected channel, rebuilds the aggregate
+       feed if anything changed, then removes processed entries from the queue.
+
+    Sleep interval is ``websub_check_interval_minutes`` (default 10 minutes).
+    Runs until the process exits (daemon thread).
+    """
+    interval = float(config.get("websub_check_interval_minutes", 10)) * 60
+    min_age = float(config.get("websub_min_age_minutes", 360))
+    supadata_client = Supadata(api_key=config["supadata_api_key"])
+
+    while True:
+        time.sleep(interval)
+
+        # -- Renewal check ----------------------------------------------------
+        subs_path = STATE_ROOT / "subscriptions.json"
+        if subs_path.exists():
+            try:
+                subs: dict = json.loads(subs_path.read_text())
+            except Exception:
+                subs = {}
+            renew_before = time.time() + 86400  # within next 24 h
+            for cid, info in subs.items():
+                expires = info.get("subscribed_at", 0) + info.get("lease_seconds", _WSB_LEASE)
+                if expires <= renew_before:
+                    logger.info(f"WebSub: renewing subscription for channel {cid}")
+                    _wsb_subscribe(cid, config)
+
+        # -- Queue processing -------------------------------------------------
+        ripe = _read_push_queue(min_age)
+        if not ripe:
+            continue
+
+        if not _acquire_lock():
+            logger.debug("WebSub processor: lock held by another process — skipping this cycle")
+            continue
+
+        try:
+            channels = _read_channels()
+            channel_map = {ch["channel_id"]: ch for ch in channels}
+
+            by_channel: dict[str, list[str]] = {}
+            for entry in ripe:
+                cid = entry.get("channel_id", "")
+                vid = entry.get("video_id", "")
+                if cid and vid and cid in channel_map:
+                    by_channel.setdefault(cid, []).append(vid)
+
+            if not by_channel:
+                _remove_from_queue({e["video_id"] for e in ripe})
+                continue
+
+            ai_event = threading.Event()
+            transcript_event = threading.Event()
+            any_changed = False
+
+            for cid, vids in by_channel.items():
+                feed = channel_map[cid]
+                content_changed, _, _ = process_feed(
+                    feed, supadata_client, config,
+                    ai_event, transcript_event,
+                    forced_video_ids=vids,
+                )
+                if content_changed:
+                    rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
+                    any_changed = True
+
+            if any_changed or not (STORAGE_ROOT / "rss.xml").exists():
+                try:
+                    rebuild_aggregate_feed(base_url=config.get("base_url", ""))
+                except Exception:
+                    logger.warning("WebSub processor: aggregate feed rebuild failed")
+
+            _remove_from_queue({e["video_id"] for e in ripe})
+            logger.info(f"WebSub processor: processed {len(ripe)} queued video(s)")
+        finally:
+            _release_lock()
+
+
+def _run_daemon(config: dict) -> None:
+    """Start the WebSub daemon: subscribe all channels, then run the two threads.
+
+    Thread 1 receives HTTP push payloads from YouTube's hub.
+    Thread 2 wakes up periodically to process ripe queue entries and renew
+    subscriptions.  Both are daemon threads — they exit when the process exits.
+
+    This function blocks indefinitely (joins Thread 2).
+    """
+    channels = _read_channels()
+    if not channels:
+        logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
+        return
+
+    logger.info(f"TubeNews daemon: subscribing {len(channels)} channel(s) to WebSub...")
+    for ch in channels:
+        ok = _wsb_subscribe(ch["channel_id"], config)
+        status = "OK" if ok else "skipped (not configured or failed)"
+        logger.info(f"  {ch['channel_name']}: {status}")
+
+    t1 = threading.Thread(target=_wsb_receiver_thread, args=(config,), daemon=True)
+    t2 = threading.Thread(target=_wsb_processor_thread, args=(config,), daemon=True)
+    t1.start()
+    t2.start()
+    logger.info("TubeNews daemon running. Press Ctrl+C to stop.")
+    t2.join()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1492,7 +1970,7 @@ def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], s
 # Process locking — prevent concurrent runs
 # ---------------------------------------------------------------------------
 
-LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
+LOCK_FILE = STATE_ROOT / ".tubenews.lock"
 
 
 def _acquire_lock() -> bool:
@@ -1525,9 +2003,24 @@ def main() -> None:
     """Load config, process each feed, and rebuild RSS outputs."""
     parser = argparse.ArgumentParser(description="TubeNews — YouTube channel monitor")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug output")
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run as a WebSub daemon (subscribe all channels and process push notifications)",
+    )
     args = parser.parse_args()
 
     setup_logging(args.debug)
+
+    if args.daemon:
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except Exception as exc:
+            logger.error(f"TubeNews daemon: could not load config: {exc}")
+            return
+        _run_daemon(config)
+        return
 
     if not _acquire_lock():
         logger.error("TubeNews: Another instance is already running. Exiting.")
@@ -1545,17 +2038,22 @@ def _main_body(args) -> None:
     with open(CONFIG_FILE, "r") as config_file:
         config = json.load(config_file)
 
+    channels = _read_channels()
+    if not channels:
+        logger.error("TubeNews: No channels configured in state/channels.json — nothing to do.")
+        return
+
     # Reject duplicate channel_ids before spawning threads — two entries for
     # the same channel would race to process the same video directories.
     seen_ids: dict[str, str] = {}
-    for feed in config.get("feeds", []):
+    for feed in channels:
         cid = feed.get("channel_id", "")
         cname = feed.get("channel_name", "?")
         if cid in seen_ids:
             logger.error(
                 f"TubeNews: Duplicate channel_id '{cid}' in feeds "
                 f"('{seen_ids[cid]}' and '{cname}'). "
-                "Fix TubeNews.json and re-run."
+                "Fix state/channels.json and re-run."
             )
             return
         seen_ids[cid] = cname
@@ -1567,7 +2065,7 @@ def _main_body(args) -> None:
     quota_ok, cached_balance = _check_supadata_quota(config)
     started_at = time.time()
     if not quota_ok:
-        run_log_path = STORAGE_ROOT / "_run_logs" / "run_log.json"
+        run_log_path = STATE_ROOT / "run_logs" / "run_log.json"
         run_log_path.parent.mkdir(exist_ok=True)
         try:
             runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
@@ -1617,9 +2115,9 @@ def _main_body(args) -> None:
                 "stories_written": 0,
             }
 
-    max_workers = min(len(config["feeds"]), config.get("max_parallel_feeds", 1))
+    max_workers = min(len(channels), config.get("max_parallel_feeds", 1))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        feed_results = list(executor.map(_run_feed, config["feeds"]))
+        feed_results = list(executor.map(_run_feed, channels))
     total_stories = sum(r["stories_written"] for r in feed_results)
 
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
@@ -1628,7 +2126,7 @@ def _main_body(args) -> None:
         except Exception:
             logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
 
-    users_dir = STORAGE_ROOT / "_users"
+    users_dir = STATE_ROOT / "users"
     if users_dir.is_dir():
         for user_json in sorted(users_dir.glob("*/user.json")):
             try:
@@ -1641,7 +2139,7 @@ def _main_body(args) -> None:
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
 
-    run_log_path = STORAGE_ROOT / "_run_logs" / "run_log.json"
+    run_log_path = STATE_ROOT / "run_logs" / "run_log.json"
     run_log_path.parent.mkdir(exist_ok=True)
     try:
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
@@ -1684,7 +2182,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
     """Check Supadata credit balance before starting a run.
 
     Reads the balance cached at the end of the previous run
-    (``content/_run_logs/supadata_balance.json``) — no live API call is made here so no
+    (``state/supadata_balance.json``) — no live API call is made here so no
     credits are consumed.  If the file is absent (first run) we proceed
     optimistically; the end-of-run cache will populate it for next time.
 
@@ -1694,7 +2192,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
         cached dict or None.  When *ok* is False the caller should abort
         and record ``transcript_quota_exhausted`` in the run log.
     """
-    balance_path = STORAGE_ROOT / "_run_logs" / "supadata_balance.json"
+    balance_path = STATE_ROOT / "supadata_balance.json"
     if not balance_path.exists():
         return True, None
     try:
@@ -1722,7 +2220,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
 
 
 def _cache_supadata_balance(config: dict) -> None:
-    """Fetch Supadata credit usage and cache it to ``content/_run_logs/supadata_balance.json``.
+    """Fetch Supadata credit usage and cache it to ``state/supadata_balance.json``.
 
     Called once at the end of each ``main()`` run so the web UI can read the
     cached result instantly instead of making a live API call on every page load.
@@ -1738,7 +2236,7 @@ def _cache_supadata_balance(config: dict) -> None:
             timeout=10,
         )
         if resp.status_code == 200:
-            (STORAGE_ROOT / "_run_logs" / "supadata_balance.json").write_text(
+            (STATE_ROOT / "supadata_balance.json").write_text(
                 json.dumps(resp.json())
             )
             logger.debug("Supadata balance cached successfully.")
