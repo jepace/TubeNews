@@ -34,6 +34,7 @@ echo "Deploying $SRC → $DEST"
 rsync -av --delete \
     --exclude='TubeNews.json' \
     --exclude='content/' \
+    --exclude='state/' \
     --exclude='deploy.sh' \
     --exclude='.git/' \
     --exclude='.gitignore' \
