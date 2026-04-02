@@ -27,7 +27,12 @@ from pathlib import Path
 from werkzeug.security import generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-USERS_ROOT = BASE_DIR / "content" / "_users"
+CONFIG_FILE = BASE_DIR / "TubeNews.json"
+sys.path.insert(0, str(BASE_DIR))
+from tubenews_utils import resolve_roots  # noqa: E402
+
+_, STATE_ROOT = resolve_roots(CONFIG_FILE, BASE_DIR)
+USERS_ROOT = STATE_ROOT / "users"
 
 
 def find_user(email: str) -> tuple[Path, dict] | tuple[None, None]:

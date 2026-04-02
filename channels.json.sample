@@ -1,0 +1,12 @@
+[
+  {
+    "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxxx",
+    "channel_name": "My YouTube Channel",
+    "focus": "housing, zoning, development permits, budget decisions"
+  },
+  {
+    "channel_id": "UCyyyyyyyyyyyyyyyyyyyyyyy",
+    "channel_name": "Another Channel",
+    "focus": "transportation, roads, transit"
+  }
+]

@@ -291,6 +291,141 @@ TubeNews run.
 
 ---
 
+## state_dir
+
+By default TubeNews creates a `state/` directory next to `TubeNews.py` to hold
+all internal state (user accounts, run logs, channel config, lock file, Supadata
+balance cache, WebSub queue and subscription data). This directory is **never
+web-served** — it should live outside your web server's document root.
+
+To override the location, set `state_dir` in `TubeNews.json` (absolute path or
+relative to `TubeNews.py`):
+
+```json
+{
+  "content_dir": "/var/www/html/tubenews",
+  "state_dir": "/var/lib/tubenews/state"
+}
+```
+
+The `content_dir` and `state_dir` keys are resolved by `resolve_roots()` in
+`tubenews_utils.py` and used by both `TubeNews.py` and `web/app.py`.
+
+---
+
+## WebSub Integration
+
+TubeNews supports YouTube's PubSubHubbub (WebSub) push feed so new videos
+trigger processing within minutes instead of waiting for the next cron run.
+
+### Enable
+
+Add these keys to `TubeNews.json`:
+
+```json
+{
+  "websub_callback_url": "https://yourdomain.com/youtube/push",
+  "websub_secret":       "generate-with-token-hex-32",
+  "websub_daemon_port":  8675
+}
+```
+
+Generate a secret:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+```
+
+### Run
+
+Start the daemon instead of a one-shot run:
+
+```bash
+python3 TubeNews.py --daemon
+```
+
+The daemon runs indefinitely. It starts two threads:
+
+- **`_wsb_receiver_thread`** — HTTP server on `websub_daemon_port`; receives
+  and verifies push notifications from YouTube's hub, writes them to
+  `state/queue/push_queue.json`.
+- **`_wsb_processor_thread`** — wakes every `websub_check_interval_minutes`
+  (default 10) and processes queued notifications that have aged past
+  `websub_min_age_minutes` (default 360, i.e. 6 hours — avoids processing
+  livestreams before they end).
+
+Keep the daemon alive with the same systemd unit or rc.d service used for
+`serve.sh` (run each as a separate service), or use a process supervisor.
+
+### Reverse proxy
+
+Expose `websub_daemon_port` via nginx so YouTube's hub can reach it over HTTPS.
+Add a location block to your existing TubeNews nginx config:
+
+```nginx
+location /youtube/push {
+    proxy_pass http://127.0.0.1:8675;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+The path in the `location` block must match the path component of
+`websub_callback_url` in `TubeNews.json`.
+
+### Subscriptions
+
+- **Subscribe** happens automatically when a channel is added via the web UI
+  admin panel (`/admin/feeds/add`).
+- **Unsubscribe** happens automatically when a channel is removed
+  (`/admin/feeds/<idx>/delete`).
+- **Renewal** is handled internally — the daemon re-subscribes all channels on
+  startup and re-subscribes any subscription expiring within 24 hours on each
+  processor cycle. No cron job is needed.
+
+Subscription state is stored in `state/subscriptions.json` (keyed by
+`channel_id`). The WebSub lease is 604 800 s (7 days); the hub is
+`https://pubsubhubbub.appspot.com/subscribe`.
+
+---
+
+## Migration from feeds[] to channels.json
+
+Channel configuration has moved from the `feeds[]` array in `TubeNews.json` to
+`state/channels.json`. The old location is still read as a fallback so existing
+installs continue to work without any manual step.
+
+### Automatic migration
+
+TubeNews reads `state/channels.json` on startup. If that file does not exist, it
+falls back to `feeds[]` in `TubeNews.json`. No action is required for existing
+deployments — channels appear correctly in the web UI and the scraper runs
+normally.
+
+### Manual migration
+
+The easiest path is to use the admin panel: visit `/admin/feeds`, verify the
+channel list, make any edit (or add/remove a channel), and save. The web UI
+writes to `state/channels.json`; after the first save the fallback is no longer
+needed.
+
+Alternatively, copy the array from `TubeNews.json`:
+
+```bash
+# extract feeds[] and write to state/channels.json
+python3 -c "
+import json, pathlib
+cfg = json.loads(pathlib.Path('TubeNews.json').read_text())
+pathlib.Path('state').mkdir(exist_ok=True)
+pathlib.Path('state/channels.json').write_text(json.dumps(cfg.get('feeds', []), indent=2))
+"
+```
+
+Once `state/channels.json` exists, the `feeds[]` key in `TubeNews.json` is
+ignored. It can be removed from the file but does not need to be.
+
+---
+
 ## Upgrading an Existing Install
 
 ### Renaming `archive/` to `content/`

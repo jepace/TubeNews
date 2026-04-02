@@ -31,6 +31,11 @@ from TubeNews import (
     _check_supadata_quota,
     _fmt_no_leading_zeros,
     fetch_transcript,
+    _read_channels,
+    _read_push_queue,
+    _remove_from_queue,
+    _wsb_record_subscription,
+    _wsb_remove_subscription,
 )
 
 
@@ -274,9 +279,10 @@ def test_rebuild_feed_includes_timestamp(channel_feed, feed_cfg):
 
 @pytest.fixture
 def multi_channel_archive(tmp_path, monkeypatch):
-    """Patch STORAGE_ROOT to a tmp archive with two channel directories."""
+    """Patch STORAGE_ROOT and STATE_ROOT to a tmp archive with two channel directories."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     for channel_slug, vid, date in [
         ("alpha_channel", "ALPHA234567", "2026-02-01"),
@@ -487,6 +493,7 @@ def test_new_feed_marks_older_videos_ignored_too_old(tmp_path, monkeypatch):
     ignored_too_old stubs so the first run doesn't process months of old meetings."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     videos = [
@@ -517,6 +524,7 @@ def test_new_feed_ignored_stubs_are_idempotent(tmp_path, monkeypatch):
     """Running process_feed twice on a new feed must not raise even though stubs already exist."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     videos = [
@@ -556,9 +564,10 @@ def _setup_channel(archive_root: Path, channel_slug: str, channel_id: str,
 
 @pytest.fixture
 def user_archive(tmp_path, monkeypatch):
-    """Archive with two channels; monkeypatches STORAGE_ROOT."""
+    """Archive with two channels; monkeypatches STORAGE_ROOT and STATE_ROOT."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     _setup_channel(tmp_path, "alpha_city", "UC_ALPHA_ID", "Alpha City Council")
     _setup_channel(tmp_path, "beta_city",  "UC_BETA__ID", "Beta City Council")
     return tmp_path
@@ -567,31 +576,31 @@ def user_archive(tmp_path, monkeypatch):
 def test_rebuild_user_feed_creates_rss(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     rebuild_user_feed(user)
-    assert (user_archive / "_users" / "Jane_Doe" / "rss.xml").exists()
+    assert (user_archive / "users" / "Jane_Doe" / "rss.xml").exists()
 
 def test_rebuild_user_feed_includes_subscribed_channel(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     rebuild_user_feed(user)
-    content = (user_archive / "_users" / "Jane_Doe" / "rss.xml").read_text()
+    content = (user_archive / "users" / "Jane_Doe" / "rss.xml").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_feed_excludes_unsubscribed_channel(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     rebuild_user_feed(user)
-    content = (user_archive / "_users" / "Jane_Doe" / "rss.xml").read_text()
+    content = (user_archive / "users" / "Jane_Doe" / "rss.xml").read_text()
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_no_subscriptions_empty_feed(user_archive):
     user = {"name": "No Subs", "channels": {}}
     rebuild_user_feed(user)
-    content = (user_archive / "_users" / "No_Subs" / "rss.xml").read_text()
+    content = (user_archive / "users" / "No_Subs" / "rss.xml").read_text()
     assert "Alpha City Council" not in content
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_multiple_channels(user_archive):
     user = {"name": "Both", "channels": {"UC_ALPHA_ID": [], "UC_BETA__ID": []}}
     rebuild_user_feed(user)
-    content = (user_archive / "_users" / "Both" / "rss.xml").read_text()
+    content = (user_archive / "users" / "Both" / "rss.xml").read_text()
     assert "Alpha City Council" in content
     assert "Beta City Council" in content
 
@@ -603,24 +612,25 @@ def test_rebuild_user_feed_multiple_channels(user_archive):
 def test_rebuild_user_feed_page_creates_html(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
     rebuild_user_feed_page(user)
-    assert (user_archive / "_users" / "Jane_Doe" / "index.html").exists()
+    assert (user_archive / "users" / "Jane_Doe" / "index.html").exists()
 
 def test_rebuild_user_feed_page_includes_subscribed_stories(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
     rebuild_user_feed_page(user)
-    content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
+    content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
     assert "Alpha City Council" in content
 
 def test_rebuild_user_feed_page_excludes_unsubscribed_stories(user_archive):
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-1"}
     rebuild_user_feed_page(user)
-    content = (user_archive / "_users" / "Jane_Doe" / "index.html").read_text()
+    content = (user_archive / "users" / "Jane_Doe" / "index.html").read_text()
     assert "Beta City Council" not in content
 
 def test_rebuild_user_feed_page_includes_old_stories(tmp_path, monkeypatch):
     """Stories from years ago must appear in the blog — no date filter."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "old_channel"
     meeting_dir = _make_meeting(channel_dir, "2020-01-01", "VIDold12345", "Old Meeting")
@@ -639,7 +649,7 @@ def test_rebuild_user_feed_page_includes_old_stories(tmp_path, monkeypatch):
 
     user = {"name": "Test User", "channels": {"UC_OLD_ID": []}, "feed_token": "test-token-2"}
     rebuild_user_feed_page(user)
-    content = (tmp_path / "_users" / "Test_User" / "index.html").read_text()
+    content = (tmp_path / "users" / "Test_User" / "index.html").read_text()
     assert "Very Old Story" in content
 
 
@@ -656,6 +666,7 @@ def test_process_feed_empty_videos_returns_three_tuple(tmp_path, monkeypatch):
     """
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [])
 
     feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
@@ -668,6 +679,7 @@ def test_process_feed_empty_videos_content_changed_when_no_rss(tmp_path, monkeyp
     """content_changed is True on empty discover when rss.xml doesn't exist yet."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [])
 
     feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
@@ -679,6 +691,7 @@ def test_process_feed_empty_videos_no_content_changed_when_rss_exists(tmp_path, 
     """content_changed is False on empty discover when rss.xml already exists."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [])
 
     channel_dir = tmp_path / "Test_Channel"
@@ -731,12 +744,13 @@ def test_build_user_feed_xml_does_not_write_to_disk(user_archive):
     """Key contract: build_user_feed_xml must never touch the filesystem."""
     user = {"name": "Jane Doe", "channels": {"UC_ALPHA_ID": []}}
     build_user_feed_xml(user)
-    assert not (user_archive / "_users" / "Jane_Doe" / "rss.xml").exists()
+    assert not (user_archive / "users" / "Jane_Doe" / "rss.xml").exists()
 
 def test_build_user_feed_xml_skips_ignored_too_old(tmp_path, monkeypatch):
     """Stories from ignored_too_old meetings must not appear in the feed."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "test_ch"
     m_ignored = _make_meeting(channel_dir, "2000-01-01", "OLDVID12345", "Old Meeting",
@@ -767,7 +781,7 @@ def test_rebuild_user_feed_writes_same_stories_as_build_user_feed_xml(user_archi
 
     xml_bytes = build_user_feed_xml(user)
     rebuild_user_feed(user)
-    written = (user_archive / "_users" / "Compare" / "rss.xml").read_bytes()
+    written = (user_archive / "users" / "Compare" / "rss.xml").read_bytes()
 
     # Both must include Alpha stories …
     assert b"Story 1 from Alpha City Council" in xml_bytes
@@ -786,6 +800,7 @@ def parity_archive(tmp_path, monkeypatch):
     """Archive with two channels, two stories each; all meetings are recent."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     _setup_channel(tmp_path, "channel_a", "UC_PA_ID", "Channel A", story_count=2)
     _setup_channel(tmp_path, "channel_b", "UC_PB_ID", "Channel B", story_count=2)
     return tmp_path
@@ -801,7 +816,7 @@ def test_feed_and_blog_contain_same_story_titles(parity_archive):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_feed_page(user)
-    blog_html = (parity_archive / "_users" / "Parity" / "index.html").read_text()
+    blog_html = (parity_archive / "users" / "Parity" / "index.html").read_text()
 
     expected_titles = [
         "Story 1 from Channel A",
@@ -824,7 +839,7 @@ def test_feed_and_blog_exclude_same_unsubscribed_stories(parity_archive):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_feed_page(user)
-    blog_html = (parity_archive / "_users" / "Selective" / "index.html").read_text()
+    blog_html = (parity_archive / "users" / "Selective" / "index.html").read_text()
 
     assert "Story 1 from Channel A" in feed_xml
     assert "Story 1 from Channel A" in blog_html
@@ -842,7 +857,7 @@ def test_feed_and_blog_empty_when_no_subscriptions(parity_archive):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_feed_page(user)
-    blog_html = (parity_archive / "_users" / "Empty" / "index.html").read_text()
+    blog_html = (parity_archive / "users" / "Empty" / "index.html").read_text()
 
     assert "Channel A" not in feed_xml
     assert "Channel B" not in feed_xml
@@ -854,6 +869,7 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
     """Old stories must appear in both the RSS feed and the blog — neither has a date filter."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "old_ch"
     old_meta = {
@@ -874,7 +890,7 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
 
     feed_xml = build_user_feed_xml(user).decode()
     rebuild_user_feed_page(user)
-    blog_html = (tmp_path / "_users" / "Time" / "index.html").read_text()
+    blog_html = (tmp_path / "users" / "Time" / "index.html").read_text()
 
     assert "Ancient Story" in feed_xml,  "Old stories must appear in RSS feed"
     assert "Ancient Story" in blog_html, "Old stories must appear in blog — no date filter"
@@ -889,7 +905,7 @@ def test_resolve_content_dir_absolute(tmp_path):
     custom = tmp_path / "my_content"
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"content_dir": str(custom)}))
-    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == custom
 
 
@@ -897,7 +913,7 @@ def test_resolve_content_dir_relative(tmp_path):
     """A relative content_dir is resolved against base_dir."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"content_dir": "subdir/content"}))
-    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == (tmp_path / "subdir" / "content").resolve()
 
 
@@ -905,7 +921,7 @@ def test_resolve_content_dir_absent_defaults_to_base_content(tmp_path):
     """When content_dir is omitted, STORAGE_ROOT defaults to base_dir/content."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
-    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == tmp_path / "content"
 
 
@@ -913,7 +929,7 @@ def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
     """An explicit empty string for content_dir is treated the same as absent."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"content_dir": ""}))
-    storage_root, _ = _resolve_early_config(cfg, tmp_path)
+    storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == tmp_path / "content"
 
 
@@ -921,7 +937,7 @@ def test_resolve_request_timeout_custom(tmp_path):
     """A configured request_timeout is returned as an int."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"request_timeout": 30}))
-    _, timeout = _resolve_early_config(cfg, tmp_path)
+    _, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert timeout == 30
 
 
@@ -929,14 +945,14 @@ def test_resolve_request_timeout_absent_defaults_to_15(tmp_path):
     """When request_timeout is omitted the default of 15 is returned."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
-    _, timeout = _resolve_early_config(cfg, tmp_path)
+    _, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert timeout == 15
 
 
 def test_resolve_falls_back_on_missing_config_file(tmp_path):
     """If TubeNews.json does not exist both defaults are returned without raising."""
     missing = tmp_path / "no_such_file.json"
-    storage_root, timeout = _resolve_early_config(missing, tmp_path)
+    storage_root, _, timeout = _resolve_early_config(missing, tmp_path)
     assert storage_root == tmp_path / "content"
     assert timeout == 15
 
@@ -945,7 +961,7 @@ def test_resolve_falls_back_on_invalid_json(tmp_path):
     """Corrupt JSON must not crash — defaults are returned instead."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text("{ NOT VALID JSON }")
-    storage_root, timeout = _resolve_early_config(cfg, tmp_path)
+    storage_root, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert storage_root == tmp_path / "content"
     assert timeout == 15
 
@@ -954,7 +970,7 @@ def test_resolve_request_timeout_is_int_not_string(tmp_path):
     """request_timeout must be returned as int even if stored as a JSON number."""
     cfg = tmp_path / "TubeNews.json"
     cfg.write_text(json.dumps({"request_timeout": 45}))
-    _, timeout = _resolve_early_config(cfg, tmp_path)
+    _, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert isinstance(timeout, int)
 
 
@@ -986,6 +1002,7 @@ def test_main_body_rejects_duplicate_channel_ids(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr(_tn_local, "CONFIG_FILE", config_file)
     monkeypatch.setattr(_tn_local, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_local, "STATE_ROOT", tmp_path)
     monkeypatch.setattr(
         _tn_local, "Supadata",
         lambda api_key: supadata_called.append(api_key) or object()
@@ -1441,13 +1458,15 @@ def _make_user_dir(users_dir, channel_id, focuses, channel_ids=None):
 def test_collect_channel_focuses_feed_only(tmp_path, monkeypatch):
     """Only feed_focus, no subscribers → returns [(feed_focus, [])] (unrestricted)."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
     assert result == [("housing, zoning", [])]
 
 def test_collect_channel_focuses_user_focus_added(tmp_path, monkeypatch):
     """User focus for the channel is appended after feed_focus with the user's ID."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
+    users = tmp_path / "users"
     users.mkdir()
     uid_dir = _make_user_dir(users, "UCxxx", ["transit, roads"])
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
@@ -1460,7 +1479,8 @@ def test_collect_channel_focuses_user_focus_added(tmp_path, monkeypatch):
 def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypatch):
     """A user not subscribed to the channel must not contribute focuses."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
+    users = tmp_path / "users"
     users.mkdir()
     _make_user_dir(users, "UCxxx", ["transit"], channel_ids=["UCother"])
     result = _collect_channel_focuses("UCxxx", "housing")
@@ -1469,7 +1489,8 @@ def test_collect_channel_focuses_user_not_subscribed_excluded(tmp_path, monkeypa
 def test_collect_channel_focuses_deduplication(tmp_path, monkeypatch):
     """Same focus from two users → one entry with both user IDs."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
+    users = tmp_path / "users"
     users.mkdir()
     uid1 = _make_user_dir(users, "UCxxx", ["housing, zoning"])
     uid2 = _make_user_dir(users, "UCxxx", ["housing, zoning"])
@@ -1482,7 +1503,8 @@ def test_collect_channel_focuses_deduplication(tmp_path, monkeypatch):
 def test_collect_channel_focuses_cap(tmp_path, monkeypatch):
     """Total focuses are capped at MAX_FOCUSES_PER_CHANNEL."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
+    users = tmp_path / "users"
     users.mkdir()
     for i in range(MAX_FOCUSES_PER_CHANNEL + 3):
         _make_user_dir(users, "UCxxx", [f"focus_{i}"])
@@ -1492,13 +1514,15 @@ def test_collect_channel_focuses_cap(tmp_path, monkeypatch):
 def test_collect_channel_focuses_fallback_empty(tmp_path, monkeypatch):
     """No config and no subscribers → [("", [])]."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
     result = _collect_channel_focuses("UCxxx", "")
     assert result == [("", [])]
 
 def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path, monkeypatch):
     """When a user focus matches the feed-level focus it stays unrestricted."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
+    users = tmp_path / "users"
     users.mkdir()
     _make_user_dir(users, "UCxxx", ["housing, zoning"])
     result = _collect_channel_focuses("UCxxx", "housing, zoning")
@@ -1507,7 +1531,8 @@ def test_collect_channel_focuses_feed_focus_absorbs_matching_user_focus(tmp_path
 def test_collect_channel_focuses_user_ids_merged_across_users(tmp_path, monkeypatch):
     """Two users sharing a focus get their IDs merged into one entry."""
     monkeypatch.setattr(_tn, "STORAGE_ROOT", tmp_path)
-    users = tmp_path / "_users"
+    monkeypatch.setattr(_tn, "STATE_ROOT", tmp_path)
+    users = tmp_path / "users"
     users.mkdir()
     uid1 = _make_user_dir(users, "UCxxx", ["roads"])
     uid2 = _make_user_dir(users, "UCxxx", ["roads"])
@@ -1524,6 +1549,7 @@ def test_process_feed_processes_new_video(tmp_path, monkeypatch):
     """process_feed must fetch a transcript, call Gemini, and write story files."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1563,6 +1589,7 @@ def test_process_feed_skips_video_with_no_transcript(tmp_path, monkeypatch):
     """When fetch_transcript returns None, the video must be skipped and no stories written."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1587,6 +1614,7 @@ def test_process_feed_propagates_ai_rate_limit(tmp_path, monkeypatch):
     """When Gemini returns False (429), process_feed must set ai_rate_limited=True."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1610,6 +1638,7 @@ def test_process_feed_gemini_no_stories_writes_no_stories_metadata(tmp_path, mon
     """When Gemini returns an empty list, metadata must be written with status 'no_stories'."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1656,6 +1685,7 @@ def test_rebuild_aggregate_feed_skips_corrupt_metadata(tmp_path, monkeypatch):
     """rebuild_aggregate_feed must skip directories with corrupt metadata.json."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     # Good channel
     good_dir = _make_meeting(tmp_path / "good_channel", "2026-03-01", "VID_GOOD", "Good Meeting")
@@ -1675,6 +1705,7 @@ def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
     """build_user_feed_xml must skip channels whose channel.json is unreadable."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     # Good channel
     good_dir = _setup_channel(tmp_path, "good_channel", "UC_GOOD_ID", "Good Channel")
@@ -1701,6 +1732,7 @@ def test_rebuild_user_feed_page_skips_corrupt_story_file(tmp_path, monkeypatch):
     """rebuild_user_feed_page must produce a page even when a story .md file is corrupt."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = _setup_channel(tmp_path, "alpha_city", "UC_ALPHA_ID", "Alpha City Council")
 
@@ -1711,7 +1743,7 @@ def test_rebuild_user_feed_page_skips_corrupt_story_file(tmp_path, monkeypatch):
     user = {"name": "Alice", "channels": {"UC_ALPHA_ID": []}, "feed_token": "test-token-xyz"}
     rebuild_user_feed_page(user)  # must not raise
 
-    html = (tmp_path / "_users" / "Alice" / "index.html").read_text()
+    html = (tmp_path / "users" / "Alice" / "index.html").read_text()
     assert "Story 1 from Alpha City Council" in html
 
 
@@ -1723,6 +1755,7 @@ def test_check_supadata_quota_no_file_proceeds(tmp_path, monkeypatch):
     """When no cached balance file exists, quota check returns ok=True."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
     assert ok is True
     assert balance is None
@@ -1732,8 +1765,8 @@ def test_check_supadata_quota_credits_remaining(tmp_path, monkeypatch):
     """When credits are available, quota check returns ok=True."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "_run_logs").mkdir()
-    (tmp_path / "_run_logs" / "supadata_balance.json").write_text(json.dumps({
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_text(json.dumps({
         "maxCredits": 1000, "usedCredits": 500, "plan": "starter",
     }))
     ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
@@ -1745,8 +1778,8 @@ def test_check_supadata_quota_exhausted(tmp_path, monkeypatch):
     """When usedCredits == maxCredits, quota check returns ok=False."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "_run_logs").mkdir()
-    (tmp_path / "_run_logs" / "supadata_balance.json").write_text(json.dumps({
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_text(json.dumps({
         "maxCredits": 1000, "usedCredits": 1000, "plan": "starter",
         "resetDate": "2026-04-01",
     }))
@@ -1759,8 +1792,8 @@ def test_check_supadata_quota_over_limit(tmp_path, monkeypatch):
     """When usedCredits exceeds maxCredits, quota check returns ok=False."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "_run_logs").mkdir()
-    (tmp_path / "_run_logs" / "supadata_balance.json").write_text(json.dumps({
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_text(json.dumps({
         "maxCredits": 1000, "usedCredits": 1001, "plan": "starter",
     }))
     ok, _ = _check_supadata_quota({"supadata_api_key": "key"})
@@ -1771,8 +1804,8 @@ def test_check_supadata_quota_corrupt_file_proceeds(tmp_path, monkeypatch):
     """A corrupt balance file is treated as 'unknown' — proceed optimistically."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
-    (tmp_path / "_run_logs").mkdir()
-    (tmp_path / "_run_logs" / "supadata_balance.json").write_bytes(b"\xff\xfe not json")
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "supadata_balance.json").write_bytes(b"\xff\xfe not json")
     ok, balance = _check_supadata_quota({"supadata_api_key": "key"})
     assert ok is True
     assert balance is None
@@ -1868,6 +1901,7 @@ def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
     from TubeNews import _needs_processing
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
     feed_dir = tmp_path / "test_channel"
@@ -1948,6 +1982,7 @@ def test_process_video_skips_shorts_permanently(tmp_path, monkeypatch):
     from TubeNews import _needs_processing
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: True)
 
     feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
@@ -1980,6 +2015,7 @@ def test_process_video_short_check_not_called_for_cached_transcript(tmp_path, mo
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     short_check_calls = []
     monkeypatch.setattr(TubeNews, "_is_youtube_short",
                         lambda *a, **kw: short_check_calls.append(1) or True)
@@ -2011,6 +2047,7 @@ def test_process_feed_skips_short_video(tmp_path, monkeypatch):
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
         {"id": "SHORT1234567", "title": "Cool Short", "date": yesterday},
@@ -2034,6 +2071,7 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
     import threading
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -2178,3 +2216,194 @@ def test_fetch_transcript_live_stream_returns_none_no_quota_event():
     result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
     assert result is None
     assert not event.is_set()
+
+# ---------------------------------------------------------------------------
+# _read_channels
+# ---------------------------------------------------------------------------
+
+def test_read_channels_reads_state_channels_json(tmp_path, monkeypatch):
+    """_read_channels returns channels from state/channels.json when it exists."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "CONFIG_FILE", tmp_path / "TubeNews.json")
+    (tmp_path / "channels.json").write_text(json.dumps([
+        {"channel_id": "UCaaa", "channel_name": "Test Channel", "focus": "housing"},
+    ]))
+    result = _read_channels()
+    assert len(result) == 1
+    assert result[0]["channel_id"] == "UCaaa"
+
+
+def test_read_channels_falls_back_to_tubenews_json(tmp_path, monkeypatch):
+    """_read_channels falls back to feeds[] in TubeNews.json when state/channels.json absent."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path / "state")
+    cfg = tmp_path / "TubeNews.json"
+    cfg.write_text(json.dumps({"feeds": [
+        {"channel_id": "UCbbb", "channel_name": "Fallback Channel", "focus": "transit"},
+    ]}))
+    monkeypatch.setattr(TubeNews, "CONFIG_FILE", cfg)
+    result = _read_channels()
+    assert len(result) == 1
+    assert result[0]["channel_id"] == "UCbbb"
+
+
+def test_read_channels_returns_empty_when_nothing_configured(tmp_path, monkeypatch):
+    """_read_channels returns [] when neither source exists."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(TubeNews, "CONFIG_FILE", tmp_path / "nonexistent.json")
+    result = _read_channels()
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _read_push_queue / _remove_from_queue
+# ---------------------------------------------------------------------------
+
+def test_read_push_queue_absent_file(tmp_path, monkeypatch):
+    """Returns [] when the queue file does not exist."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    result = _read_push_queue(60)
+    assert result == []
+
+
+def test_read_push_queue_all_fresh(tmp_path, monkeypatch):
+    """Returns [] when all entries were queued less than min_age_minutes ago."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    now = time.time()
+    (queue_dir / "push_queue.json").write_text(json.dumps([
+        {"video_id": "vid1", "channel_id": "UCx", "queued_at": now - 30},  # 30s ago
+    ]))
+    result = _read_push_queue(60)  # min_age = 60 min
+    assert result == []
+
+
+def test_read_push_queue_returns_ripe_entries(tmp_path, monkeypatch):
+    """Returns only entries old enough to process."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    now = time.time()
+    (queue_dir / "push_queue.json").write_text(json.dumps([
+        {"video_id": "old_vid", "channel_id": "UCx", "queued_at": now - 400 * 60},  # 400 min ago
+        {"video_id": "new_vid", "channel_id": "UCx", "queued_at": now - 10},         # 10s ago
+    ]))
+    result = _read_push_queue(360)  # min_age = 360 min
+    assert len(result) == 1
+    assert result[0]["video_id"] == "old_vid"
+
+
+def test_remove_from_queue_removes_correct_ids(tmp_path, monkeypatch):
+    """Removes entries with matching video_ids; others survive."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    queue_path = queue_dir / "push_queue.json"
+    queue_path.write_text(json.dumps([
+        {"video_id": "remove_me", "channel_id": "UCx", "queued_at": 0},
+        {"video_id": "keep_me",   "channel_id": "UCy", "queued_at": 0},
+    ]))
+    _remove_from_queue({"remove_me"})
+    remaining = json.loads(queue_path.read_text())
+    assert len(remaining) == 1
+    assert remaining[0]["video_id"] == "keep_me"
+
+
+def test_remove_from_queue_noop_when_absent(tmp_path, monkeypatch):
+    """No-op (no exception) when the queue file does not exist."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    _remove_from_queue({"vid1"})  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _wsb_record_subscription / _wsb_remove_subscription
+# ---------------------------------------------------------------------------
+
+def test_wsb_record_subscription_roundtrip(tmp_path, monkeypatch):
+    """Records a subscription and re-reads it correctly."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    _wsb_record_subscription("UCtest123", "https://example.com/push")
+    subs = json.loads((tmp_path / "subscriptions.json").read_text())
+    assert "UCtest123" in subs
+    assert subs["UCtest123"]["callback_url"] == "https://example.com/push"
+    assert "subscribed_at" in subs["UCtest123"]
+
+
+def test_wsb_remove_subscription_removes_entry(tmp_path, monkeypatch):
+    """Removes the entry for the given channel_id."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "subscriptions.json").write_text(json.dumps({
+        "UCremove": {"subscribed_at": 0, "lease_seconds": 604800},
+        "UCkeep":   {"subscribed_at": 0, "lease_seconds": 604800},
+    }))
+    _wsb_remove_subscription("UCremove")
+    subs = json.loads((tmp_path / "subscriptions.json").read_text())
+    assert "UCremove" not in subs
+    assert "UCkeep" in subs
+
+
+def test_wsb_remove_subscription_noop_when_absent(tmp_path, monkeypatch):
+    """No-op when subscriptions.json does not exist."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    _wsb_remove_subscription("UCany")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# process_feed(forced_video_ids=...)
+# ---------------------------------------------------------------------------
+
+def test_process_feed_forced_video_ids_skips_discover_videos(tmp_path, monkeypatch):
+    """When forced_video_ids is provided, discover_videos is never called."""
+    import TubeNews
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    discover_called = []
+    monkeypatch.setattr(TubeNews, "discover_videos",
+                        lambda *a, **kw: discover_called.append(a) or [])
+
+    feed = {"channel_id": "UCforced", "channel_name": "Forced Channel", "focus": ""}
+    feed_dir = tmp_path / "Forced_Channel"
+    feed_dir.mkdir()
+
+    mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
+    process_feed(feed, mock_client, {}, forced_video_ids=["nonexistent_vid"])
+
+    assert discover_called == [], "discover_videos must not be called when forced_video_ids is set"
+
+
+def test_process_feed_forced_video_ids_processes_only_specified(tmp_path, monkeypatch):
+    """Only the specified video ID is processed; no same-day hold is applied."""
+    import TubeNews
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    processed_ids = []
+
+    def fake_process_video(video_id, **kw):
+        processed_ids.append(video_id)
+        return ("skipped", 0)
+
+    monkeypatch.setattr(TubeNews, "process_video", fake_process_video)
+
+    feed = {"channel_id": "UCforced2", "channel_name": "Forced Two", "focus": ""}
+    feed_dir = tmp_path / "Forced_Two"
+    feed_dir.mkdir()
+
+    mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
+    process_feed(feed, mock_client, {}, forced_video_ids=["vid_forced_001"])
+
+    assert "vid_forced_001" in processed_ids

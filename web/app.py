@@ -62,6 +62,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from TubeNews import (  # noqa: E402
     STORAGE_ROOT,
+    STATE_ROOT,
     FeedConfig,
     ParsedStory,
     parse_story_file,
@@ -69,11 +70,13 @@ from TubeNews import (  # noqa: E402
     slugify,
     rebuild_feed,
     rebuild_aggregate_feed,
+    _wsb_subscribe,
+    _wsb_unsubscribe,
 )
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
-USERS_ROOT = STORAGE_ROOT / "_users"
-LOCK_FILE = STORAGE_ROOT / ".tubenews.lock"
+USERS_ROOT = STATE_ROOT / "users"
+LOCK_FILE = STATE_ROOT / ".tubenews.lock"
 TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 
 # Path-component validation for comment routes.
@@ -346,15 +349,27 @@ def _load_config() -> dict:
         return {}
 
 
-def _save_feeds(feeds: list[FeedConfig]) -> None:
-    cfg = _load_config()
-    cfg["feeds"] = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
-    tmp = CONFIG_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, indent=2))
-    tmp.replace(CONFIG_FILE)
+def _save_channels(feeds: list[FeedConfig]) -> None:
+    """Atomically write the channel list to ``state/channels.json``."""
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    sorted_feeds = sorted(feeds, key=lambda ch: ch.get("channel_name", "").lower())
+    tmp = STATE_ROOT / "channels.json.tmp"
+    tmp.write_text(json.dumps(sorted_feeds, indent=2))
+    tmp.replace(STATE_ROOT / "channels.json")
 
 
 def _load_channels() -> list[FeedConfig]:
+    """Return configured channels, reading from ``state/channels.json``.
+
+    Falls back to ``feeds[]`` in ``TubeNews.json`` for backward compatibility
+    with installs that have not yet been migrated.
+    """
+    channels_file = STATE_ROOT / "channels.json"
+    if channels_file.exists():
+        try:
+            return json.loads(channels_file.read_text())
+        except Exception:
+            pass
     try:
         return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
     except Exception:
@@ -1764,7 +1779,7 @@ def admin_user_add():
 @login_required
 @admin_required
 def admin_runs():
-    run_log_path = STORAGE_ROOT / "_run_logs" / "run_log.json"
+    run_log_path = STATE_ROOT / "run_logs" / "run_log.json"
     try:
         runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
     except Exception:
@@ -1772,7 +1787,7 @@ def admin_runs():
     starting = request.args.get("starting") == "1"
     is_running = _is_running() or starting
     # Determine which historical runs have a log file available.
-    run_logs_dir = STORAGE_ROOT / "_run_logs"
+    run_logs_dir = STATE_ROOT / "run_logs"
     for run in runs:
         pid = run.get("pid")
         run["has_log"] = bool(pid and (run_logs_dir / f"run-{pid}.log").exists())
@@ -1816,7 +1831,7 @@ def admin_run_now():
 @login_required
 @admin_required
 def admin_run_log(pid: int):
-    log_path = STORAGE_ROOT / "_run_logs" / f"run-{pid}.log"
+    log_path = STATE_ROOT / "run_logs" / f"run-{pid}.log"
     content = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     # Show the live indicator only when this specific PID is the running process.
     try:
@@ -1828,13 +1843,13 @@ def admin_run_log(pid: int):
 
 
 def _get_supadata_balance() -> dict | None:
-    """Read cached Supadata credit usage from ``content/_run_logs/supadata_balance.json``.
+    """Read cached Supadata credit usage from ``state/supadata_balance.json``.
 
     The file is written by ``TubeNews._cache_supadata_balance()`` at the end of
     each scraper run, so the web UI never blocks on a live API call.
     Returns ``None`` if the file does not exist or cannot be parsed.
     """
-    balance_path = STORAGE_ROOT / "_run_logs" / "supadata_balance.json"
+    balance_path = STATE_ROOT / "supadata_balance.json"
     if not balance_path.exists():
         return None
     try:
@@ -2006,8 +2021,12 @@ def admin_feed_add():
                 flash("A feed with that channel ID already exists.", "error")
             else:
                 channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus, "added_at": int(time.time())})
-                _save_feeds(channels)
-                flash(f"Feed '{channel_name}' added.", "success")
+                _save_channels(channels)
+                config = _load_config()
+                if _wsb_subscribe(channel_id, config):
+                    flash(f"Feed '{channel_name}' added and subscribed to WebSub.", "success")
+                else:
+                    flash(f"Feed '{channel_name}' added. (WebSub not configured — skipped.)", "success")
                 return redirect(url_for("admin_feeds"))
     return render_template("admin_feed.html", feed=None, channel_id=None)
 
@@ -2090,7 +2109,7 @@ def admin_feed_edit(channel_id: str):
                         except OSError:
                             pass  # non-fatal; next rebuild_feed will overwrite it
                     channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
-                    _save_feeds(channels)
+                    _save_channels(channels)
                     flash(f"Feed '{channel_name}' updated.", "success")
                     return redirect(url_for("admin_feeds"))
         feed = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
@@ -2107,7 +2126,9 @@ def admin_feed_delete(channel_id: str):
     if idx is None:
         abort(404)
     removed = channels.pop(idx)
-    _save_feeds(channels)
+    config = _load_config()
+    _wsb_unsubscribe(removed["channel_id"], config)
+    _save_channels(channels)
     flash(f"Feed '{removed['channel_name']}' removed.", "success")
     return redirect(url_for("admin_feeds"))
 

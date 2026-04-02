@@ -21,6 +21,7 @@ TubeNews/
 ├── TubeNews.py              # Main application (single-file)
 ├── TubeNews.json            # Runtime config (gitignored — copy from .sample)
 ├── TubeNews.json.sample     # Config template
+├── channels.json.sample     # Channel config template (copied to state/channels.json)
 ├── requirements.txt         # Python dependencies
 ├── README.md
 ├── CLAUDE.md                # This file
@@ -76,7 +77,7 @@ YouTube channel Atom RSS feed
 
 ### Key Design Decisions
 
-- **Filesystem as database:** Processed state is stored entirely in `content/`. No database required.
+- **Filesystem as database:** Story content is stored in `content/`; internal state (users, run logs, channel config, lock file) is stored in the sibling `state/` directory. No database required.
 - **Incremental processing:** A video with an existing `metadata.json` is always skipped.
 - **Auto-catchup for new feeds:** When a channel is added for the first time, only the most recent video is processed; the rest are marked `ignored_too_old`.
 - **Transcript caching:** If `transcript.txt` already exists in a video directory, Supadata is not called again — AI runs on the cached transcript instead. This allows re-running AI analysis without consuming API quota.
@@ -98,7 +99,7 @@ Defined at the top of `TubeNews.py` (and importable into `web/app.py`):
 | `GeminiStory` | `title`, `dateline`, `content` (`str`), `start_time_seconds` (`int`), `topics` (`list[str]`) | `call_gemini_api()` return type; `write_story_files()` input |
 | `ParsedStory` | `title`, `dateline`, `body_html` (`str`), `start_seconds` (`int`), `topics` (`list[str]`), `content_hash` (`str`), `user_ids` (`list[str]`) | `parse_story_file()` return type; imported by `web/app.py` |
 | `MetadataDict` | `video_id`, `video_title`, `status`, `processed_at`, `processed_focuses` (`total=False`) | Internal; represents `metadata.json` content |
-| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter. Each run record written to `content/_run_logs/run_log.json` also includes a top-level `"pid"` field (`int`, `os.getpid()`) so the web UI can link to `content/_run_logs/run-<pid>.log`. |
+| `FeedResult` | `channel_id`, `channel_name` (`str`), `stories_written` (`int`) | `_main_body` / `_run_feed` inner dict; `_send_ntfy` parameter. Each run record written to `state/run_logs/run_log.json` also includes a top-level `"pid"` field (`int`, `os.getpid()`) so the web UI can link to `state/run_logs/run-<pid>.log`. |
 
 Defined in `web/app.py`:
 
@@ -117,11 +118,12 @@ Defined in `web/app.py`:
 | Function | Description |
 |---|---|
 | `slugify(text)` | Converts a string to a filesystem-safe slug (non-alphanumeric → underscore). Defined in `tubenews_utils.py`; re-exported by `TubeNews.py`. |
+| `resolve_roots(config_file, base_dir)` | Reads `content_dir` and `state_dir` from the JSON config at *config_file*, resolves relative paths against *base_dir*, and returns `(STORAGE_ROOT, STATE_ROOT)`. Falls back to `base_dir/content` and `base_dir/state` when the keys are absent. Defined in `tubenews_utils.py`. |
 | `_fmt_no_leading_zeros(dt, fmt)` | Formats a `datetime` with `fmt` and strips POSIX-style leading zeros from day/hour fields. Portable replacement for `%-d`/`%-I`. |
 | `parse_story_file(story_path)` | Reads a `.md` story file; returns `ParsedStory`. Body lines are HTML-escaped with `html.escape()` before joining, so `body_html` is safe for `{{ ... \| safe }}` rendering. |
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* is a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
-| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `content/_users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses are read from `user["channels"][channel_id]`; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
+| `_collect_channel_focuses(channel_id, feed_focus)` | Reads `state/users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses are read from `user["channels"][channel_id]`; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
 
 ### YouTube data-gathering
 
@@ -147,8 +149,8 @@ Defined in `web/app.py`:
 | `rebuild_feed(feed_dir, feed_cfg)` | Generates `content/<channel>/rss.xml` (all stories) |
 | `rebuild_aggregate_feed(base_url)` | Generates `content/rss.xml` from all channels (all stories) |
 | `build_user_feed_xml(user, base_url)` | Builds and returns RSS feed XML bytes for a user's subscribed channels; does **not** write to disk |
-| `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `content/_users/<slug>/rss.xml` to disk |
-| `rebuild_user_feed_page(user, base_url)` | Generates `content/_users/<slug>/index.html` — a self-contained feed page with stories from subscribed channels |
+| `rebuild_user_feed(user, base_url)` | Thin CLI wrapper: calls `build_user_feed_xml` and writes `state/users/<slug>/rss.xml` to disk |
+| `rebuild_user_feed_page(user, base_url)` | Generates `state/users/<slug>/index.html` — a self-contained feed page with stories from subscribed channels |
 
 ### Processing orchestration
 
@@ -156,7 +158,8 @@ Defined in `web/app.py`:
 |---|---|
 | `process_video(video_id, ..., focuses=None, transcript_rate_limit_event=None)` | Fetch + analyse one video. *focuses* is a list of `(focus_string, user_ids)` pairs; calls Gemini once per pair and writes `**Users:**` metadata for each story. Falls back to `[(feed["focus"], [])]` (unrestricted) when omitted. Deduplicates stories by title across focus passes, merging user_ids. Returns `("content_written", n)`, `("ai_rate_limited", 0)`, `("transcript_quota_exhausted", 0)`, or `("skipped", 0)`. Skips the transcript API call immediately if `transcript_rate_limit_event` is already set. |
 | `process_feed(feed, ..., ai_rate_limit_event=None, transcript_rate_limit_event=None)` | Collects focuses via `_collect_channel_focuses`, processes all videos needing work for any focus; returns `(content_changed, ai_rate_limited, stories_written)`. Breaks out of the video loop immediately when `transcript_rate_limit_event` is set. |
-| `_check_supadata_quota(config)` | Reads `content/_run_logs/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
+| `_read_channels(config)` | Reads channel list from `state/channels.json`; falls back to `config.get("feeds", [])` when `channels.json` does not exist (migration compatibility). |
+| `_check_supadata_quota(config)` | Reads `state/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
 ---
@@ -193,16 +196,11 @@ Edit `TubeNews.json`:
   "gemini_api_key": "YOUR_GEMINI_KEY",
   "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "YOUR_SUPADATA_KEY",
-  "base_url": "",
-  "feeds": [
-    {
-      "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxxx",
-      "channel_name": "My YouTube Channel",
-      "focus": "housing, zoning, development permits, budget decisions"
-    }
-  ]
+  "base_url": ""
 }
 ```
+
+Channel configuration lives in `state/channels.json` (see `channels.json.sample`). Channels are managed via the web UI admin panel or by editing `state/channels.json` directly.
 
 ---
 
@@ -214,6 +212,9 @@ python3 TubeNews.py
 
 # Debug mode (verbose logging, shows API calls and raw responses)
 python3 TubeNews.py --debug
+
+# WebSub daemon mode (runs indefinitely; receives YouTube push notifications)
+python3 TubeNews.py --daemon
 
 # Start the web server (gunicorn — never use python3 web/app.py in any environment)
 ./serve.sh
@@ -235,7 +236,7 @@ This marks all currently visible videos as `ignored_too_old`. The main script wi
 
 ```
 content/
-├── city_channel_name/          # slugified channel_name
+├── <channel_slug>/             # slugified channel_name
 │   ├── 2026-03-14_dQw4w9WgXcQ/
 │   │   ├── transcript.txt      # Raw Supadata output (SECONDS --> TEXT)
 │   │   ├── metadata.json       # {video_id, video_title, status, processed_at}
@@ -244,20 +245,27 @@ content/
 │   ├── 2000-01-01_XXXXXXXXXXX/ # ignored_too_old stubs use 2000 date prefix
 │   │   └── metadata.json       # {status: "ignored_too_old"}
 │   └── rss.xml                 # Per-channel RSS feed
-├── _run_logs/                  # All run data (reserved — leading _ prevents slug collision)
+└── rss.xml                     # Regional aggregate feed (all channels)
+
+state/
+├── channels.json               # Channel configuration (replaces feeds[] in TubeNews.json)
+├── subscriptions.json          # WebSub subscription tracking (keyed by channel_id)
+├── .tubenews.lock              # Process lock file
+├── supadata_balance.json       # Cached Supadata credit balance (written at end of each run)
+├── run_logs/                   # Run data (replaces content/_run_logs/)
 │   ├── run_log.json            # Rolling summary of last 30 runs (written by TubeNews.py)
-│   ├── supadata_balance.json   # Cached Supadata credit usage (written by TubeNews.py)
 │   └── run-<pid>.log           # Full stdout/stderr for a single run (written by admin_run_now)
-├── _users/                     # User account data (reserved — never served publicly)
+├── users/                      # User account data (replaces content/_users/)
 │   ├── index.json              # email→UUID index for O(1) login lookup
 │   └── <uuid>/
 │       ├── user.json           # Account data (see schema in Web Application section)
 │       ├── rss.xml             # Pre-built personal feed (CLI only; web app generates dynamically)
 │       └── index.html          # Pre-built feed page (CLI only; web app generates dynamically)
-└── rss.xml                     # Regional aggregate feed (all channels)
+└── queue/
+    └── push_queue.json         # WebSub incoming video queue ({video_id, channel_id, queued_at})
 ```
 
-**Reserved directory naming convention:** Directories whose names start with `_` are reserved for internal use (e.g., `_run_logs`, `_users`). Because `slugify()` strips leading underscores, no channel name can produce a slug that starts with `_`, so there is no namespace collision risk. All content scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive_channel_stats`, etc.) skip directories whose names start with `_`.
+All content scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive_channel_stats`, etc.) operate only on `content/` and ignore `state/`. The `serve_content` route serves only files under `content/`; `state/` is never web-accessible.
 
 ### Story Markdown Format
 
@@ -301,11 +309,8 @@ Story body text in AP inverted pyramid style...
 | `gemini_api_key` | Yes | Google Gemini API key from AI Studio |
 | `gemini_model` | Yes | Gemini model name (e.g. `gemini-2.5-flash`) |
 | `supadata_api_key` | Yes | Supadata API key for transcript fetching |
-| `feeds` | Yes | Array of channel configurations (see below) |
-| `feeds[].channel_id` | Yes | YouTube channel ID (starts with `UC`) |
-| `feeds[].channel_name` | Yes | Human-readable name; used to create `content/` subfolder |
-| `feeds[].focus` | Yes | Topic guidance for the AI (e.g. "housing, zoning, permits") |
 | `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. |
+| `state_dir` | No | Path to the state directory (default: `state/` next to `TubeNews.py`). Stores users, run logs, channel config, lock file, and Supadata balance — never web-served. Use an absolute path or a path relative to `TubeNews.py`. |
 | `request_timeout` | No | Seconds before giving up on YouTube RSS and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `gemini_call_delay` | No | Seconds to sleep between consecutive Gemini API calls within a single video's focus passes (default: `5`). Keeps call rate well under the 15 RPM free-tier limit. Set to `0` to disable. |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
@@ -314,6 +319,11 @@ Story body text in AP inverted pyramid style...
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
 | `tubenews_key` | Web UI only | Flask session secret key — generate with `python -c 'import secrets; print(secrets.token_hex(32))'`; also readable from `TUBENEWS_SECRET_KEY` env var |
 | `admin_users` | No | List of email addresses granted admin access to the web UI (e.g. `["alice@example.com"]`) |
+| `websub_callback_url` | No | Public HTTPS URL TubeNews registers with YouTube's hub as the push endpoint (e.g. `https://yourdomain.com/youtube/push`). Required for `--daemon` mode. |
+| `websub_secret` | No | HMAC-SHA1 signing secret for verifying push payloads from the hub. Generate with `python3 -c 'import secrets; print(secrets.token_hex(32))'`. |
+| `websub_daemon_port` | No | Port the WebSub HTTP receiver listens on (default: `8675`). Must be accessible from the internet or a reverse proxy. |
+| `websub_min_age_minutes` | No | Minimum age (minutes) a queued push notification must reach before the processor acts on it (default: `360`). Avoids processing livestreams before they end. |
+| `websub_check_interval_minutes` | No | How often (minutes) the processor thread wakes to check for pending push notifications (default: `10`). |
 
 ---
 
@@ -380,10 +390,10 @@ and `STORAGE_ROOT` directly from `TubeNews.py`.
 
 ### User Storage
 
-Each user is stored as a UUID-named directory under `content/_users/`:
+Each user is stored as a UUID-named directory under `state/users/`:
 
 ```
-content/_users/
+state/users/
 └── <uuid>/
     ├── user.json      # account data (see schema below)
     ├── rss.xml        # personal RSS feed (pre-built by CLI; not used by web app)
@@ -444,7 +454,7 @@ compatibility (serves the RSS feed).
 Both the feed and feed page are generated fresh on each request from the live archive:
 
 **RSS feed** (`/feed/<token>.xml`):
-1. Token matched to a user in `content/_users/`
+1. Token matched to a user in `state/users/`
 2. `build_user_feed_xml()` scans `content/` and builds feedgen XML in memory
 3. XML bytes returned directly as the HTTP response — nothing written to disk
 
@@ -465,14 +475,14 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | Function | Description |
 |---|---|
 | `_load_config()` | Reads `TubeNews.json`; returns `{}` on failure |
-| `_save_feeds(feeds)` | Atomically writes updated `feeds` list back to `TubeNews.json` (write-then-rename) |
-| `_load_channels()` | Returns the `feeds` list from config |
+| `_save_channels(channels)` | Atomically writes the channel list to `state/channels.json` (write-then-rename) |
+| `_load_channels()` | Returns the channel list from `state/channels.json`; falls back to `feeds[]` in `TubeNews.json` when `channels.json` does not exist (migration compatibility) |
 | `_base_url()` | Returns `base_url` from config (empty string if not set) |
 | `_rss_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
 | `_feed_url(token)` | Builds the full `/feed/<token>.html` URL using `base_url` or `url_for` |
 | `_find_archive_dir_for_channel(channel_id)` | Scans `content/*/channel.json` and returns the `Path` whose `channel_id` matches; used by `admin_feed_edit` to locate the channel dir regardless of historical directory naming |
-| `_read_email_index()` | Returns the email→UUID dict from `content/_users/index.json`; returns `{}` on any error |
-| `_write_email_index(index)` | Atomically writes the email→UUID dict to `content/_users/index.json` (write-then-rename) |
+| `_read_email_index()` | Returns the email→UUID dict from `state/users/index.json`; returns `{}` on any error |
+| `_write_email_index(index)` | Atomically writes the email→UUID dict to `state/users/index.json` (write-then-rename) |
 | `_index_add(email, uid)` | Adds or updates an entry in the email index |
 | `_index_remove(email)` | Removes an entry from the email index |
 | `_find_user_by_email(email)` | O(1) lookup via `index.json`; falls back to a glob scan and repairs the index if the entry is missing or stale |
@@ -490,7 +500,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | `_channel_counts(stories)` | Takes a `list[StoryDict]` and returns `list[dict]` with `channel_id`, `channel_name`, and `count` keys, sorted by count descending. Used by all four feed routes to populate the channel sidebar. |
 | `_user_bundles(user_data)` | Returns the user's `bundles` list with a `slug` field added to each entry (`slugify(name).lower()`). Returns `[]` when `bundles` key is absent. |
 | `_bundle_counts(stories, bundles)` | Annotates each bundle dict with a `count` of matching stories from *stories*. Used by all four feed routes to populate bundle sidebar entries. |
-| `_get_supadata_balance()` | Reads the cached Supadata credit data from `content/_run_logs/supadata_balance.json`; returns `None` if absent. Used by `admin_feeds` to show the credit balance without a live API call. |
+| `_get_supadata_balance()` | Reads the cached Supadata credit data from `state/supadata_balance.json`; returns `None` if absent. Used by `admin_feeds` to show the credit balance without a live API call. |
 
 ### Route Map
 
@@ -545,11 +555,11 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/admin/user/<uid>/rotate-token` | `admin_rotate_token` | Issue new feed token (invalidates old URLs) |
 | POST | `/admin/user/<uid>/delete` | `admin_user_delete` | Delete account (requires email confirmation) |
 | GET | `/admin/feeds` | `admin_feeds` | Feed (channel) list |
-| GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config |
+| GET/POST | `/admin/feeds/add` | `admin_feed_add` | Add a channel to config; calls `_wsb_subscribe` after saving when WebSub is configured |
 | GET/POST | `/admin/feeds/<channel_id>/edit` | `admin_feed_edit` | Edit a channel in config; renames the archive directory when `channel_name` changes so the back catalog is preserved |
-| POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config |
+| POST | `/admin/feeds/<idx>/delete` | `admin_feed_delete` | Remove a channel from config; calls `_wsb_unsubscribe` after saving when WebSub is configured |
 | GET | `/admin/runs` | `admin_runs` | Run history; shows per-run log links and a "View log" link for the currently-running process |
-| POST | `/admin/run-now` | `admin_run_now` | Launch a manual TubeNews.py run; stdout/stderr redirected to `content/_run_logs/run-<pid>.log` |
+| POST | `/admin/run-now` | `admin_run_now` | Launch a manual TubeNews.py run; stdout/stderr redirected to `state/run_logs/run-<pid>.log` |
 | GET | `/admin/run-log/<int:pid>` | `admin_run_log` | Stream the captured log for the run with the given PID; auto-refreshes while that PID holds the lock |
 | GET | `/admin/feed` | `admin_all_stories` | Feed view of all stories from all channels — the HTML counterpart to `content/rss.xml`; links to that aggregate feed in the sub-header |
 | POST | `/admin/story/delete` | `admin_story_delete` | Delete a single story `.md` file; rebuilds the per-channel and aggregate feeds; only accepts numbered `.md` filenames (path traversal guarded) |
@@ -573,7 +583,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 - Login and register routes are rate-limited (flask-limiter). Rate limiting uses per-worker in-memory storage; with 4 gunicorn workers the effective limit is 4× the configured value. Upgrading to Redis storage would enforce a true global limit.
 - `ProxyFix` middleware (`werkzeug.middleware.proxy_fix.ProxyFix`) is applied with `x_for=1, x_proto=1, x_host=1` so rate limiting and IP logging see real client IPs when running behind nginx/Caddy. Only one proxy level is trusted — do not increase `x_for` unless there are multiple proxy hops.
 - `/logout` is POST-only with CSRF protection to prevent logout CSRF attacks.
-- `serve_content` blocks any path starting with `_`, which covers both `_users/` (account data) and `_run_logs/` (internal logs) with a single rule.
+- `serve_content` blocks any path starting with `_`. This rule was historically needed to guard `_users/` and `_run_logs/`; those directories have moved to `state/` (which is never under `content/` and never web-served), but the guard is kept for defence-in-depth.
 - `SESSION_COOKIE_SECURE` is only set when `TUBENEWS_HTTPS=true` is in the
   environment, so local dev works without HTTPS.
 - Admins are determined solely by email match against `admin_users` in
@@ -583,7 +593,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 - Changing account name or email (the `/account` info action) requires the current password, just like the password-change and delete flows.
 - `body_html` in `ParsedStory` contains HTML-escaped text joined with `<br>` tags. HTML special characters are escaped in `parse_story_file()` so the `{{ story.body_html | safe }}` in templates is safe to render.
 - User directories are deleted with `shutil.rmtree()` (not a manual file loop) so deletion works even when subdirectories are present.
-- `_save_feeds()` and `admin_user_promote()` write `TubeNews.json` atomically via write-then-rename (same pattern as `_write_email_index`), preventing a partial write from corrupting the config file.
+- `_save_channels()` writes `state/channels.json` atomically via write-then-rename (same pattern as `_write_email_index`). `admin_user_promote()` writes `TubeNews.json` by the same pattern, preventing partial writes from corrupting either file.
 
 ---
 
