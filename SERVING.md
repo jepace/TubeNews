@@ -364,14 +364,19 @@ Add a location block to your existing TubeNews nginx config:
 
 ```nginx
 location /youtube/push {
-    proxy_pass http://127.0.0.1:8675;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
+    proxy_pass         http://10.0.0.1:8675;
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+    proxy_read_timeout 30s;
 }
 ```
 
-The path in the `location` block must match the path component of
-`websub_callback_url` in `TubeNews.json`.
+Replace `10.0.0.1` with the jail IP if yours differs. The path in the
+`location` block must match the path component of `websub_callback_url` in
+`TubeNews.json`. The block is already included in
+`contrib/nginx/tubenews.org.conf`.
 
 ### Subscriptions
 
