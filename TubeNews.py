@@ -1719,7 +1719,7 @@ import http.server as _http_server
 def _wsb_receiver_thread(config: dict) -> None:
     """Thread 1: HTTP server that receives and validates WebSub push payloads.
 
-    Listens on ``127.0.0.1:{websub_daemon_port}`` (default 8675).
+    Listens on ``0.0.0.0:{websub_daemon_port}`` (default 8675).
 
     * ``GET /`` — hub subscription verification: checks that ``hub.topic``
       matches a known channel feed URL, then echoes back ``hub.challenge``.
@@ -1816,8 +1816,8 @@ def _wsb_receiver_thread(config: dict) -> None:
             self.send_response(204)
             self.end_headers()
 
-    server = _http_server.HTTPServer(("127.0.0.1", port), _Handler)
-    logger.info(f"WebSub: receiver listening on 127.0.0.1:{port}")
+    server = _http_server.HTTPServer(("0.0.0.0", port), _Handler)
+    logger.info(f"WebSub: receiver listening on 0.0.0.0:{port}")
     server.serve_forever()
 
 
