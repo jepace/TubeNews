@@ -349,6 +349,12 @@ _YT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+# Global rate limiter for Gemini API calls.  Shared across all videos and
+# focus passes so the minimum gap is enforced even between different videos
+# processed in the same daemon cycle.
+_gemini_rate_lock = threading.Lock()
+_gemini_last_call_time: float = 0.0
+
 
 def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
     """Return True if *video_id* is a YouTube Short.
@@ -539,6 +545,7 @@ def call_gemini_api(
     gemini_api_key: str,
     model_name: str,
     feed_name: str = "",
+    call_delay: float = 8.0,
 ) -> list[GeminiStory] | bool | None:
     """Send a transcript to Google Gemini and parse the returned news stories.
 
@@ -552,6 +559,13 @@ def call_gemini_api(
                 cycle because the API returned HTTP 429 (rate-limited).
         None  – any other failure; the caller should skip this video.
     """
+    global _gemini_last_call_time
+    with _gemini_rate_lock:
+        elapsed = time.time() - _gemini_last_call_time
+        if elapsed < call_delay:
+            time.sleep(call_delay - elapsed)
+        _gemini_last_call_time = time.time()
+
     api_url = (
         f"https://generativelanguage.googleapis.com/v1/models/"
         f"{model_name}:generateContent?key={gemini_api_key}"
@@ -1319,15 +1333,11 @@ def process_video(
 
     # Call Gemini once per focus, deduplicating stories by title across passes.
     # Track title → index so we can merge user_ids when the same story appears
-    # in multiple focus passes.
+    # in multiple focus passes.  Rate limiting is enforced inside call_gemini_api
+    # via _gemini_rate_lock — no per-loop delay needed here.
     seen_titles: dict[str, int] = {}
     all_stories: list = []
-    gemini_delay = config.get("gemini_call_delay", 5)
-    first_call = True
     for focus, user_ids in focuses:
-        if not first_call and gemini_delay:
-            time.sleep(gemini_delay)
-        first_call = False
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
         result = call_gemini_api(
@@ -1338,6 +1348,7 @@ def process_video(
             gemini_api_key=config["gemini_api_key"],
             model_name=config["gemini_model"],
             feed_name=channel_name,
+            call_delay=float(config.get("gemini_call_delay", 8)),
         )
         if result is False:
             return "ai_rate_limited", 0
