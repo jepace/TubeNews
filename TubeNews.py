@@ -165,6 +165,7 @@ class ParsedStory(TypedDict):
     topics: list[str]
     content_hash: str
     user_ids: list[str]
+    published: str
 
 
 class MetadataDict(TypedDict, total=False):
@@ -237,7 +238,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**")
+        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**") and not l.startswith("**Published:**")
     ]
     body_html = "<br>".join(html.escape(l) for l in body_lines)
 
@@ -256,6 +257,9 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if users_match else []
     )
 
+    published_match = re.search(r"\*\*Published:\*\*\s*(\S+)", text)
+    published = published_match.group(1) if published_match else ""
+
     return {
         "title": title,
         "dateline": dateline,
@@ -263,6 +267,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         "start_seconds": start_seconds,
         "topics": topics,
         "user_ids": user_ids,
+        "published": published,
         # Keep a hash of the raw text so feed entry IDs are stable across runs.
         "content_hash": hashlib.md5(text.encode()).hexdigest(),
     }
@@ -567,6 +572,7 @@ def write_story_files(
     meeting_dir: Path,
     video_id: str = "",
     *,
+    video_date: str = "",
     clear_existing: bool = True,
     start_index: int = 1,
 ) -> None:
@@ -606,6 +612,8 @@ def write_story_files(
             fh.write(f"\n{story['content']}\n\n")
             fh.write("---\n")
             fh.write(f"**Segment Start:** {story.get('start_time_seconds', 0)}s\n")
+            if video_date:
+                fh.write(f"**Published:** {video_date}\n")
             topics = story.get("topics") or []
             if topics:
                 fh.write(f"**Topics:** {', '.join(str(t).lower().strip() for t in topics)}\n")
@@ -1287,7 +1295,7 @@ def process_video(
                 all_stories.append(story)
 
     if all_stories:
-        write_story_files(all_stories, meeting_dir, video_id)
+        write_story_files(all_stories, meeting_dir, video_id, video_date=video_date)
         metadata = {
             "video_id": video_id,
             "video_title": video_title,
@@ -1370,26 +1378,35 @@ def process_feed(
     if forced_video_ids is not None:
         # WebSub daemon path: skip RSS discovery; build synthetic VideoInfo entries.
         today_str = date.today().isoformat()
+        # Resolve titles/dates from the RSS feed first (pushed video is usually
+        # already in the feed within seconds of upload).
+        rss_lookup: dict[str, VideoInfo] = {
+            v["id"]: v for v in discover_videos(feed["channel_id"])
+        }
         videos_to_process = []
         for vid in forced_video_ids:
             if not _needs_processing(vid, feed_dir):
                 continue
-            # Try to resolve title/date from an existing archive dir.
-            existing = next(
-                (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(vid)),
-                None,
-            )
-            title = "[title unknown]"
-            vid_date = today_str
-            if existing:
-                meta_path = existing / "metadata.json"
-                if meta_path.exists():
-                    try:
-                        m = json.loads(meta_path.read_text())
-                        title = m.get("video_title", title)
-                        vid_date = existing.name.split("_")[0] or today_str
-                    except Exception:
-                        pass
+            if vid in rss_lookup:
+                title = rss_lookup[vid]["title"]
+                vid_date = rss_lookup[vid]["date"]
+            else:
+                # Fall back to existing archive dir metadata.
+                existing = next(
+                    (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(vid)),
+                    None,
+                )
+                title = "[title unknown]"
+                vid_date = today_str
+                if existing:
+                    meta_path = existing / "metadata.json"
+                    if meta_path.exists():
+                        try:
+                            m = json.loads(meta_path.read_text())
+                            title = m.get("video_title", title)
+                            vid_date = existing.name.split("_")[0] or today_str
+                        except Exception:
+                            pass
             videos_to_process.append({"id": vid, "title": title, "date": vid_date})
         if not videos_to_process:
             logger.info(f"{channel_name}: TubeNews: No new videos in push queue")

@@ -2363,25 +2363,38 @@ def test_wsb_remove_subscription_noop_when_absent(tmp_path, monkeypatch):
 # process_feed(forced_video_ids=...)
 # ---------------------------------------------------------------------------
 
-def test_process_feed_forced_video_ids_skips_discover_videos(tmp_path, monkeypatch):
-    """When forced_video_ids is provided, discover_videos is never called."""
+def test_process_feed_forced_video_ids_uses_rss_for_titles(tmp_path, monkeypatch):
+    """When forced_video_ids is provided, discover_videos is called for title lookup
+    but only the forced IDs are processed (not whatever the RSS returns)."""
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
-    discover_called = []
-    monkeypatch.setattr(TubeNews, "discover_videos",
-                        lambda *a, **kw: discover_called.append(a) or [])
+    # RSS returns a video that is NOT in forced_video_ids
+    rss_video = {"id": "rss_only_vid", "title": "RSS Only", "date": "2026-04-01"}
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [rss_video])
+
+    processed_ids = []
+
+    def fake_process_video(video_id, **kw):
+        processed_ids.append(video_id)
+        return ("skipped", 0)
+
+    monkeypatch.setattr(TubeNews, "process_video", fake_process_video)
 
     feed = {"channel_id": "UCforced", "channel_name": "Forced Channel", "focus": ""}
     feed_dir = tmp_path / "Forced_Channel"
     feed_dir.mkdir()
+    # Give the forced video a metadata stub so it looks like it needs processing
+    vid_dir = feed_dir / "2026-04-05_forced_vid"
+    vid_dir.mkdir()
 
     mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
-    process_feed(feed, mock_client, {}, forced_video_ids=["nonexistent_vid"])
+    process_feed(feed, mock_client, {}, forced_video_ids=["forced_vid"])
 
-    assert discover_called == [], "discover_videos must not be called when forced_video_ids is set"
+    assert "forced_vid" in processed_ids, "forced video must be processed"
+    assert "rss_only_vid" not in processed_ids, "RSS-only video must not be processed"
 
 
 def test_process_feed_forced_video_ids_processes_only_specified(tmp_path, monkeypatch):
