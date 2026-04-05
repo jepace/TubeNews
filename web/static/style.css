@@ -809,9 +809,10 @@ main:has(.feed-layout) {
 }
 
 .story-published {
-  font-style: normal;
-  font-size: 0.82rem;
-  opacity: 0.75;
+  font-style: italic;
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
 }
 
 .story-source {
@@ -874,8 +875,15 @@ main:has(.feed-layout) {
   flex-shrink: 0;
   appearance: none;
   -webkit-appearance: none;
+  touch-action: manipulation; /* prevent iOS double-tap zoom on buttons */
   /* margins instead of gap — gap in flex wasn't supported before iOS Safari 14.5 */
   margin: 0.2rem 0.4rem 0 0;
+}
+
+.story-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
 }
 
 .story-toolbar button:hover,
