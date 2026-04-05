@@ -323,6 +323,19 @@ _YT_RSS_NS = {
     "yt":   "http://www.youtube.com/xml/schemas/2015",
 }
 
+# Browser-like headers for YouTube requests.  YouTube doesn't actively block
+# programmatic access to public RSS feeds or redirect checks, but sending a
+# realistic User-Agent prevents the most basic bot-detection heuristics.
+_YT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
 
 def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
     """Return True if *video_id* is a YouTube Short.
@@ -337,7 +350,7 @@ def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
     prefix = f"{feed_name}: " if feed_name else ""
     try:
         with requests.get(shorts_url, allow_redirects=True, stream=True,
-                          timeout=REQUEST_TIMEOUT) as resp:
+                          timeout=REQUEST_TIMEOUT, headers=_YT_HEADERS) as resp:
             return "/shorts/" in resp.url
     except Exception as exc:
         logger.debug(f"{prefix}[{video_id}] Short check failed (treating as non-Short): {exc}")
@@ -366,7 +379,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
     for attempt in range(3):
         logger.debug(f"{prefix}YouTube RSS: Fetching feed" + (f" (retry {attempt})" if attempt else ""))
         try:
-            r = requests.get(url, timeout=REQUEST_TIMEOUT)
+            r = requests.get(url, timeout=REQUEST_TIMEOUT, headers=_YT_HEADERS)
             if r.status_code == 200:
                 resp = r
                 break
@@ -409,6 +422,7 @@ def fetch_transcript(
     feed_name: str = "",
     video_title: str = "",
     transcript_rate_limit_event: threading.Event | None = None,
+    failure_reason: list[str] | None = None,
 ) -> str | None | bool:
     """Fetch timed transcript segments from the Supadata API.
 
@@ -449,6 +463,8 @@ def fetch_transcript(
         else:
             # API returned a response but no transcript content — video has no captions.
             logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+            if failure_reason is not None:
+                failure_reason.append("no_captions")
             return False
     except Exception as exc:
         exc_str = str(exc).lower()
@@ -478,7 +494,16 @@ def fetch_transcript(
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
         elif is_permanent_no_transcript:
-            logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+            error_code = getattr(exc, "error", "") or ""
+            if "forbidden" in error_code:
+                reason = "members_only_or_restricted"
+            elif "not-found" in error_code:
+                reason = "video_not_found"
+            else:
+                reason = "no_captions"
+            logger.info(f"{prefix}Supadata: No transcript available ({reason}) — marking permanent, will not retry")
+            if failure_reason is not None:
+                failure_reason.append(reason)
             return False
         elif "live streaming" in exc_str:
             logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry next run")
@@ -1220,10 +1245,12 @@ def process_video(
             }))
             return "skipped", 0
         logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
+        _transcript_failure_reason: list[str] = []
         transcript_text = fetch_transcript(
             video_id, supadata_client,
             feed_name=channel_name, video_title=video_title,
             transcript_rate_limit_event=transcript_rate_limit_event,
+            failure_reason=_transcript_failure_reason,
         )
         if transcript_text is False:
             # Supadata says no transcript exists. For recently published videos
@@ -1245,10 +1272,12 @@ def process_video(
             # Old enough — permanent.
             meeting_dir = feed_dir / f"{video_date}_{video_id}"
             meeting_dir.mkdir(exist_ok=True)
+            skip_reason = _transcript_failure_reason[0] if _transcript_failure_reason else "no_captions"
             metadata: MetadataDict = {
                 "video_id": video_id,
                 "video_title": video_title,
                 "status": "no_transcript_available",
+                "skip_reason": skip_reason,
                 "processed_at": time.time(),
             }
             (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
@@ -1734,6 +1763,81 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
     tmp.replace(path)
 
 
+def _recover_orphaned_videos() -> int:
+    """Scan the content archive for meeting dirs that have no ``metadata.json``.
+
+    Such directories represent videos that were downloaded (or partially
+    processed) but never completed — e.g. the daemon was interrupted mid-run,
+    or the operator deleted a ``metadata.json`` to force a re-run.
+
+    Each orphaned video is added to the push queue with ``queued_at = 0`` so
+    it is immediately ripe on the next processor cycle.  Videos already in the
+    queue are left untouched (their existing ``queued_at`` is preserved).
+
+    Returns the number of newly queued videos.
+    """
+    queue_dir = STATE_ROOT / "queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    queue_path = queue_dir / "push_queue.json"
+
+    # Load existing queue so we don't duplicate entries
+    try:
+        existing: list[dict] = json.loads(queue_path.read_text()) if queue_path.exists() else []
+    except Exception:
+        existing = []
+    already_queued: set[str] = {e.get("video_id", "") for e in existing}
+
+    new_entries: list[dict] = []
+
+    for channel_dir in sorted(STORAGE_ROOT.iterdir()):
+        if not channel_dir.is_dir() or channel_dir.name.startswith("_"):
+            continue
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            cinfo = json.loads(channel_json.read_text())
+        except Exception:
+            continue
+        channel_id = cinfo.get("channel_id", "")
+        if not channel_id:
+            continue
+
+        for meeting_dir in sorted(channel_dir.iterdir()):
+            if not meeting_dir.is_dir():
+                continue
+            if (meeting_dir / "metadata.json").exists():
+                continue
+            # Directory name format: YYYY-MM-DD_videoId
+            name = meeting_dir.name
+            parts = name.split("_", 1)
+            if len(parts) != 2:
+                continue
+            video_id = parts[1]
+            if not video_id or video_id in already_queued:
+                continue
+            new_entries.append({
+                "video_id":   video_id,
+                "channel_id": channel_id,
+                "title":      "",
+                "date":       parts[0],
+                "queued_at":  0,
+            })
+            already_queued.add(video_id)
+
+    if new_entries:
+        by_vid = {e["video_id"]: e for e in existing}
+        for ne in new_entries:
+            by_vid[ne["video_id"]] = ne
+        tmp = queue_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(list(by_vid.values()), indent=2))
+        tmp.replace(queue_path)
+        ids = ", ".join(e["video_id"] for e in new_entries)
+        logger.info(f"Orphan recovery: queued {len(new_entries)} video(s): {ids}")
+
+    return len(new_entries)
+
+
 # ---------------------------------------------------------------------------
 # --daemon mode — WebSub receiver + processor threads
 # ---------------------------------------------------------------------------
@@ -1861,7 +1965,9 @@ def _wsb_processor_thread(config: dict) -> None:
 
     1. **Renewal check:** re-subscribes any channel whose WebSub lease expires
        within the next 24 hours.
-    2. **Queue processing:** reads ripe entries (older than
+    2. **Orphan recovery (once per day):** scans the content archive for meeting
+       directories without ``metadata.json`` and queues them for processing.
+    3. **Queue processing:** reads ripe entries (older than
        ``websub_min_age_minutes``), acquires the run lock, calls
        :func:`process_feed` for each affected channel, rebuilds the aggregate
        feed if anything changed, then removes processed entries from the queue.
@@ -1872,6 +1978,7 @@ def _wsb_processor_thread(config: dict) -> None:
     interval = float(config.get("websub_check_interval_minutes", 10)) * 60
     min_age = float(config.get("websub_min_age_minutes", 360))
     supadata_client = Supadata(api_key=config["supadata_api_key"])
+    _last_orphan_recovery: float = 0.0
 
     while True:
         time.sleep(interval)
@@ -1889,6 +1996,14 @@ def _wsb_processor_thread(config: dict) -> None:
                 if expires <= renew_before:
                     logger.info(f"WebSub: renewing subscription for channel {cid}")
                     _wsb_subscribe(cid, config)
+
+        # -- Orphan recovery (once per 24 h) ----------------------------------
+        if time.time() - _last_orphan_recovery >= 86400:
+            try:
+                _recover_orphaned_videos()
+            except Exception as exc:
+                logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
+            _last_orphan_recovery = time.time()
 
         # -- Queue processing -------------------------------------------------
         ripe = _read_push_queue(min_age)
