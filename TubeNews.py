@@ -238,7 +238,13 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**") and not l.startswith("**Published:**")
+        if l.strip() != "---"
+        and not l.startswith("**Segment Start:**")
+        and not l.startswith("**Source:**")
+        and not l.startswith("**Topics:**")
+        and not l.startswith("**Users:**")
+        and not l.startswith("**Published:**")   # legacy format
+        and not re.match(r"^\*Published .+\*$", l)  # current format
     ]
     body_html = "<br>".join(html.escape(l) for l in body_lines)
 
@@ -257,8 +263,13 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if users_match else []
     )
 
-    published_match = re.search(r"\*\*Published:\*\*\s*(\S+)", text)
-    published = published_match.group(1) if published_match else ""
+    # Current format: *Published April 3, 2026*  (line 2 or 3 of file)
+    # Legacy format:  **Published:** 2026-04-03  (bottom metadata block)
+    published_match = (
+        re.search(r"^\*Published (.+)\*$", text, re.MULTILINE)
+        or re.search(r"\*\*Published:\*\*\s*(\S+)", text)
+    )
+    published = published_match.group(1).strip() if published_match else ""
 
     return {
         "title": title,
@@ -404,7 +415,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
         if vid_el is None or not vid_el.text:
             continue
         pub = (pub_el.text or "").strip() if pub_el is not None else ""
-        date = pub[:10] if len(pub) >= 10 else datetime.now().strftime("%Y-%m-%d")
+        date = pub if pub else datetime.now().strftime("%Y-%m-%d")
         videos.append({
             "id":    vid_el.text.strip(),
             "title": (title_el.text or "").strip() if title_el is not None else "",
@@ -629,14 +640,29 @@ def write_story_files(
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"# {story['title']}\n")
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
+            if video_date:
+                try:
+                    # Accept full ISO 8601 (e.g. 2026-04-03T14:30:00+00:00)
+                    # or plain YYYY-MM-DD from orphan recovery.
+                    pub_dt = datetime.fromisoformat(video_date.replace("Z", "+00:00"))
+                    pub_formatted = (
+                        _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
+                        + " at "
+                        + _fmt_no_leading_zeros(pub_dt, "%I:%M %p")
+                    )
+                except ValueError:
+                    try:
+                        pub_dt = datetime.strptime(video_date, "%Y-%m-%d")
+                        pub_formatted = _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
+                    except Exception:
+                        pub_formatted = video_date
+                fh.write(f"*Published {pub_formatted}*\n")
             if video_id:
                 start_seconds = story.get('start_time_seconds', 0)
                 fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
             fh.write(f"\n{story['content']}\n\n")
             fh.write("---\n")
             fh.write(f"**Segment Start:** {story.get('start_time_seconds', 0)}s\n")
-            if video_date:
-                fh.write(f"**Published:** {video_date}\n")
             topics = story.get("topics") or []
             if topics:
                 fh.write(f"**Topics:** {', '.join(str(t).lower().strip() for t in topics)}\n")
@@ -1923,7 +1949,7 @@ def _wsb_receiver_thread(config: dict) -> None:
                 pub_el   = entry.find("atom:published", _YT_NS)
                 if vid_el is not None and ch_el is not None:
                     pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
-                    pub_date = pub_raw[:10] if pub_raw else ""  # keep YYYY-MM-DD only
+                    pub_date = pub_raw  # full ISO 8601 timestamp
                     new_entries.append({
                         "video_id":   vid_el.text.strip(),
                         "channel_id": ch_el.text.strip(),
@@ -1992,8 +2018,6 @@ def _wsb_processor_thread(config: dict) -> None:
     _ai_backoff_until: float = 0.0
 
     while True:
-        time.sleep(interval)
-
         # -- Renewal check ----------------------------------------------------
         subs_path = STATE_ROOT / "subscriptions.json"
         if subs_path.exists():
@@ -2130,6 +2154,8 @@ def _wsb_processor_thread(config: dict) -> None:
             )
         finally:
             _release_lock()
+
+        time.sleep(interval)
 
 
 def _run_daemon(config: dict) -> None:
