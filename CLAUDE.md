@@ -315,7 +315,7 @@ Story body text in AP inverted pyramid style...
 | `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. |
 | `state_dir` | No | Path to the state directory (default: `state/` next to `TubeNews.py`). Stores users, run logs, channel config, lock file, and Supadata balance — never web-served. Use an absolute path or a path relative to `TubeNews.py`. |
 | `request_timeout` | No | Seconds before giving up on YouTube RSS and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
-| `gemini_call_delay` | No | Seconds to sleep between consecutive Gemini API calls within a single video's focus passes (default: `5`). Keeps call rate well under the 15 RPM free-tier limit. Set to `0` to disable. |
+| `gemini_call_delay` | No | Minimum seconds between any two Gemini API calls, enforced globally via a lock (default: `8`). Applies across focus passes and across different videos so the free-tier 15 RPM limit is never exceeded regardless of backlog size. At 8 s the effective rate is ~7.5 RPM. Set to `0` to disable (not recommended). |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `1`; capped at number of feeds). Keep at `1` unless you have a paid Gemini tier with higher RPM limits. |
