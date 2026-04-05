@@ -2360,45 +2360,43 @@ def test_wsb_remove_subscription_noop_when_absent(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# process_feed(forced_video_ids=...)
+# process_feed(forced_videos=...)
 # ---------------------------------------------------------------------------
 
-def test_process_feed_forced_video_ids_uses_rss_for_titles(tmp_path, monkeypatch):
-    """When forced_video_ids is provided, discover_videos is called for title lookup
-    but only the forced IDs are processed (not whatever the RSS returns)."""
+def test_process_feed_forced_videos_skips_discover(tmp_path, monkeypatch):
+    """forced_videos uses the supplied VideoInfo directly; discover_videos is never called."""
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
-    # RSS returns a video that is NOT in forced_video_ids
-    rss_video = {"id": "rss_only_vid", "title": "RSS Only", "date": "2026-04-01"}
-    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [rss_video])
+    discover_called = []
+    monkeypatch.setattr(TubeNews, "discover_videos",
+                        lambda *a, **kw: discover_called.append(a) or [])
 
-    processed_ids = []
+    processed = {}
 
-    def fake_process_video(video_id, **kw):
-        processed_ids.append(video_id)
+    def fake_process_video(video_id, video_title, video_date, **kw):
+        processed[video_id] = {"title": video_title, "date": video_date}
         return ("skipped", 0)
 
     monkeypatch.setattr(TubeNews, "process_video", fake_process_video)
 
     feed = {"channel_id": "UCforced", "channel_name": "Forced Channel", "focus": ""}
-    feed_dir = tmp_path / "Forced_Channel"
-    feed_dir.mkdir()
-    # Give the forced video a metadata stub so it looks like it needs processing
-    vid_dir = feed_dir / "2026-04-05_forced_vid"
-    vid_dir.mkdir()
+    (tmp_path / "Forced_Channel").mkdir()
 
     mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
-    process_feed(feed, mock_client, {}, forced_video_ids=["forced_vid"])
+    vi = {"id": "vid_abc", "title": "Council Meeting", "date": "2026-04-05"}
+    process_feed(feed, mock_client, {}, forced_videos=[vi])
 
-    assert "forced_vid" in processed_ids, "forced video must be processed"
-    assert "rss_only_vid" not in processed_ids, "RSS-only video must not be processed"
+    assert discover_called == [], "discover_videos must not be called with forced_videos"
+    assert "vid_abc" in processed
+    assert processed["vid_abc"]["title"] == "Council Meeting"
+    assert processed["vid_abc"]["date"] == "2026-04-05"
 
 
-def test_process_feed_forced_video_ids_processes_only_specified(tmp_path, monkeypatch):
-    """Only the specified video ID is processed; no same-day hold is applied."""
+def test_process_feed_forced_videos_processes_only_specified(tmp_path, monkeypatch):
+    """Only the forced VideoInfo entries are processed; RSS is not consulted."""
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
@@ -2413,10 +2411,10 @@ def test_process_feed_forced_video_ids_processes_only_specified(tmp_path, monkey
     monkeypatch.setattr(TubeNews, "process_video", fake_process_video)
 
     feed = {"channel_id": "UCforced2", "channel_name": "Forced Two", "focus": ""}
-    feed_dir = tmp_path / "Forced_Two"
-    feed_dir.mkdir()
+    (tmp_path / "Forced_Two").mkdir()
 
     mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
-    process_feed(feed, mock_client, {}, forced_video_ids=["vid_forced_001"])
+    vi = {"id": "vid_forced_001", "title": "Meeting", "date": "2026-04-05"}
+    process_feed(feed, mock_client, {}, forced_videos=[vi])
 
     assert "vid_forced_001" in processed_ids

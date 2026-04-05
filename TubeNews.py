@@ -1328,7 +1328,7 @@ def process_feed(
     ai_rate_limit_event: threading.Event | None = None,
     transcript_rate_limit_event: threading.Event | None = None,
     *,
-    forced_video_ids: list[str] | None = None,
+    forced_videos: list[VideoInfo] | None = None,
 ) -> tuple[bool, bool, int]:
     """Process all new videos for one configured channel.
 
@@ -1343,12 +1343,11 @@ def process_feed(
     When set (Supadata quota exhausted), processing stops immediately for all
     remaining videos across all channels.
 
-    *forced_video_ids* is an optional list of specific video IDs to process.
-    When provided, :func:`discover_videos` is skipped and the same-day hold
-    check is bypassed.  Used by the WebSub daemon to process specific pushed
-    videos.  Each ID is looked up in the existing archive directory for its
-    metadata; the title and date fall back to ``"[title unknown]"`` and
-    today's date when no archive entry is found.
+    *forced_videos* is an optional list of ``VideoInfo`` dicts to process.
+    When provided, :func:`discover_videos` is skipped entirely and the same-day
+    hold check is bypassed.  Used by the WebSub daemon to process pushed videos;
+    titles and dates come directly from the hub's push payload so no extra
+    YouTube request is made.
 
     Returns:
         A ``(content_changed, ai_rate_limited, stories_written)`` tuple.
@@ -1375,39 +1374,12 @@ def process_feed(
     # all subscriber preferences), capped at MAX_FOCUSES_PER_CHANNEL.
     focuses = _collect_channel_focuses(feed["channel_id"], feed.get("focus", ""))
 
-    if forced_video_ids is not None:
-        # WebSub daemon path: skip RSS discovery; build synthetic VideoInfo entries.
-        today_str = date.today().isoformat()
-        # Resolve titles/dates from the RSS feed first (pushed video is usually
-        # already in the feed within seconds of upload).
-        rss_lookup: dict[str, VideoInfo] = {
-            v["id"]: v for v in discover_videos(feed["channel_id"])
-        }
-        videos_to_process = []
-        for vid in forced_video_ids:
-            if not _needs_processing(vid, feed_dir):
-                continue
-            if vid in rss_lookup:
-                title = rss_lookup[vid]["title"]
-                vid_date = rss_lookup[vid]["date"]
-            else:
-                # Fall back to existing archive dir metadata.
-                existing = next(
-                    (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(vid)),
-                    None,
-                )
-                title = "[title unknown]"
-                vid_date = today_str
-                if existing:
-                    meta_path = existing / "metadata.json"
-                    if meta_path.exists():
-                        try:
-                            m = json.loads(meta_path.read_text())
-                            title = m.get("video_title", title)
-                            vid_date = existing.name.split("_")[0] or today_str
-                        except Exception:
-                            pass
-            videos_to_process.append({"id": vid, "title": title, "date": vid_date})
+    if forced_videos is not None:
+        # WebSub daemon path: title and date come from the hub push payload —
+        # no extra YouTube request needed.
+        videos_to_process = [
+            v for v in forced_videos if _needs_processing(v["id"], feed_dir)
+        ]
         if not videos_to_process:
             logger.info(f"{channel_name}: TubeNews: No new videos in push queue")
             return content_changed, ai_rate_limited, stories_written
@@ -1803,13 +1775,19 @@ def _wsb_receiver_thread(config: dict) -> None:
             now = time.time()
             new_entries: list[dict] = []
             for entry in root.findall("atom:entry", _YT_NS):
-                vid_el = entry.find("yt:videoId", _YT_NS)
-                ch_el = entry.find("yt:channelId", _YT_NS)
+                vid_el   = entry.find("yt:videoId",    _YT_NS)
+                ch_el    = entry.find("yt:channelId",  _YT_NS)
+                title_el = entry.find("atom:title",    _YT_NS)
+                pub_el   = entry.find("atom:published", _YT_NS)
                 if vid_el is not None and ch_el is not None:
+                    pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
+                    pub_date = pub_raw[:10] if pub_raw else ""  # keep YYYY-MM-DD only
                     new_entries.append({
-                        "video_id": vid_el.text.strip(),
+                        "video_id":   vid_el.text.strip(),
                         "channel_id": ch_el.text.strip(),
-                        "queued_at": now,
+                        "title":      (title_el.text or "").strip() if title_el is not None else "",
+                        "date":       pub_date,
+                        "queued_at":  now,
                     })
 
             if new_entries:
@@ -1887,12 +1865,17 @@ def _wsb_processor_thread(config: dict) -> None:
             channels = _read_channels()
             channel_map = {ch["channel_id"]: ch for ch in channels}
 
-            by_channel: dict[str, list[str]] = {}
+            by_channel: dict[str, list[VideoInfo]] = {}
+            today_str = date.today().isoformat()
             for entry in ripe:
                 cid = entry.get("channel_id", "")
                 vid = entry.get("video_id", "")
                 if cid and vid and cid in channel_map:
-                    by_channel.setdefault(cid, []).append(vid)
+                    by_channel.setdefault(cid, []).append({
+                        "id":    vid,
+                        "title": entry.get("title", "") or "[title unknown]",
+                        "date":  entry.get("date", "") or today_str,
+                    })
 
             if not by_channel:
                 _remove_from_queue({e["video_id"] for e in ripe})
@@ -1902,12 +1885,12 @@ def _wsb_processor_thread(config: dict) -> None:
             transcript_event = threading.Event()
             any_changed = False
 
-            for cid, vids in by_channel.items():
+            for cid, video_infos in by_channel.items():
                 feed = channel_map[cid]
                 content_changed, _, _ = process_feed(
                     feed, supadata_client, config,
                     ai_event, transcript_event,
-                    forced_video_ids=vids,
+                    forced_videos=video_infos,
                 )
                 if content_changed:
                     rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
