@@ -415,7 +415,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
         if vid_el is None or not vid_el.text:
             continue
         pub = (pub_el.text or "").strip() if pub_el is not None else ""
-        date = pub[:10] if len(pub) >= 10 else datetime.now().strftime("%Y-%m-%d")
+        date = pub if pub else datetime.now().strftime("%Y-%m-%d")
         videos.append({
             "id":    vid_el.text.strip(),
             "title": (title_el.text or "").strip() if title_el is not None else "",
@@ -642,10 +642,20 @@ def write_story_files(
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
             if video_date:
                 try:
-                    pub_dt = datetime.strptime(video_date, "%Y-%m-%d")
-                    pub_formatted = _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
-                except Exception:
-                    pub_formatted = video_date
+                    # Accept full ISO 8601 (e.g. 2026-04-03T14:30:00+00:00)
+                    # or plain YYYY-MM-DD from orphan recovery.
+                    pub_dt = datetime.fromisoformat(video_date.replace("Z", "+00:00"))
+                    pub_formatted = (
+                        _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
+                        + " at "
+                        + _fmt_no_leading_zeros(pub_dt, "%I:%M %p")
+                    )
+                except ValueError:
+                    try:
+                        pub_dt = datetime.strptime(video_date, "%Y-%m-%d")
+                        pub_formatted = _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
+                    except Exception:
+                        pub_formatted = video_date
                 fh.write(f"*Published {pub_formatted}*\n")
             if video_id:
                 start_seconds = story.get('start_time_seconds', 0)
@@ -1939,7 +1949,7 @@ def _wsb_receiver_thread(config: dict) -> None:
                 pub_el   = entry.find("atom:published", _YT_NS)
                 if vid_el is not None and ch_el is not None:
                     pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
-                    pub_date = pub_raw[:10] if pub_raw else ""  # keep YYYY-MM-DD only
+                    pub_date = pub_raw  # full ISO 8601 timestamp
                     new_entries.append({
                         "video_id":   vid_el.text.strip(),
                         "channel_id": ch_el.text.strip(),
@@ -2008,8 +2018,6 @@ def _wsb_processor_thread(config: dict) -> None:
     _ai_backoff_until: float = 0.0
 
     while True:
-        time.sleep(interval)
-
         # -- Renewal check ----------------------------------------------------
         subs_path = STATE_ROOT / "subscriptions.json"
         if subs_path.exists():
@@ -2146,6 +2154,8 @@ def _wsb_processor_thread(config: dict) -> None:
             )
         finally:
             _release_lock()
+
+        time.sleep(interval)
 
 
 def _run_daemon(config: dict) -> None:
