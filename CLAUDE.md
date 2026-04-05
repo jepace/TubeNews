@@ -327,6 +327,7 @@ Story body text in AP inverted pyramid style...
 | `websub_daemon_port` | No | Port the WebSub HTTP receiver listens on (default: `8675`). Must be accessible from the internet or a reverse proxy. |
 | `websub_min_age_minutes` | No | Minimum age (minutes) a queued push notification must reach before the processor acts on it (default: `360`). Avoids processing livestreams before they end. |
 | `websub_check_interval_minutes` | No | How often (minutes) the processor thread wakes to check for pending push notifications (default: `10`). |
+| `websub_max_videos_per_cycle` | No | Maximum number of videos to process per processor cycle (default: `3`). Limits burst Gemini calls when a large backlog exists; remaining ripe entries are deferred to the next cycle. |
 
 ---
 

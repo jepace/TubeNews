@@ -2021,6 +2021,17 @@ def _wsb_processor_thread(config: dict) -> None:
         if not ripe:
             continue
 
+        # Cap how many videos are processed per cycle so we don't burst-call
+        # Gemini with the entire backlog at once.  Remaining entries stay ripe
+        # and are picked up next cycle.  Default: 3 videos per cycle.
+        max_per_cycle = int(config.get("websub_max_videos_per_cycle", 3))
+        if len(ripe) > max_per_cycle:
+            logger.info(
+                f"WebSub processor: {len(ripe)} ripe entries — "
+                f"processing {max_per_cycle} this cycle, {len(ripe) - max_per_cycle} deferred"
+            )
+            ripe = ripe[:max_per_cycle]
+
         if not _acquire_lock():
             logger.debug("WebSub processor: lock held by another process — skipping this cycle")
             continue
