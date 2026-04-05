@@ -110,7 +110,7 @@
     {% for story in stories %}
     <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}" data-channel-id="{{ story.channel_id }}">
       <h2>{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</h2>
-      <p class="story-dateline">{{ story.dateline }}</p>
+      <p class="story-dateline">{{ story.dateline }}{% if story.published %} <span class="story-published">&middot; Published {{ story.published }}</span>{% endif %}</p>
       <p class="story-source">
         {{ story.channel_name }}{% if story.video_title %} &mdash; <em>{{ story.video_title }}</em>{% endif %}
       </p>

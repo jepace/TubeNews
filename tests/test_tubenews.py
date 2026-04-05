@@ -34,8 +34,10 @@ from TubeNews import (
     _read_channels,
     _read_push_queue,
     _remove_from_queue,
+    _update_queue_retry_counts,
     _wsb_record_subscription,
     _wsb_remove_subscription,
+    _recover_orphaned_videos,
 )
 
 
@@ -2360,11 +2362,11 @@ def test_wsb_remove_subscription_noop_when_absent(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# process_feed(forced_video_ids=...)
+# process_feed(forced_videos=...)
 # ---------------------------------------------------------------------------
 
-def test_process_feed_forced_video_ids_skips_discover_videos(tmp_path, monkeypatch):
-    """When forced_video_ids is provided, discover_videos is never called."""
+def test_process_feed_forced_videos_skips_discover(tmp_path, monkeypatch):
+    """forced_videos uses the supplied VideoInfo directly; discover_videos is never called."""
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
@@ -2374,18 +2376,29 @@ def test_process_feed_forced_video_ids_skips_discover_videos(tmp_path, monkeypat
     monkeypatch.setattr(TubeNews, "discover_videos",
                         lambda *a, **kw: discover_called.append(a) or [])
 
+    processed = {}
+
+    def fake_process_video(video_id, video_title, video_date, **kw):
+        processed[video_id] = {"title": video_title, "date": video_date}
+        return ("skipped", 0)
+
+    monkeypatch.setattr(TubeNews, "process_video", fake_process_video)
+
     feed = {"channel_id": "UCforced", "channel_name": "Forced Channel", "focus": ""}
-    feed_dir = tmp_path / "Forced_Channel"
-    feed_dir.mkdir()
+    (tmp_path / "Forced_Channel").mkdir()
 
     mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
-    process_feed(feed, mock_client, {}, forced_video_ids=["nonexistent_vid"])
+    vi = {"id": "vid_abc", "title": "Council Meeting", "date": "2026-04-05"}
+    process_feed(feed, mock_client, {}, forced_videos=[vi])
 
-    assert discover_called == [], "discover_videos must not be called when forced_video_ids is set"
+    assert discover_called == [], "discover_videos must not be called with forced_videos"
+    assert "vid_abc" in processed
+    assert processed["vid_abc"]["title"] == "Council Meeting"
+    assert processed["vid_abc"]["date"] == "2026-04-05"
 
 
-def test_process_feed_forced_video_ids_processes_only_specified(tmp_path, monkeypatch):
-    """Only the specified video ID is processed; no same-day hold is applied."""
+def test_process_feed_forced_videos_processes_only_specified(tmp_path, monkeypatch):
+    """Only the forced VideoInfo entries are processed; RSS is not consulted."""
     import TubeNews
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
@@ -2400,10 +2413,208 @@ def test_process_feed_forced_video_ids_processes_only_specified(tmp_path, monkey
     monkeypatch.setattr(TubeNews, "process_video", fake_process_video)
 
     feed = {"channel_id": "UCforced2", "channel_name": "Forced Two", "focus": ""}
-    feed_dir = tmp_path / "Forced_Two"
-    feed_dir.mkdir()
+    (tmp_path / "Forced_Two").mkdir()
 
     mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: None)})()
-    process_feed(feed, mock_client, {}, forced_video_ids=["vid_forced_001"])
+    vi = {"id": "vid_forced_001", "title": "Meeting", "date": "2026-04-05"}
+    process_feed(feed, mock_client, {}, forced_videos=[vi])
 
     assert "vid_forced_001" in processed_ids
+
+
+# ---------------------------------------------------------------------------
+# _update_queue_retry_counts
+# ---------------------------------------------------------------------------
+
+def test_update_queue_retry_counts_increments_entry(tmp_path, monkeypatch):
+    """retry_count is updated for the matching entry; others are untouched."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    queue_path = queue_dir / "push_queue.json"
+    queue_path.write_text(json.dumps([
+        {"video_id": "aaa", "channel_id": "UC1", "queued_at": 1000, "retry_count": 1},
+        {"video_id": "bbb", "channel_id": "UC2", "queued_at": 2000},
+    ]))
+    _update_queue_retry_counts([{"video_id": "aaa", "channel_id": "UC1", "queued_at": 1000, "retry_count": 2}])
+    items = json.loads(queue_path.read_text())
+    by_vid = {i["video_id"]: i for i in items}
+    assert by_vid["aaa"]["retry_count"] == 2
+    assert "retry_count" not in by_vid["bbb"]  # untouched
+
+
+def test_update_queue_retry_counts_noop_when_absent(tmp_path, monkeypatch):
+    """No error when push_queue.json doesn't exist."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "queue").mkdir()
+    _update_queue_retry_counts([{"video_id": "aaa", "retry_count": 1}])  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# process_video — recent-video transcript grace period
+# ---------------------------------------------------------------------------
+
+def test_process_video_transient_when_no_transcript_and_recent(tmp_path, monkeypatch):
+    """When Supadata returns False (no transcript) but the video is < 48h old,
+    process_video must NOT write metadata.json (stays retryable)."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
+
+    feed = {"channel_id": "UC1", "channel_name": "Chan", "focus": ""}
+    feed_dir = tmp_path / "Chan"
+    feed_dir.mkdir()
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(Exception("no captions")))})()
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
+
+    result, n = TubeNews.process_video(
+        video_id="vid_new", video_title="New Video", video_date=today,
+        feed=feed, feed_dir=feed_dir,
+        supadata_client=mock_client, config={}, ai_disabled=False,
+    )
+    assert result == "skipped"
+    assert n == 0
+    # No metadata.json — video will be retried
+    assert not any((feed_dir / f).exists() for f in (feed_dir.iterdir() if feed_dir.exists() else []) if "metadata" in str(f))
+
+
+def test_process_video_permanent_when_no_transcript_and_old(tmp_path, monkeypatch):
+    """When Supadata returns False and the video is > 48h old, metadata.json is written."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
+
+    feed = {"channel_id": "UC1", "channel_name": "Chan", "focus": ""}
+    feed_dir = tmp_path / "Chan"
+    feed_dir.mkdir()
+    mock_client = type("C", (), {})()
+
+    old_date = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    result, n = TubeNews.process_video(
+        video_id="vid_old", video_title="Old Video", video_date=old_date,
+        feed=feed, feed_dir=feed_dir,
+        supadata_client=mock_client, config={}, ai_disabled=False,
+    )
+    assert result == "skipped"
+    meta_files = list(feed_dir.rglob("metadata.json"))
+    assert meta_files, "metadata.json must be written for old video with no transcript"
+    meta = json.loads(meta_files[0].read_text())
+    assert meta["status"] == "no_transcript_available"
+
+
+# ---------------------------------------------------------------------------
+# _recover_orphaned_videos
+# ---------------------------------------------------------------------------
+
+def _make_channel_dir(storage_root: Path, channel_name: str, channel_id: str) -> Path:
+    """Create a minimal channel directory with channel.json."""
+    channel_dir = storage_root / channel_name
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    (channel_dir / "channel.json").write_text(
+        json.dumps({"channel_id": channel_id, "channel_name": channel_name})
+    )
+    return channel_dir
+
+
+def test_recover_orphaned_videos_queues_dirs_without_metadata(tmp_path, monkeypatch):
+    """Directories with no metadata.json are added to the push queue."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    channel_dir = _make_channel_dir(tmp_path, "MyChannel", "UC123")
+    orphan = channel_dir / "2026-01-15_abcDEFGhijk"
+    orphan.mkdir()
+
+    count = _recover_orphaned_videos()
+    assert count == 1
+
+    queue = json.loads((tmp_path / "queue" / "push_queue.json").read_text())
+    assert len(queue) == 1
+    assert queue[0]["video_id"] == "abcDEFGhijk"
+    assert queue[0]["channel_id"] == "UC123"
+    assert queue[0]["date"] == "2026-01-15"
+    assert queue[0]["queued_at"] == 0  # immediately ripe
+
+
+def test_recover_orphaned_videos_skips_dirs_with_metadata(tmp_path, monkeypatch):
+    """Directories that already have metadata.json are ignored."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    channel_dir = _make_channel_dir(tmp_path, "MyChannel", "UC123")
+    done = channel_dir / "2026-01-14_videoXYZ"
+    done.mkdir()
+    (done / "metadata.json").write_text(json.dumps({"status": "processed"}))
+
+    count = _recover_orphaned_videos()
+    assert count == 0
+    assert not (tmp_path / "queue" / "push_queue.json").exists()
+
+
+def test_recover_orphaned_videos_skips_already_queued(tmp_path, monkeypatch):
+    """Videos already in the queue are not duplicated."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    channel_dir = _make_channel_dir(tmp_path, "MyChannel", "UC123")
+    orphan = channel_dir / "2026-01-15_alreadyQueued"
+    orphan.mkdir()
+
+    # Pre-populate queue with the same video
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    existing = [{"video_id": "alreadyQueued", "channel_id": "UC123", "queued_at": 999}]
+    (queue_dir / "push_queue.json").write_text(json.dumps(existing))
+
+    count = _recover_orphaned_videos()
+    assert count == 0  # nothing newly added
+
+    # Existing entry is preserved unchanged
+    queue = json.loads((queue_dir / "push_queue.json").read_text())
+    assert len(queue) == 1
+    assert queue[0]["queued_at"] == 999
+
+
+def test_recover_orphaned_videos_skips_no_channel_json(tmp_path, monkeypatch):
+    """Channel dirs without channel.json are silently skipped."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    channel_dir = tmp_path / "NoChannelJson"
+    channel_dir.mkdir()
+    orphan = channel_dir / "2026-01-15_someVideoId"
+    orphan.mkdir()
+
+    count = _recover_orphaned_videos()
+    assert count == 0
+
+
+def test_recover_orphaned_videos_returns_count(tmp_path, monkeypatch):
+    """Returns the total number of newly queued orphans across all channels."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    ch1 = _make_channel_dir(tmp_path, "ChanA", "UCA")
+    ch2 = _make_channel_dir(tmp_path, "ChanB", "UCB")
+    (ch1 / "2026-01-15_vid1").mkdir()
+    (ch1 / "2026-01-16_vid2").mkdir()
+    (ch2 / "2026-01-17_vid3").mkdir()
+    # One with metadata — should not count
+    done = ch2 / "2026-01-18_vid4"
+    done.mkdir()
+    (done / "metadata.json").write_text("{}")
+
+    count = _recover_orphaned_videos()
+    assert count == 3

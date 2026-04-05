@@ -808,6 +808,12 @@ main:has(.feed-layout) {
   margin-bottom: 0.25rem;
 }
 
+.story-published {
+  font-style: normal;
+  font-size: 0.82rem;
+  opacity: 0.75;
+}
+
 .story-source {
   font-size: 0.82rem;
   color: var(--muted);

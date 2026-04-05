@@ -124,6 +124,7 @@ Defined in `web/app.py`:
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* is a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
 | `_collect_channel_focuses(channel_id, feed_focus)` | Reads `state/users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses are read from `user["channels"][channel_id]`; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
+| `_recover_orphaned_videos()` | Scans `content/` for meeting directories that have no `metadata.json` (interrupted runs or manually deleted metadata). Each orphaned video is added to `state/queue/push_queue.json` with `queued_at = 0` so it is immediately ripe on the next processor cycle. Videos already in the queue are left untouched. Returns the number of newly queued videos. Called once per 24 hours by `_wsb_processor_thread`. |
 
 ### YouTube data-gathering
 
@@ -131,7 +132,7 @@ Defined in `web/app.py`:
 |---|---|
 | `_is_youtube_short(video_id)` | Returns `True` if the video is a YouTube Short by following the watch URL redirect and checking for `/shorts/` in the final URL. Fails open (returns `False`) on any network error so a transient check failure never skips a real video. |
 | `discover_videos(channel_id)` | Fetches YouTube's official Atom RSS feed (`feeds/videos.xml?channel_id=…`); returns `list[VideoInfo]` (up to 15 most-recent, exact ISO dates). Retries up to 3 times on network errors. |
-| `fetch_transcript(video_id, supadata_client, ..., transcript_rate_limit_event=None)` | Fetches timed transcript segments from Supadata; returns formatted string or None. When a quota-exhausted error is detected (HTTP 402 or `SupadataError` with a credit-related `error` code), sets `transcript_rate_limit_event` before returning None so callers can stop immediately. When Supadata raises an exception whose message contains `"live streaming"`, returns `None` (transient) so the video is retried next run without being permanently marked. |
+| `fetch_transcript(video_id, supadata_client, ..., transcript_rate_limit_event=None, failure_reason=None)` | Fetches timed transcript segments from Supadata; returns formatted string or `None` (transient) or `False` (permanent). When a quota-exhausted error is detected (HTTP 402 or `SupadataError` with a credit-related `error` code), sets `transcript_rate_limit_event` before returning `None`. When Supadata raises an exception whose message contains `"live streaming"`, returns `None` (transient). When it returns `False` (permanent skip), appends a reason string to *failure_reason* if provided: `"no_captions"`, `"members_only_or_restricted"`, or `"video_not_found"`. |
 
 ### AI story generation
 
@@ -298,6 +299,8 @@ Story body text in AP inverted pyramid style...
 
 `status` values: `"processed"` | `"ignored_too_old"` | `"ignored_short"` (video is a YouTube Short; will not be retried) | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried)
 
+`skip_reason` — present only when `status` is `"no_transcript_available"`. Values: `"no_captions"` (Supadata returned empty content or a generic error), `"members_only_or_restricted"` (HTTP 403 from Supadata — video is members-only or region-restricted), `"video_not_found"` (HTTP 404 from Supadata — video ID is invalid or deleted). Key absent on all other status values and on older entries.
+
 `processed_focuses` is a sorted list of all focus strings for which Gemini has been called on this video. Old `metadata.json` files that pre-date this field have no `processed_focuses` key and are treated as fully processed (not re-run).
 
 ---
@@ -346,7 +349,7 @@ pytest tests/ -v
 
 | File | Covers |
 |---|---|
-| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution |
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution, `_recover_orphaned_videos` (queues dirs without metadata, skips dirs with metadata, skips already-queued, skips missing channel.json, returns count) |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_rss_url`, `_feed_url`), user preferences |
 | `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
 

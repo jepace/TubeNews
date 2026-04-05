@@ -212,6 +212,7 @@ class StoryDict(TypedDict):
     processed_at: float
     content_hash: str
     channel_id: str
+    published: str
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +657,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                     "story_filename": entry["file"].name,
                     "processed_at": entry["meta"].get("processed_at", 0),
                     "channel_id": channel_id,
+                    "published": s.get("published", ""),
                     "comment_count": _story_comment_count(entry["file"]),
                 })
             except Exception as exc:
@@ -719,6 +721,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "processed_at": entry["meta"].get("processed_at", 0),
                 "content_hash": s.get("content_hash", ""),
                 "channel_id": entry["channel_id"],
+                "published": s.get("published", ""),
                 "comment_count": _story_comment_count(entry["file"]),
             })
         except Exception as exc:
@@ -1994,6 +1997,7 @@ def admin_all_stories():
                             "meeting_id": meeting_dir.name,
                             "story_filename": story_file.name,
                             "processed_at": meta.get("processed_at", 0),
+                            "published": s.get("published", ""),
                         })
                 except Exception as exc:
                     logger.debug(f"Skipping {meeting_dir}: {exc}")
