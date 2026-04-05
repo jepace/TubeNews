@@ -238,7 +238,13 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     dateline = lines[1].replace("*", "")
     body_lines = [
         l for l in lines[2:]
-        if l.strip() != "---" and not l.startswith("**Segment Start:**") and not l.startswith("**Source:**") and not l.startswith("**Topics:**") and not l.startswith("**Users:**") and not l.startswith("**Published:**")
+        if l.strip() != "---"
+        and not l.startswith("**Segment Start:**")
+        and not l.startswith("**Source:**")
+        and not l.startswith("**Topics:**")
+        and not l.startswith("**Users:**")
+        and not l.startswith("**Published:**")   # legacy format
+        and not re.match(r"^\*Published .+\*$", l)  # current format
     ]
     body_html = "<br>".join(html.escape(l) for l in body_lines)
 
@@ -257,8 +263,13 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if users_match else []
     )
 
-    published_match = re.search(r"\*\*Published:\*\*\s*(\S+)", text)
-    published = published_match.group(1) if published_match else ""
+    # Current format: *Published April 3, 2026*  (line 2 or 3 of file)
+    # Legacy format:  **Published:** 2026-04-03  (bottom metadata block)
+    published_match = (
+        re.search(r"^\*Published (.+)\*$", text, re.MULTILINE)
+        or re.search(r"\*\*Published:\*\*\s*(\S+)", text)
+    )
+    published = published_match.group(1).strip() if published_match else ""
 
     return {
         "title": title,
@@ -629,14 +640,19 @@ def write_story_files(
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"# {story['title']}\n")
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
+            if video_date:
+                try:
+                    pub_dt = datetime.strptime(video_date, "%Y-%m-%d")
+                    pub_formatted = _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
+                except Exception:
+                    pub_formatted = video_date
+                fh.write(f"*Published {pub_formatted}*\n")
             if video_id:
                 start_seconds = story.get('start_time_seconds', 0)
                 fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
             fh.write(f"\n{story['content']}\n\n")
             fh.write("---\n")
             fh.write(f"**Segment Start:** {story.get('start_time_seconds', 0)}s\n")
-            if video_date:
-                fh.write(f"**Published:** {video_date}\n")
             topics = story.get("topics") or []
             if topics:
                 fh.write(f"**Topics:** {', '.join(str(t).lower().strip() for t in topics)}\n")
