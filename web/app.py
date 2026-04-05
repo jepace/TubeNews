@@ -962,7 +962,8 @@ def serve_feed():
             abort(404)
         stories = [s for s in stories if s["channel_id"] in bundle_cids]
     elif active_channel_id:
-        if not any(s["channel_id"] == active_channel_id for s in stories):
+        # Show empty (not 404) when the channel exists but has no unread stories
+        if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     return render_template("feed.html", stories=stories, feed_name=feed_name,
@@ -982,6 +983,14 @@ def serve_read():
     read_set = set(current_user._data.get("read_articles", []))
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
+    query = request.args.get("q", "").strip()[:200]
+    if query:
+        q = query.lower()
+        stories = [s for s in stories if
+                   q in s["title"].lower() or
+                   q in s["body_html"].lower() or
+                   q in s["channel_name"].lower() or
+                   q in s["dateline"].lower()]
     starred_hashes = set(current_user._data.get("starred_articles", []))
     feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
@@ -995,12 +1004,12 @@ def serve_read():
             abort(404)
         stories = [s for s in stories if s["channel_id"] in bundle_cids]
     elif active_channel_id:
-        if not any(s["channel_id"] == active_channel_id for s in stories):
+        if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
-                           is_archive=True, starred_hashes=starred_hashes,
+                           is_archive=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_read"))
@@ -1034,7 +1043,7 @@ def serve_all():
             abort(404)
         stories = [s for s in stories if s["channel_id"] in bundle_cids]
     elif active_channel_id:
-        if not any(s["channel_id"] == active_channel_id for s in stories):
+        if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     current_view = url_for("serve_all", q=query) if query else url_for("serve_all")

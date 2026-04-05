@@ -243,8 +243,9 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         and not l.startswith("**Source:**")
         and not l.startswith("**Topics:**")
         and not l.startswith("**Users:**")
-        and not l.startswith("**Published:**")   # legacy format
-        and not re.match(r"^\*Published .+\*$", l)  # current format
+        and not l.startswith("**Published:**")     # legacy format (bottom block)
+        and not re.match(r"^\*Published .+\*$", l) # legacy format (italic top)
+        and not l.startswith("Published:")         # current format (plain top)
     ]
     body_html = "<br>".join(html.escape(l) for l in body_lines)
 
@@ -263,10 +264,11 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if users_match else []
     )
 
-    # Current format: *Published April 3, 2026*  (line 2 or 3 of file)
-    # Legacy format:  **Published:** 2026-04-03  (bottom metadata block)
+    # Current format: Published: April 5, 2026 at 3:15 PM  (plain, line 3)
+    # Legacy formats: *Published April 3, 2026*  or  **Published:** 2026-04-03
     published_match = (
-        re.search(r"^\*Published (.+)\*$", text, re.MULTILINE)
+        re.search(r"^Published: (.+)$", text, re.MULTILINE)
+        or re.search(r"^\*Published (.+)\*$", text, re.MULTILINE)
         or re.search(r"\*\*Published:\*\*\s*(\S+)", text)
     )
     published = published_match.group(1).strip() if published_match else ""
@@ -640,23 +642,14 @@ def write_story_files(
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"# {story['title']}\n")
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
-            if video_date:
-                try:
-                    # Accept full ISO 8601 (e.g. 2026-04-03T14:30:00+00:00)
-                    # or plain YYYY-MM-DD from orphan recovery.
-                    pub_dt = datetime.fromisoformat(video_date.replace("Z", "+00:00"))
-                    pub_formatted = (
-                        _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
-                        + " at "
-                        + _fmt_no_leading_zeros(pub_dt, "%I:%M %p")
-                    )
-                except ValueError:
-                    try:
-                        pub_dt = datetime.strptime(video_date, "%Y-%m-%d")
-                        pub_formatted = _fmt_no_leading_zeros(pub_dt, "%B %d, %Y")
-                    except Exception:
-                        pub_formatted = video_date
-                fh.write(f"*Published {pub_formatted}*\n")
+            # Record when TubeNews wrote this story (not the YouTube publish date).
+            pub_now = datetime.now()
+            pub_formatted = (
+                _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
+                + " at "
+                + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
+            )
+            fh.write(f"Published: {pub_formatted}\n")
             if video_id:
                 start_seconds = story.get('start_time_seconds', 0)
                 fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
