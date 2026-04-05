@@ -34,6 +34,7 @@ from TubeNews import (
     _read_channels,
     _read_push_queue,
     _remove_from_queue,
+    _update_queue_retry_counts,
     _wsb_record_subscription,
     _wsb_remove_subscription,
 )
@@ -2418,3 +2419,90 @@ def test_process_feed_forced_videos_processes_only_specified(tmp_path, monkeypat
     process_feed(feed, mock_client, {}, forced_videos=[vi])
 
     assert "vid_forced_001" in processed_ids
+
+
+# ---------------------------------------------------------------------------
+# _update_queue_retry_counts
+# ---------------------------------------------------------------------------
+
+def test_update_queue_retry_counts_increments_entry(tmp_path, monkeypatch):
+    """retry_count is updated for the matching entry; others are untouched."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    queue_path = queue_dir / "push_queue.json"
+    queue_path.write_text(json.dumps([
+        {"video_id": "aaa", "channel_id": "UC1", "queued_at": 1000, "retry_count": 1},
+        {"video_id": "bbb", "channel_id": "UC2", "queued_at": 2000},
+    ]))
+    _update_queue_retry_counts([{"video_id": "aaa", "channel_id": "UC1", "queued_at": 1000, "retry_count": 2}])
+    items = json.loads(queue_path.read_text())
+    by_vid = {i["video_id"]: i for i in items}
+    assert by_vid["aaa"]["retry_count"] == 2
+    assert "retry_count" not in by_vid["bbb"]  # untouched
+
+
+def test_update_queue_retry_counts_noop_when_absent(tmp_path, monkeypatch):
+    """No error when push_queue.json doesn't exist."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    (tmp_path / "queue").mkdir()
+    _update_queue_retry_counts([{"video_id": "aaa", "retry_count": 1}])  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# process_video — recent-video transcript grace period
+# ---------------------------------------------------------------------------
+
+def test_process_video_transient_when_no_transcript_and_recent(tmp_path, monkeypatch):
+    """When Supadata returns False (no transcript) but the video is < 48h old,
+    process_video must NOT write metadata.json (stays retryable)."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
+
+    feed = {"channel_id": "UC1", "channel_name": "Chan", "focus": ""}
+    feed_dir = tmp_path / "Chan"
+    feed_dir.mkdir()
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(Exception("no captions")))})()
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
+
+    result, n = TubeNews.process_video(
+        video_id="vid_new", video_title="New Video", video_date=today,
+        feed=feed, feed_dir=feed_dir,
+        supadata_client=mock_client, config={}, ai_disabled=False,
+    )
+    assert result == "skipped"
+    assert n == 0
+    # No metadata.json — video will be retried
+    assert not any((feed_dir / f).exists() for f in (feed_dir.iterdir() if feed_dir.exists() else []) if "metadata" in str(f))
+
+
+def test_process_video_permanent_when_no_transcript_and_old(tmp_path, monkeypatch):
+    """When Supadata returns False and the video is > 48h old, metadata.json is written."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
+
+    feed = {"channel_id": "UC1", "channel_name": "Chan", "focus": ""}
+    feed_dir = tmp_path / "Chan"
+    feed_dir.mkdir()
+    mock_client = type("C", (), {})()
+
+    old_date = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    result, n = TubeNews.process_video(
+        video_id="vid_old", video_title="Old Video", video_date=old_date,
+        feed=feed, feed_dir=feed_dir,
+        supadata_client=mock_client, config={}, ai_disabled=False,
+    )
+    assert result == "skipped"
+    meta_files = list(feed_dir.rglob("metadata.json"))
+    assert meta_files, "metadata.json must be written for old video with no transcript"
+    meta = json.loads(meta_files[0].read_text())
+    assert meta["status"] == "no_transcript_available"

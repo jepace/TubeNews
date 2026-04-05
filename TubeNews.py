@@ -327,18 +327,16 @@ _YT_RSS_NS = {
 def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
     """Return True if *video_id* is a YouTube Short.
 
-    Makes a GET request (with redirect-following) to the standard watch URL.
-    If YouTube redirects to a ``/shorts/`` URL the video is a Short and should
-    be skipped — Shorts are rarely longer than 60 seconds and are unlikely to
-    contain the kind of substantive content TubeNews is designed to process.
+    Fetches ``https://www.youtube.com/shorts/<id>`` with redirects enabled.
+    YouTube keeps Shorts at that URL; regular videos redirect to ``/watch``.
 
     Fails open: returns ``False`` on any network or HTTP error so a transient
     failure never causes a real meeting video to be permanently skipped.
     """
-    watch_url = f"https://www.youtube.com/watch?v={video_id}"
+    shorts_url = f"https://www.youtube.com/shorts/{video_id}"
     prefix = f"{feed_name}: " if feed_name else ""
     try:
-        with requests.get(watch_url, allow_redirects=True, stream=True,
+        with requests.get(shorts_url, allow_redirects=True, stream=True,
                           timeout=REQUEST_TIMEOUT) as resp:
             return "/shorts/" in resp.url
     except Exception as exc:
@@ -1228,7 +1226,23 @@ def process_video(
             transcript_rate_limit_event=transcript_rate_limit_event,
         )
         if transcript_text is False:
-            # Permanent: Supadata confirmed no transcript exists — never retry.
+            # Supadata says no transcript exists. For recently published videos
+            # (< 48 h) the captions may simply not be ready yet — live streams
+            # end hours after the push notification fires and YouTube takes time
+            # to process captions. Treat those as transient so the daemon retries.
+            try:
+                from datetime import datetime as _dt
+                pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
+                age_hours = (_dt.now() - pub_dt).total_seconds() / 3600
+            except Exception:
+                age_hours = float("inf")
+            if age_hours < 48:
+                logger.info(
+                    f"{channel_name}: [{video_id}] {video_title}: TubeNews: "
+                    f"No transcript yet — video is only {age_hours:.0f}h old, will retry"
+                )
+                return "skipped", 0
+            # Old enough — permanent.
             meeting_dir = feed_dir / f"{video_date}_{video_id}"
             meeting_dir.mkdir(exist_ok=True)
             metadata: MetadataDict = {
@@ -1674,6 +1688,30 @@ def _read_push_queue(min_age_minutes: float) -> list[dict]:
     return [i for i in items if i.get("queued_at", 0) <= cutoff]
 
 
+_QUEUE_MAX_RETRIES = 10
+
+
+def _update_queue_retry_counts(updated_entries: list[dict]) -> None:
+    """Update ``retry_count`` for queue entries that weren't resolved this cycle.
+
+    Reads ``push_queue.json``, replaces matching entries with the updated
+    versions (which carry an incremented ``retry_count``), and writes back
+    atomically.  No-op when the queue file is absent.
+    """
+    path = STATE_ROOT / "queue" / "push_queue.json"
+    if not path.exists():
+        return
+    try:
+        items: list[dict] = json.loads(path.read_text())
+    except Exception:
+        return
+    by_vid = {e["video_id"]: e for e in updated_entries}
+    merged = [by_vid.get(i.get("video_id"), i) for i in items]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(merged, indent=2))
+    tmp.replace(path)
+
+
 def _remove_from_queue(processed_ids: set[str]) -> None:
     """Remove entries for *processed_ids* from ``state/queue/push_queue.json``.
 
@@ -1902,8 +1940,42 @@ def _wsb_processor_thread(config: dict) -> None:
                 except Exception:
                     logger.warning("WebSub processor: aggregate feed rebuild failed")
 
-            _remove_from_queue({e["video_id"] for e in ripe})
-            logger.info(f"WebSub processor: processed {len(ripe)} queued video(s)")
+            # Only remove videos that were permanently resolved (metadata.json
+            # now exists).  Unresolved items (AI rate-limited, transcript not
+            # ready yet) stay in the queue and are retried next cycle.
+            # Cap retries at _QUEUE_MAX_RETRIES to avoid queue bloat.
+            resolved_ids: set[str] = set()
+            retry_updates: list[dict] = []
+            for entry in ripe:
+                vid = entry.get("video_id", "")
+                cid = entry.get("channel_id", "")
+                feed_cfg = channel_map.get(cid)
+                if not feed_cfg:
+                    resolved_ids.add(vid)
+                    continue
+                feed_dir_q = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
+                if not _needs_processing(vid, feed_dir_q):
+                    resolved_ids.add(vid)
+                else:
+                    retry_count = entry.get("retry_count", 0) + 1
+                    if retry_count > _QUEUE_MAX_RETRIES:
+                        logger.warning(
+                            f"WebSub processor: dropping {vid} after "
+                            f"{_QUEUE_MAX_RETRIES} failed retries"
+                        )
+                        resolved_ids.add(vid)
+                    else:
+                        retry_updates.append({**entry, "retry_count": retry_count})
+
+            _remove_from_queue(resolved_ids)
+            if retry_updates:
+                _update_queue_retry_counts(retry_updates)
+            kept = len(retry_updates)
+            done = len(resolved_ids)
+            logger.info(
+                f"WebSub processor: resolved {done} video(s)"
+                + (f", kept {kept} for retry" if kept else "")
+            )
         finally:
             _release_lock()
 
