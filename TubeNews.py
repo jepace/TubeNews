@@ -489,7 +489,7 @@ def fetch_transcript(
         if is_quota_error:
             logger.error(
                 f"{prefix}Supadata: Quota exhausted — no credits remaining. "
-                f"Halting transcript fetches for this run."
+                f"Halting transcript fetches for this cycle."
             )
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
@@ -506,7 +506,7 @@ def fetch_transcript(
                 failure_reason.append(reason)
             return False
         elif "live streaming" in exc_str:
-            logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry next run")
+            logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry later")
         else:
             logger.error(f"{prefix}Supadata: Call failed: {exc}")
 
@@ -535,8 +535,8 @@ def call_gemini_api(
 
     Returns:
         list  – one dict per story on success.
-        False – caller should disable AI for the remainder of this run because
-                the API returned HTTP 429 (rate-limited / quota exhausted).
+        False – caller should disable AI for the remainder of this processing
+                cycle because the API returned HTTP 429 (rate-limited).
         None  – any other failure; the caller should skip this video.
     """
     api_url = (
@@ -582,7 +582,7 @@ def call_gemini_api(
             logger.info(f"{prefix}Gemini: {len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
             return stories
         elif response.status_code == 429:
-            logger.warning(f"{prefix}Gemini: Rate limit hit — AI disabled for this run")
+            logger.warning(f"{prefix}Gemini: Rate limit hit (429) — AI disabled for this cycle")
             return False
     except Exception as exc:
         logger.error(f"{prefix}Gemini: API call failed: {exc}")
@@ -1284,10 +1284,10 @@ def process_video(
             logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: No transcript available — marked permanent, will not retry")
             return "skipped", 0
         elif not transcript_text:
-            # Transient failure — quota exhausted or network error, will retry next run.
+            # Transient failure — quota exhausted or network error, will retry later.
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
-            logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetch failed — will retry next run")
+            logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetch failed — will retry later")
             return "skipped", 0
 
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
@@ -1986,6 +1986,11 @@ def _wsb_processor_thread(config: dict) -> None:
         logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
     _last_orphan_recovery: float = time.time()
 
+    # When Gemini returns 429, back off for this many seconds before retrying
+    # AI calls.  Videos stay in the queue; only the AI step is skipped.
+    _AI_BACKOFF_SECONDS = 3600  # 1 hour
+    _ai_backoff_until: float = 0.0
+
     while True:
         time.sleep(interval)
 
@@ -2040,13 +2045,22 @@ def _wsb_processor_thread(config: dict) -> None:
                 _remove_from_queue({e["video_id"] for e in ripe})
                 continue
 
+            ai_in_backoff = time.time() < _ai_backoff_until
+            if ai_in_backoff:
+                remaining = int(_ai_backoff_until - time.time())
+                logger.info(
+                    f"WebSub processor: Gemini backoff active — skipping AI for "
+                    f"this cycle ({remaining}s remaining)"
+                )
             ai_event = threading.Event()
+            if ai_in_backoff:
+                ai_event.set()  # pre-set so process_feed skips AI immediately
             transcript_event = threading.Event()
             any_changed = False
 
             for cid, video_infos in by_channel.items():
                 feed = channel_map[cid]
-                content_changed, _, _ = process_feed(
+                content_changed, ai_rate_limited, _ = process_feed(
                     feed, supadata_client, config,
                     ai_event, transcript_event,
                     forced_videos=video_infos,
@@ -2054,6 +2068,12 @@ def _wsb_processor_thread(config: dict) -> None:
                 if content_changed:
                     rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
                     any_changed = True
+                if ai_rate_limited and not ai_in_backoff:
+                    _ai_backoff_until = time.time() + _AI_BACKOFF_SECONDS
+                    logger.warning(
+                        f"WebSub processor: Gemini rate-limited — backing off "
+                        f"AI calls for {_AI_BACKOFF_SECONDS // 60} minutes"
+                    )
 
             if any_changed or not (STORAGE_ROOT / "rss.xml").exists():
                 try:
