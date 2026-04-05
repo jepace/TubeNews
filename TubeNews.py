@@ -1978,7 +1978,13 @@ def _wsb_processor_thread(config: dict) -> None:
     interval = float(config.get("websub_check_interval_minutes", 10)) * 60
     min_age = float(config.get("websub_min_age_minutes", 360))
     supadata_client = Supadata(api_key=config["supadata_api_key"])
-    _last_orphan_recovery: float = 0.0
+
+    # Run orphan recovery immediately on startup, then once per 24 h.
+    try:
+        _recover_orphaned_videos()
+    except Exception as exc:
+        logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
+    _last_orphan_recovery: float = time.time()
 
     while True:
         time.sleep(interval)
