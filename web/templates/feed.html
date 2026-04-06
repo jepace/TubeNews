@@ -890,9 +890,31 @@
   var btn = document.getElementById('sidebar-toggle');
   var sb = document.getElementById('channel-sidebar');
   if (!btn || !sb) return;
+
+  function closeSidebar() {
+    sb.classList.remove('sidebar-open');
+    document.body.classList.remove('sidebar-backdrop');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+
   btn.addEventListener('click', function () {
     var open = sb.classList.toggle('sidebar-open');
+    document.body.classList.toggle('sidebar-backdrop', open);
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+
+  // Close sidebar when clicking a channel
+  sb.addEventListener('click', function (e) {
+    if (e.target.closest('.sidebar-channel')) {
+      closeSidebar();
+    }
+  });
+
+  // Close sidebar when clicking the backdrop (on body element)
+  document.body.addEventListener('click', function (e) {
+    if (sb.classList.contains('sidebar-open') && !sb.contains(e.target) && !btn.contains(e.target)) {
+      closeSidebar();
+    }
   });
 })();
 </script>

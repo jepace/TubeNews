@@ -766,11 +766,18 @@ main:has(.feed-layout) {
 
   .channel-sidebar {
     display: none;
-    position: static;
+    position: fixed;
+    left: 0;
+    top: 52px;
     width: 100%;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0.5rem;
-    margin-bottom: 0.5rem;
+    max-width: 320px;
+    max-height: calc(100vh - 52px);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 0.5rem 0;
+    overflow-y: auto;
+    z-index: 195;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.12);
   }
 
   .channel-sidebar.sidebar-open { display: block; }
@@ -784,6 +791,15 @@ main:has(.feed-layout) {
     cursor: pointer;
     color: var(--text);
     padding: 0 0.4rem;
+  }
+
+  /* Backdrop for sidebar popover */
+  body.sidebar-backdrop::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 194;
   }
 }
 /* ---- End channel sidebar ---- */
