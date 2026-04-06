@@ -129,6 +129,140 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
 .search-results-info { font-size: 0.9rem; color: var(--muted); margin-bottom: 1rem; }
 .search-clear { font-size: 0.85rem; }
 
+/* Mobile-responsive header-sub layout */
+@media (max-width: 700px) {
+  .header-sub {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 0.5rem 1.5rem;
+    gap: 0.5rem;
+  }
+
+  /* Row 1: Navigation and feed name */
+  .hs-left {
+    flex: 1 1 100%;
+    order: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .hs-feed-name {
+    flex: 1 1 auto;
+    min-height: 2.75rem;
+    display: flex;
+    align-items: center;
+    border-right: none;
+    border-bottom: none;
+    padding-right: 0;
+    margin-right: 0;
+  }
+
+  .sidebar-toggle {
+    min-height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0.4rem;
+  }
+
+  .hs-tab {
+    min-height: 2.75rem;
+    line-height: 2.75rem;
+    padding: 0 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  /* Row 2: Action buttons */
+  .hs-center {
+    flex: 1 1 100%;
+    order: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .hs-center button.btn-sm {
+    min-height: 2.75rem;
+    padding: 0.5rem 0.625rem;
+    font-size: 0.8rem;
+    width: 100%;
+  }
+
+  /* Row 3: Search and links */
+  .hs-right {
+    flex: 1 1 100%;
+    order: 3;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.5rem;
+  }
+
+  .hs-search {
+    flex: 0 0 auto;
+  }
+
+  .search-input {
+    width: 100px;
+    padding: 0.35rem 0.35rem;
+    font-size: 0.75rem;
+  }
+
+  .hs-ext {
+    font-size: 0.75rem;
+    min-height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .hs-rss {
+    min-height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.75rem;
+  }
+}
+
+/* Ultra-small phones: hide tabs */
+@media (max-width: 480px) {
+  .hs-left {
+    gap: 0.35rem;
+  }
+
+  .hs-tab {
+    display: none;
+  }
+
+  .tab-count {
+    display: none;
+  }
+
+  .hs-feed-name {
+    font-size: 0.95rem;
+  }
+
+  .sidebar-toggle {
+    padding: 0.35rem 0.3rem;
+    font-size: 0.9rem;
+  }
+
+  .search-input {
+    width: 80px;
+    font-size: 0.7rem;
+  }
+
+  .hs-ext {
+    font-size: 0.7rem;
+  }
+
+  .hs-rss {
+    font-size: 0.65rem;
+    padding: 0.3rem 0.35rem;
+  }
+}
+
 /* Hamburger toggle — hidden on desktop */
 .nav-toggle {
   display: none;
@@ -766,11 +900,18 @@ main:has(.feed-layout) {
 
   .channel-sidebar {
     display: none;
-    position: static;
+    position: fixed;
+    left: 0;
+    top: 52px;
     width: 100%;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0.5rem;
-    margin-bottom: 0.5rem;
+    max-width: 320px;
+    max-height: calc(100vh - 52px);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 0.5rem 0;
+    overflow-y: auto;
+    z-index: 195;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.12);
   }
 
   .channel-sidebar.sidebar-open { display: block; }
@@ -784,6 +925,15 @@ main:has(.feed-layout) {
     cursor: pointer;
     color: var(--text);
     padding: 0 0.4rem;
+  }
+
+  /* Backdrop for sidebar popover */
+  body.sidebar-backdrop::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 194;
   }
 }
 /* ---- End channel sidebar ---- */
