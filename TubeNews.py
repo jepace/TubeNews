@@ -2130,6 +2130,22 @@ def _wsb_processor_thread(config: dict) -> None:
             for entry in ripe:
                 vid = entry.get("video_id", "")
                 cid = entry.get("channel_id", "")
+                date_str = entry.get("date", "")
+
+                # Skip if video's publish date is still in the future
+                if date_str:
+                    try:
+                        from datetime import datetime as _dt_check
+                        pub_time = _dt_check.fromisoformat(date_str.replace('Z', '+00:00')).timestamp()
+                        if pub_time > time.time():
+                            logger.debug(
+                                f"WebSub processor: {vid} publish date is in future; "
+                                f"skipping until {date_str}"
+                            )
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Malformed date; proceed with normal logic
+
                 feed_cfg = channel_map.get(cid)
                 if not feed_cfg:
                     resolved_ids.add(vid)
