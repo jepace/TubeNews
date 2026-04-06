@@ -300,7 +300,7 @@ Story body text in AP inverted pyramid style...
 }
 ```
 
-`status` values: `"processed"` | `"ignored_too_old"` | `"ignored_short"` (video is a YouTube Short; will not be retried) | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried)
+`status` values: `"processed"` | `"ignored_too_old"` | `"ignored_short"` (video is a YouTube Short; will not be retried) | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried) | `"livestream_in_progress"` (video is a livestream currently broadcasting; will be retried after broadcast ends without penalty to retry_count)
 
 `skip_reason` — present only when `status` is `"no_transcript_available"`. Values: `"no_captions"` (Supadata returned empty content or a generic error), `"members_only_or_restricted"` (HTTP 403 from Supadata — video is members-only or region-restricted), `"video_not_found"` (HTTP 404 from Supadata — video ID is invalid or deleted). Key absent on all other status values and on older entries.
 
@@ -316,17 +316,22 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
   "channel_id": "UCxxxxxxx",
   "title": "Video Title",
   "date": "2026-03-14T14:30:00Z",
+  "scheduled_start": "2026-03-14T18:00:00Z",
+  "raw_entry_xml": "<entry><yt:videoId>dQw4w9WgXcQ</yt:videoId>...</entry>",
   "queued_at": 1741910400.123,
   "retry_count": 0
 }
 ```
 
 **Fields:**
-- `date`: The video's publish timestamp from YouTube's push notification (ISO 8601 format, may be UTC `Z`-suffixed). Videos with **future dates are skipped during processing** — the processor holds them in the queue until the publish date passes, without incrementing `retry_count`. This prevents premature drop-off of videos scheduled days in advance.
+- `date`: The video's publish timestamp from YouTube's push notification (ISO 8601 format, may be UTC `Z`-suffixed). For regular videos, this is the upload time. Videos with **future dates are skipped during processing** — the processor holds them in the queue until the publish date passes, without incrementing `retry_count`. This prevents premature drop-off of videos scheduled days in advance.
+- `scheduled_start`: Optional ISO 8601 timestamp from YouTube's Atom feed (via `yt:scheduledStartTime` element) if the video is a scheduled livestream. `null` or absent if not present in the push notification. When present, this represents the actual scheduled broadcast time (distinct from `date` which is video creation time).
+- `raw_entry_xml`: Complete serialized Atom feed entry XML from YouTube's WebSub push notification. Preserved for future metadata extraction or debugging purposes. String format; contains all fields sent by YouTube.
 - `queued_at`: Unix timestamp (float) when the notification arrived. The processor only processes "ripe" entries where `queued_at <= now - websub_min_age_minutes`.
 - `retry_count`: Tracks failed processing attempts. When a video fails processing and is still needed (no `metadata.json` written), `retry_count` is incremented. **Videos are dropped after exceeding `_QUEUE_MAX_RETRIES` (10)**, but this is rare in practice because:
   - **Permanent failures** (members-only, video deleted, no captions available) write `metadata.json` immediately, removing the video from the queue entirely.
-  - **Transient failures** (transcript encoding, live stream still running) skip writing metadata and naturally retry with the processor cycle interval.
+  - **Livestream failures** (video currently broadcasting) write `metadata.json` with `status: "livestream_in_progress"`, removing the video without penalty to `retry_count`.
+  - **Transient failures** (transcript encoding, network errors) skip writing metadata and naturally retry with the processor cycle interval.
   - **Future-dated videos** never hit the retry counter (held by date check until publish time).
 
 ---
