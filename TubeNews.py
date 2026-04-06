@@ -2194,21 +2194,34 @@ def _wsb_processor_thread(config: dict) -> None:
 
 _daemon_config: dict = {}
 _config_lock = threading.RLock()
+_config_mtime: float = 0.0  # Last known mtime of TubeNews.json
 
 
 def _reload_config_from_disk() -> dict:
     """Reload TubeNews.json and atomically update daemon config.
 
     Only updates values that changed. Logs all changes. On error, keeps old
-    values and returns existing config.
+    values and returns existing config. Uses mtime check to avoid parsing
+    unchanged files — only reloads if TubeNews.json has been modified.
 
     Returns: The updated _daemon_config dict (same reference).
     """
-    global _daemon_config
+    global _daemon_config, _config_mtime
+
+    config_file = Path(__file__).parent / "TubeNews.json"
+
+    # Fast gate: check if file has been modified since last reload
+    try:
+        current_mtime = config_file.stat().st_mtime
+        if current_mtime == _config_mtime and _config_mtime > 0:
+            # File unchanged — skip everything
+            return _daemon_config
+    except (FileNotFoundError, OSError):
+        # Can't stat file — fall through to read and handle error normally
+        current_mtime = 0.0
 
     # Try to read fresh config from disk
     try:
-        config_file = Path(__file__).parent / "TubeNews.json"
         fresh: dict = json.loads(config_file.read_text(encoding="utf-8"))
     except FileNotFoundError:
         logger.warning("Config reload: TubeNews.json not found — keeping old config")
@@ -2306,6 +2319,10 @@ def _reload_config_from_disk() -> dict:
 
     if not changed:
         logger.debug("Config reload: no changes detected")
+
+    # Update mtime to skip checking this file until it's modified again
+    if current_mtime > 0:
+        _config_mtime = current_mtime
 
     return _daemon_config
 
