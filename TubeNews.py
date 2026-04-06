@@ -1994,11 +1994,13 @@ def _wsb_processor_thread(config: dict) -> None:
 
     On each wake-up:
 
-    1. **Renewal check:** re-subscribes any channel whose WebSub lease expires
+    1. **Config reload:** checks TubeNews.json for changes and applies them
+       (daemon config is reloaded from disk on each cycle).
+    2. **Renewal check:** re-subscribes any channel whose WebSub lease expires
        within the next 24 hours.
-    2. **Orphan recovery (once per day):** scans the content archive for meeting
+    3. **Orphan recovery (once per day):** scans the content archive for meeting
        directories without ``metadata.json`` and queues them for processing.
-    3. **Queue processing:** reads ripe entries (older than
+    4. **Queue processing:** reads ripe entries (older than
        ``websub_min_age_minutes``), acquires the run lock, calls
        :func:`process_feed` for each affected channel, rebuilds the aggregate
        feed if anything changed, then removes processed entries from the queue.
@@ -2006,9 +2008,10 @@ def _wsb_processor_thread(config: dict) -> None:
     Sleep interval is ``websub_check_interval_minutes`` (default 10 minutes).
     Runs until the process exits (daemon thread).
     """
-    interval = float(config.get("websub_check_interval_minutes", 10)) * 60
-    min_age = float(config.get("websub_min_age_minutes", 360))
-    supadata_client = Supadata(api_key=config["supadata_api_key"])
+    # When Gemini returns 429, back off for this many seconds before retrying
+    # AI calls.  Videos stay in the queue; only the AI step is skipped.
+    _AI_BACKOFF_SECONDS = 3600  # 1 hour
+    _ai_backoff_until: float = 0.0
 
     # Run orphan recovery immediately on startup, then once per 24 h.
     try:
@@ -2017,12 +2020,16 @@ def _wsb_processor_thread(config: dict) -> None:
         logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
     _last_orphan_recovery: float = time.time()
 
-    # When Gemini returns 429, back off for this many seconds before retrying
-    # AI calls.  Videos stay in the queue; only the AI step is skipped.
-    _AI_BACKOFF_SECONDS = 3600  # 1 hour
-    _ai_backoff_until: float = 0.0
-
     while True:
+        # -- Config reload ----------------------------------------------------
+        _reload_config_from_disk()
+
+        # Read current values from reloadable config
+        with _config_lock:
+            interval = float(_daemon_config.get("websub_check_interval_minutes", 10)) * 60
+            min_age = float(_daemon_config.get("websub_min_age_minutes", 360))
+            supadata_key = _daemon_config.get("supadata_api_key")
+        supadata_client = Supadata(api_key=supadata_key)
         # -- Renewal check ----------------------------------------------------
         subs_path = STATE_ROOT / "subscriptions.json"
         if subs_path.exists():
@@ -2117,7 +2124,9 @@ def _wsb_processor_thread(config: dict) -> None:
 
             if any_changed or not (STORAGE_ROOT / "rss.xml").exists():
                 try:
-                    rebuild_aggregate_feed(base_url=config.get("base_url", ""))
+                    with _config_lock:
+                        base_url = _daemon_config.get("base_url", "")
+                    rebuild_aggregate_feed(base_url=base_url)
                 except Exception:
                     logger.warning("WebSub processor: aggregate feed rebuild failed")
 
@@ -2179,6 +2188,128 @@ def _wsb_processor_thread(config: dict) -> None:
         time.sleep(interval)
 
 
+# ---------------------------------------------------------------------------
+# --daemon mode — config reloading
+# ---------------------------------------------------------------------------
+
+_daemon_config: dict = {}
+_config_lock = threading.RLock()
+
+
+def _reload_config_from_disk() -> dict:
+    """Reload TubeNews.json and atomically update daemon config.
+
+    Only updates values that changed. Logs all changes. On error, keeps old
+    values and returns existing config.
+
+    Returns: The updated _daemon_config dict (same reference).
+    """
+    global _daemon_config
+
+    # Try to read fresh config from disk
+    try:
+        config_file = Path(__file__).parent / "TubeNews.json"
+        fresh: dict = json.loads(config_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.warning("Config reload: TubeNews.json not found — keeping old config")
+        return _daemon_config
+    except json.JSONDecodeError as exc:
+        logger.warning(f"Config reload: failed to parse TubeNews.json: {exc} — keeping old config")
+        return _daemon_config
+    except Exception as exc:
+        logger.warning(f"Config reload: failed to read TubeNews.json: {exc} — keeping old config")
+        return _daemon_config
+
+    # Validate required keys
+    missing = []
+    for key in ["gemini_api_key", "supadata_api_key"]:
+        if key not in fresh:
+            missing.append(key)
+    if missing:
+        logger.warning(f"Config reload: missing required keys {missing} — keeping old config")
+        return _daemon_config
+
+    # Atomically update config with change detection
+    with _config_lock:
+        # Track changes for logging
+        changed = {}
+        immutable_attempted = {}
+
+        # Keys that can change at runtime
+        mutable_keys = {
+            "gemini_api_key",
+            "supadata_api_key",
+            "request_timeout",
+            "gemini_call_delay",
+            "gemini_model",
+            "base_url",
+            "ntfy_topic",
+            "websub_check_interval_minutes",
+            "websub_min_age_minutes",
+            "websub_max_videos_per_cycle",
+        }
+
+        # Keys that shouldn't change (but warn if they do)
+        immutable_keys = {
+            "websub_daemon_port",
+            "websub_secret",
+            "websub_callback_url",
+        }
+
+        for key in mutable_keys:
+            if key in fresh:
+                old_val = _daemon_config.get(key)
+                new_val = fresh[key]
+                if old_val != new_val:
+                    changed[key] = (old_val, new_val)
+                    _daemon_config[key] = new_val
+
+        # Warn about immutable key changes
+        for key in immutable_keys:
+            if key in fresh:
+                old_val = _daemon_config.get(key)
+                new_val = fresh[key]
+                if old_val != new_val:
+                    immutable_attempted[key] = (old_val, new_val)
+
+        # Special handling: apply request_timeout immediately
+        if "request_timeout" in changed:
+            old, new = changed["request_timeout"]
+            try:
+                socket.setdefaulttimeout(float(new))
+                logger.info(
+                    f"Config reload: request_timeout {old} → {new} (applied immediately)"
+                )
+            except (ValueError, TypeError) as exc:
+                logger.error(
+                    f"Config reload: invalid request_timeout value {new}: {exc} — keeping {old}"
+                )
+                _daemon_config["request_timeout"] = old
+                del changed["request_timeout"]
+
+        # Log all other changes (mask sensitive values)
+        for key, (old, new) in changed.items():
+            if key != "request_timeout":
+                if "api_key" in key or "secret" in key:
+                    old_display = f"***{str(old)[-4:]}" if old else "***"
+                    new_display = f"***{str(new)[-4:]}" if new else "***"
+                else:
+                    old_display, new_display = old, new
+                logger.info(f"Config reload: {key} {old_display} → {new_display}")
+
+        # Warn about immutable key changes
+        for key, (old, new) in immutable_attempted.items():
+            logger.warning(
+                f"Config reload: {key} cannot be changed at runtime "
+                f"({old} → {new}) — requires restart to take effect"
+            )
+
+    if not changed:
+        logger.debug("Config reload: no changes detected")
+
+    return _daemon_config
+
+
 def _run_daemon(config: dict) -> None:
     """Start the WebSub daemon: subscribe all channels, then run the two threads.
 
@@ -2188,6 +2319,9 @@ def _run_daemon(config: dict) -> None:
 
     This function blocks indefinitely (joins Thread 2).
     """
+    global _daemon_config
+    _daemon_config = config.copy()
+
     channels = _read_channels()
     if not channels:
         logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
