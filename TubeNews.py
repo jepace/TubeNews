@@ -566,8 +566,9 @@ def call_gemini_api(
             time.sleep(call_delay - elapsed)
         _gemini_last_call_time = time.time()
 
+    api_version = "v1beta" if "preview" in model_name else "v1"
     api_url = (
-        f"https://generativelanguage.googleapis.com/v1/models/"
+        f"https://generativelanguage.googleapis.com/{api_version}/models/"
         f"{model_name}:generateContent?key={gemini_api_key}"
     )
 
