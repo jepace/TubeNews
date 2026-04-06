@@ -263,7 +263,7 @@ state/
 │       ├── rss.xml             # Pre-built personal feed (CLI only; web app generates dynamically)
 │       └── index.html          # Pre-built feed page (CLI only; web app generates dynamically)
 └── queue/
-    └── push_queue.json         # WebSub incoming video queue ({video_id, channel_id, queued_at})
+    └── push_queue.json         # WebSub incoming video queue ({video_id, channel_id, date, queued_at, retry_count}); see WebSub Queue section below
 ```
 
 All content scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive_channel_stats`, etc.) operate only on `content/` and ignore `state/`. The `serve_content` route serves only files under `content/`; `state/` is never web-accessible.
@@ -302,6 +302,29 @@ Story body text in AP inverted pyramid style...
 `skip_reason` — present only when `status` is `"no_transcript_available"`. Values: `"no_captions"` (Supadata returned empty content or a generic error), `"members_only_or_restricted"` (HTTP 403 from Supadata — video is members-only or region-restricted), `"video_not_found"` (HTTP 404 from Supadata — video ID is invalid or deleted). Key absent on all other status values and on older entries.
 
 `processed_focuses` is a sorted list of all focus strings for which Gemini has been called on this video. Old `metadata.json` files that pre-date this field have no `processed_focuses` key and are treated as fully processed (not re-run).
+
+### WebSub Queue Schema (push_queue.json)
+
+The queue stores videos sent by YouTube's WebSub hub, pending processing. Each entry has:
+
+```json
+{
+  "video_id": "dQw4w9WgXcQ",
+  "channel_id": "UCxxxxxxx",
+  "title": "Video Title",
+  "date": "2026-03-14T14:30:00Z",
+  "queued_at": 1741910400.123,
+  "retry_count": 0
+}
+```
+
+**Fields:**
+- `date`: The video's publish timestamp from YouTube's push notification (ISO 8601 format, may be UTC `Z`-suffixed). Videos with **future dates are skipped during processing** — the processor holds them in the queue until the publish date passes, without incrementing `retry_count`. This prevents premature drop-off of videos scheduled days in advance.
+- `queued_at`: Unix timestamp (float) when the notification arrived. The processor only processes "ripe" entries where `queued_at <= now - websub_min_age_minutes`.
+- `retry_count`: Tracks failed processing attempts. When a video fails processing and is still needed (no `metadata.json` written), `retry_count` is incremented. **Videos are dropped after exceeding `_QUEUE_MAX_RETRIES` (10)**, but this is rare in practice because:
+  - **Permanent failures** (members-only, video deleted, no captions available) write `metadata.json` immediately, removing the video from the queue entirely.
+  - **Transient failures** (transcript encoding, live stream still running) skip writing metadata and naturally retry with the processor cycle interval.
+  - **Future-dated videos** never hit the retry counter (held by date check until publish time).
 
 ---
 

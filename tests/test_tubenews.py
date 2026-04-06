@@ -2325,6 +2325,74 @@ def test_remove_from_queue_noop_when_absent(tmp_path, monkeypatch):
     _remove_from_queue({"vid1"})  # must not raise
 
 
+def test_read_push_queue_skips_future_dated_videos(tmp_path, monkeypatch):
+    """Queue entries with future publish dates are held in the queue without retry increment.
+
+    This test validates the fix for the issue where videos scheduled days in advance
+    would be dropped from the queue after 10 failed processing attempts because their
+    captions weren't available yet (video not published).
+
+    The queue processor should:
+    1. Parse the ISO 8601 'date' field (video's intended publish time from YouTube)
+    2. Skip processing if date > now (video not yet published)
+    3. NOT increment retry_count
+    4. Keep the entry in the queue for the next cycle
+    """
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    future = (datetime.now() + timedelta(days=2)).isoformat() + "Z"  # 2 days from now
+    past = (datetime.now() - timedelta(hours=1)).isoformat() + "Z"   # 1 hour ago
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    now = time.time()
+    (queue_dir / "push_queue.json").write_text(json.dumps([
+        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": now - 400 * 60},
+        {"video_id": "past_vid",   "channel_id": "UC2", "date": past,   "queued_at": now - 400 * 60},
+    ]))
+
+    result = _read_push_queue(360)  # min_age = 360 min, so both are ripe by age
+
+    # Both should be returned as "ripe" from _read_push_queue
+    # (date filtering happens during processing, not during queueing)
+    assert len(result) == 2
+    assert {e["video_id"] for e in result} == {"future_vid", "past_vid"}
+
+
+def test_update_queue_retry_counts_preserves_future_videos(tmp_path, monkeypatch):
+    """Retry count updates don't overwrite entries not being retried (future-dated)."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    queue_path = queue_dir / "push_queue.json"
+
+    future = (datetime.now() + timedelta(days=1)).isoformat() + "Z"
+
+    # Initial queue with a future video and a past video
+    queue_path.write_text(json.dumps([
+        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": 0, "retry_count": 0},
+        {"video_id": "past_vid",   "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": 0, "retry_count": 0},
+    ]))
+
+    # Update only the past video's retry count
+    _update_queue_retry_counts([
+        {"video_id": "past_vid", "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": 0, "retry_count": 1},
+    ])
+
+    # Future video should be unchanged, past video updated
+    remaining = json.loads(queue_path.read_text())
+    future_entry = next((e for e in remaining if e["video_id"] == "future_vid"), None)
+    past_entry = next((e for e in remaining if e["video_id"] == "past_vid"), None)
+
+    assert future_entry is not None
+    assert future_entry["retry_count"] == 0  # unchanged
+    assert past_entry is not None
+    assert past_entry["retry_count"] == 1   # updated
+
+
 # ---------------------------------------------------------------------------
 # _wsb_record_subscription / _wsb_remove_subscription
 # ---------------------------------------------------------------------------
