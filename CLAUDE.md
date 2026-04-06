@@ -215,11 +215,14 @@ python3 TubeNews.py
 python3 TubeNews.py --debug
 
 # WebSub daemon mode (runs indefinitely; receives YouTube push notifications)
+# Config changes to TubeNews.json are reloaded on each processor cycle
 python3 TubeNews.py --daemon
 
 # Start the web server (gunicorn — never use python3 web/app.py in any environment)
 ./serve.sh
 ```
+
+**Daemon mode note:** When running in daemon mode, most TubeNews.json configuration changes (API keys, timeouts, daemon parameters, etc.) are automatically reloaded on each processor cycle without requiring a restart. See **Configuration Reference** section for details on which keys are reloadable vs. which require restart.
 
 ### First Run on a Channel with Existing Videos
 
@@ -351,6 +354,24 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `websub_min_age_minutes` | No | Minimum age (minutes) a queued push notification must reach before the processor acts on it (default: `360`). Avoids processing livestreams before they end. |
 | `websub_check_interval_minutes` | No | How often (minutes) the processor thread wakes to check for pending push notifications (default: `10`). |
 | `websub_max_videos_per_cycle` | No | Maximum number of videos to process per processor cycle (default: `3`). Limits burst Gemini calls when a large backlog exists; remaining ripe entries are deferred to the next cycle. |
+
+### Daemon Config Reload
+
+When running in daemon mode (`python3 TubeNews.py --daemon`), the following configuration keys are **automatically reloaded** from `TubeNews.json` on each processor cycle (~every 10 minutes):
+
+**Reloadable keys** (changes take effect immediately or next cycle):
+- `gemini_api_key`, `supadata_api_key` — next API call uses new key
+- `request_timeout` — applied immediately via `socket.setdefaulttimeout()`
+- `gemini_call_delay`, `gemini_model` — picked up by next processing cycle
+- `base_url`, `ntfy_topic` — used at next operation
+- `websub_check_interval_minutes`, `websub_min_age_minutes`, `websub_max_videos_per_cycle` — applied next cycle
+
+**Immutable keys** (require daemon restart if changed):
+- `websub_callback_url`, `websub_secret`, `websub_daemon_port` — changing these requires a restart. If you edit these, the daemon logs a warning and continues using the old values.
+
+Changes to other keys (like `content_dir`, `state_dir`, `port`, `admin_users`) are handled by the web app when those are modified; they don't affect the daemon.
+
+**Note:** In single-run mode (`python3 TubeNews.py`), `TubeNews.json` is loaded once at startup. To pick up config changes, restart the process.
 
 ---
 
