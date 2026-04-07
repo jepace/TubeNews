@@ -38,6 +38,8 @@ from TubeNews import (
     _wsb_record_subscription,
     _wsb_remove_subscription,
     _recover_orphaned_videos,
+    now_utc_iso,
+    unix_to_iso8601,
 )
 
 
@@ -207,7 +209,7 @@ def _make_meeting(feed_dir: Path, date_prefix: str, video_id: str,
         "video_id": video_id,
         "video_title": title,
         "status": status,
-        "processed_at": int(time.time()),
+        "processed_at": now_utc_iso(),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
     return meeting_dir
@@ -640,7 +642,7 @@ def test_rebuild_user_feed_page_includes_old_stories(tmp_path, monkeypatch):
         "video_id": "VIDold12345",
         "video_title": "Old Meeting",
         "status": "processed",
-        "processed_at": int(time.time()) - (200 * 86400),  # 200 days ago
+        "processed_at": unix_to_iso8601(time.time() - (200 * 86400)),  # 200 days ago
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(old_meta))
     _write_story(meeting_dir, "01_Old.md", "Very Old Story",
@@ -878,7 +880,7 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
         "video_id": "VIDold12345",
         "video_title": "Old Meeting",
         "status": "processed",
-        "processed_at": int(time.time()) - (200 * 86400),  # 200 days ago
+        "processed_at": unix_to_iso8601(time.time() - (200 * 86400)),  # 200 days ago
     }
     meeting_dir = channel_dir / "2020-01-01_VIDold12345"
     meeting_dir.mkdir(parents=True)
@@ -1031,7 +1033,7 @@ def test_run_log_prunes_old_log_files(tmp_path):
         (run_logs / f"run-{pid}.log").write_text(f"log for pid {pid}")
 
     # Write a run_log.json referencing only PIDs 3–32 (30 entries; PIDs 1 and 2 dropped).
-    retained_runs = [{"pid": pid, "started_at": 0, "finished_at": 0,
+    retained_runs = [{"pid": pid, "started_at": unix_to_iso8601(0), "finished_at": unix_to_iso8601(0),
                       "total_stories": 0, "feeds": []} for pid in range(3, 33)]
     run_log_path = run_logs / "run_log.json"
     run_log_path.write_text(json.dumps(retained_runs))
@@ -1720,7 +1722,7 @@ def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
     meeting.mkdir()
     (meeting / "metadata.json").write_text(json.dumps({
         "video_id": "VID_BAD", "video_title": "Bad", "status": "processed",
-        "processed_at": int(time.time()),
+        "processed_at": now_utc_iso(),
     }))
     _write_story(meeting, "01_Bad.md", "Bad Story", "CITY — Mar 1, 2026", "Body.", 60)
 
@@ -2371,7 +2373,7 @@ def test_read_push_queue_all_fresh(tmp_path, monkeypatch):
     queue_dir.mkdir()
     now = time.time()
     (queue_dir / "push_queue.json").write_text(json.dumps([
-        {"video_id": "vid1", "channel_id": "UCx", "queued_at": now - 30},  # 30s ago
+        {"video_id": "vid1", "channel_id": "UCx", "queued_at": unix_to_iso8601(now - 30)},  # 30s ago
     ]))
     result = _read_push_queue(60)  # min_age = 60 min
     assert result == []
@@ -2385,8 +2387,8 @@ def test_read_push_queue_returns_ripe_entries(tmp_path, monkeypatch):
     queue_dir.mkdir()
     now = time.time()
     (queue_dir / "push_queue.json").write_text(json.dumps([
-        {"video_id": "old_vid", "channel_id": "UCx", "queued_at": now - 400 * 60},  # 400 min ago
-        {"video_id": "new_vid", "channel_id": "UCx", "queued_at": now - 10},         # 10s ago
+        {"video_id": "old_vid", "channel_id": "UCx", "queued_at": unix_to_iso8601(now - 400 * 60)},  # 400 min ago
+        {"video_id": "new_vid", "channel_id": "UCx", "queued_at": unix_to_iso8601(now - 10)},         # 10s ago
     ]))
     result = _read_push_queue(360)  # min_age = 360 min
     assert len(result) == 1
@@ -2401,8 +2403,8 @@ def test_remove_from_queue_removes_correct_ids(tmp_path, monkeypatch):
     queue_dir.mkdir()
     queue_path = queue_dir / "push_queue.json"
     queue_path.write_text(json.dumps([
-        {"video_id": "remove_me", "channel_id": "UCx", "queued_at": 0},
-        {"video_id": "keep_me",   "channel_id": "UCy", "queued_at": 0},
+        {"video_id": "remove_me", "channel_id": "UCx", "queued_at": None},
+        {"video_id": "keep_me",   "channel_id": "UCy", "queued_at": None},
     ]))
     _remove_from_queue({"remove_me"})
     remaining = json.loads(queue_path.read_text())
@@ -2440,8 +2442,8 @@ def test_read_push_queue_skips_future_dated_videos(tmp_path, monkeypatch):
     queue_dir.mkdir()
     now = time.time()
     (queue_dir / "push_queue.json").write_text(json.dumps([
-        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": now - 400 * 60},
-        {"video_id": "past_vid",   "channel_id": "UC2", "date": past,   "queued_at": now - 400 * 60},
+        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": unix_to_iso8601(now - 400 * 60)},
+        {"video_id": "past_vid",   "channel_id": "UC2", "date": past,   "queued_at": unix_to_iso8601(now - 400 * 60)},
     ]))
 
     result = _read_push_queue(360)  # min_age = 360 min, so both are ripe by age
@@ -2465,13 +2467,13 @@ def test_update_queue_retry_counts_preserves_future_videos(tmp_path, monkeypatch
 
     # Initial queue with a future video and a past video
     queue_path.write_text(json.dumps([
-        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": 0, "retry_count": 0},
-        {"video_id": "past_vid",   "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": 0, "retry_count": 0},
+        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": None, "retry_count": 0},
+        {"video_id": "past_vid",   "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": None, "retry_count": 0},
     ]))
 
     # Update only the past video's retry count
     _update_queue_retry_counts([
-        {"video_id": "past_vid", "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": 0, "retry_count": 1},
+        {"video_id": "past_vid", "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": None, "retry_count": 1},
     ])
 
     # Future video should be unchanged, past video updated
@@ -2505,8 +2507,8 @@ def test_wsb_remove_subscription_removes_entry(tmp_path, monkeypatch):
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     (tmp_path / "subscriptions.json").write_text(json.dumps({
-        "UCremove": {"subscribed_at": 0, "lease_seconds": 604800},
-        "UCkeep":   {"subscribed_at": 0, "lease_seconds": 604800},
+        "UCremove": {"subscribed_at": unix_to_iso8601(0), "lease_seconds": 604800},
+        "UCkeep":   {"subscribed_at": unix_to_iso8601(0), "lease_seconds": 604800},
     }))
     _wsb_remove_subscription("UCremove")
     subs = json.loads((tmp_path / "subscriptions.json").read_text())
@@ -2594,10 +2596,10 @@ def test_update_queue_retry_counts_increments_entry(tmp_path, monkeypatch):
     queue_dir.mkdir()
     queue_path = queue_dir / "push_queue.json"
     queue_path.write_text(json.dumps([
-        {"video_id": "aaa", "channel_id": "UC1", "queued_at": 1000, "retry_count": 1},
-        {"video_id": "bbb", "channel_id": "UC2", "queued_at": 2000},
+        {"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 1},
+        {"video_id": "bbb", "channel_id": "UC2", "queued_at": unix_to_iso8601(2000)},
     ]))
-    _update_queue_retry_counts([{"video_id": "aaa", "channel_id": "UC1", "queued_at": 1000, "retry_count": 2}])
+    _update_queue_retry_counts([{"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 2}])
     items = json.loads(queue_path.read_text())
     by_vid = {i["video_id"]: i for i in items}
     assert by_vid["aaa"]["retry_count"] == 2
@@ -2701,7 +2703,7 @@ def test_recover_orphaned_videos_queues_dirs_without_metadata(tmp_path, monkeypa
     assert queue[0]["video_id"] == "abcDEFGhijk"
     assert queue[0]["channel_id"] == "UC123"
     assert queue[0]["date"] == "2026-01-15"
-    assert queue[0]["queued_at"] == 0  # immediately ripe
+    assert queue[0]["queued_at"] is None  # immediately ripe
 
 
 def test_recover_orphaned_videos_skips_dirs_with_metadata(tmp_path, monkeypatch):
@@ -2733,7 +2735,8 @@ def test_recover_orphaned_videos_skips_already_queued(tmp_path, monkeypatch):
     # Pre-populate queue with the same video
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
-    existing = [{"video_id": "alreadyQueued", "channel_id": "UC123", "queued_at": 999}]
+    iso_ts = unix_to_iso8601(999)
+    existing = [{"video_id": "alreadyQueued", "channel_id": "UC123", "queued_at": iso_ts}]
     (queue_dir / "push_queue.json").write_text(json.dumps(existing))
 
     count = _recover_orphaned_videos()
@@ -2742,7 +2745,7 @@ def test_recover_orphaned_videos_skips_already_queued(tmp_path, monkeypatch):
     # Existing entry is preserved unchanged
     queue = json.loads((queue_dir / "push_queue.json").read_text())
     assert len(queue) == 1
-    assert queue[0]["queued_at"] == 999
+    assert queue[0]["queued_at"] == iso_ts
 
 
 def test_recover_orphaned_videos_skips_no_channel_json(tmp_path, monkeypatch):
