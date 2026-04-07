@@ -37,6 +37,7 @@ from typing import TypedDict
 # ---------------------------------------------------------------------------
 # Third-party imports
 # ---------------------------------------------------------------------------
+import pytz
 import requests
 from feedgen.feed import FeedGenerator
 from supadata import Supadata, SupadataError
@@ -243,6 +244,18 @@ def iso8601_to_unix(iso_str: str | None) -> float | None:
     if not iso_str:
         return None
     return datetime.fromisoformat(iso_str.replace('Z', '+00:00')).timestamp()
+
+
+def _get_timezone() -> str:
+    """Get configured timezone for display (IANA name, e.g., 'America/Los_Angeles').
+
+    Returns:
+        Timezone string from config, or 'UTC' if not set or invalid.
+    """
+    try:
+        return json.loads(CONFIG_FILE.read_text()).get("timezone", "UTC")
+    except Exception:
+        return "UTC"
 
 
 def is_ripe(queued_at_iso: str | None, min_age_minutes: int) -> bool:
@@ -746,7 +759,14 @@ def write_story_files(
             fh.write(f"# {story['title']}\n")
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
             # Record when TubeNews wrote this story (not the YouTube publish date).
-            pub_now = datetime.now()
+            # Convert current UTC time to configured timezone for display.
+            pub_now_utc = datetime.now(timezone.utc)
+            tz_name = _get_timezone()
+            try:
+                tz = pytz.timezone(tz_name)
+                pub_now = pub_now_utc.astimezone(tz)
+            except Exception:
+                pub_now = pub_now_utc.astimezone(pytz.timezone("UTC"))
             pub_formatted = (
                 _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
                 + " at "
