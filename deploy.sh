@@ -68,12 +68,12 @@ if uname -s | grep -q FreeBSD; then
     sudo bastille cp "$JAIL" "$SRC/contrib/freebsd/tubenews_web" /etc/rc.d/tubenews_web
 
     # Make executable
-    sudo bastille run "$JAIL" chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web
+    sudo bastille cmd "$JAIL" chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web
 
     # Fix state directory ownership (www user needs to write to state/)
     echo "Fixing state directory ownership to www:www..."
-    sudo bastille run "$JAIL" chown -R www:www "$DEST/state"
-    sudo bastille run "$JAIL" chmod 755 "$DEST/state"
+    sudo bastille cmd "$JAIL" chown -R www:www "$DEST/state"
+    sudo bastille cmd "$JAIL" chmod 755 "$DEST/state"
 
     echo ""
     echo "Next steps:"
