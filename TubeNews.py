@@ -442,6 +442,7 @@ def fetch_transcript(
     video_title: str = "",
     transcript_rate_limit_event: threading.Event | None = None,
     failure_reason: list[str] | None = None,
+    livestream_error: list[bool] | None = None,
 ) -> str | None | bool:
     """Fetch timed transcript segments from the Supadata API.
 
@@ -453,9 +454,13 @@ def fetch_transcript(
     *transcript_rate_limit_event* is set so that ``process_video`` and
     ``process_feed`` can abort remaining videos immediately.
 
+    When a livestream error is detected (video is currently broadcasting),
+    *livestream_error* is set to [True] to signal that the video should be
+    deferred without incrementing retry_count.
+
     Returns:
         str  — formatted transcript on success.
-        None — transient failure (network error, rate limit, etc.); will retry next run.
+        None — transient failure (network error, rate limit, livestream, etc.); will retry next run.
         False — permanent no-transcript (Supadata confirmed the video has no captions);
                 caller should write ``status: "no_transcript_available"`` and stop retrying.
     """
@@ -526,6 +531,8 @@ def fetch_transcript(
             return False
         elif "live streaming" in exc_str:
             logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry later")
+            if livestream_error is not None:
+                livestream_error.append(True)
         else:
             logger.error(f"{prefix}Supadata: Call failed: {exc}")
 
@@ -1280,11 +1287,13 @@ def process_video(
             return "skipped", 0
         logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
         _transcript_failure_reason: list[str] = []
+        _livestream_error: list[bool] = []
         transcript_text = fetch_transcript(
             video_id, supadata_client,
             feed_name=channel_name, video_title=video_title,
             transcript_rate_limit_event=transcript_rate_limit_event,
             failure_reason=_transcript_failure_reason,
+            livestream_error=_livestream_error,
         )
         if transcript_text is False:
             # Supadata says no transcript exists. For recently published videos
@@ -1318,7 +1327,21 @@ def process_video(
             logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: No transcript available — marked permanent, will not retry")
             return "skipped", 0
         elif not transcript_text:
-            # Transient failure — quota exhausted or network error, will retry later.
+            # Transient failure — quota exhausted, livestream, or network error.
+            if _livestream_error and _livestream_error[0]:
+                # Video is a livestream currently broadcasting.
+                # Write metadata to defer without incrementing retry_count.
+                meeting_dir = feed_dir / f"{video_date}_{video_id}"
+                meeting_dir.mkdir(exist_ok=True)
+                metadata: MetadataDict = {
+                    "video_id": video_id,
+                    "video_title": video_title,
+                    "status": "livestream_in_progress",
+                    "processed_at": time.time(),
+                }
+                (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
+                logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — deferred without penalty, will not retry until broadcast ends")
+                return "skipped", 0
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
             logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetch failed — will retry later")
@@ -1952,14 +1975,20 @@ def _wsb_receiver_thread(config: dict) -> None:
                 ch_el    = entry.find("yt:channelId",  _YT_NS)
                 title_el = entry.find("atom:title",    _YT_NS)
                 pub_el   = entry.find("atom:published", _YT_NS)
+                sched_el = entry.find("yt:scheduledStartTime", _YT_NS)
                 if vid_el is not None and ch_el is not None:
                     pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
                     pub_date = pub_raw  # full ISO 8601 timestamp
+                    sched_start = (sched_el.text or "").strip() if sched_el is not None else None
+                    # Preserve complete entry for future metadata extraction
+                    raw_entry = ET.tostring(entry, encoding='unicode')
                     new_entries.append({
                         "video_id":   vid_el.text.strip(),
                         "channel_id": ch_el.text.strip(),
                         "title":      (title_el.text or "").strip() if title_el is not None else "",
                         "date":       pub_date,
+                        "scheduled_start": sched_start,
+                        "raw_entry_xml": raw_entry,
                         "queued_at":  now,
                     })
 
