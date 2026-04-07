@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# PROVIDE: tubenews_web
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following to /etc/rc.conf[.local] to enable this service:
+#
+# tubenews_web_enable="YES"
+
+. /etc/rc.subr
+
+name="tubenews_web"
+rcvar=tubenews_web_enable
+pidfile="/var/run/tubenews_web.pid"
+
+: ${tubenews_web_enable:="NO"}
+: ${tubenews_web_user:="www"}
+: ${tubenews_web_dir:="/var/www/TubeNews"}
+
+command="${tubenews_web_dir}/serve.sh"
+start_precmd="${name}_precmd"
+
+tubenews_web_precmd()
+{
+    cd ${tubenews_web_dir}
+}
+
+load_rc_config $name
+run_rc_command "$1"
