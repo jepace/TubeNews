@@ -405,8 +405,8 @@ def _get_user_timezone(user) -> str:
 def _reformat_published_timestamp(published_str: str, user_timezone: str) -> str:
     """Parse published timestamp string and reformat to user's timezone.
 
-    Input format: "April 5, 2026 at 3:15 PM EST"
-    Output format: "April 5, 2026 at 12:15 PM PST" (reformatted to user TZ)
+    Input format: "April 5, 2026 at 3:15 PM EST (America/Los_Angeles)"
+    Output format: "April 5, 2026 at 12:15 PM PST (America/Los_Angeles)" (reformatted to user TZ)
 
     Falls back to original string if parsing fails.
     """
@@ -414,19 +414,22 @@ def _reformat_published_timestamp(published_str: str, user_timezone: str) -> str
         return published_str
 
     try:
-        # Parse the published string: "April 5, 2026 at 3:15 PM EST"
+        # Parse: "April 5, 2026 at 3:15 PM EST (America/Los_Angeles)"
         import re
         match = re.match(
-            r"(\w+)\s+(\d+),\s+(\d+)\s+at\s+(\d+):(\d+)\s+(AM|PM)\s+(\w+)",
+            r"(\w+)\s+(\d+),\s+(\d+)\s+at\s+(\d+):(\d+)\s+(AM|PM)\s+(\w+)\s+\(([^)]+)\)",
             published_str
         )
         if not match:
             return published_str
 
-        month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_str = match.groups()
+        month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_abbr, orig_tz_name = match.groups()
 
-        # Parse original timezone
-        orig_tz = pytz.timezone(orig_tz_str) if orig_tz_str in pytz.all_timezones else pytz.UTC
+        # Parse original timezone from IANA name in parentheses
+        try:
+            orig_tz = pytz.timezone(orig_tz_name)
+        except Exception:
+            return published_str
 
         # Convert month name to number
         from datetime import datetime as dt_class
@@ -451,8 +454,9 @@ def _reformat_published_timestamp(published_str: str, user_timezone: str) -> str
         formatted_date = _fmt_no_leading_zeros(user_dt, "%B %d, %Y")
         formatted_time = _fmt_no_leading_zeros(user_dt, "%I:%M %p")
         tz_abbr = user_dt.strftime("%Z")
+        tz_name = user_timezone
 
-        return f"{formatted_date} at {formatted_time} {tz_abbr}"
+        return f"{formatted_date} at {formatted_time} {tz_abbr} ({tz_name})"
     except Exception:
         return published_str
 

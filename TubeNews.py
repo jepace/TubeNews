@@ -358,10 +358,10 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if users_match else []
     )
 
-    # Current format: Published: April 5, 2026 at 3:15 PM  (plain, line 3)
-    # Legacy formats: *Published April 3, 2026*  or  **Published:** 2026-04-03
+    # Current format: Published April 5, 2026 at 3:15 PM EST (America/Los_Angeles)
+    # Legacy formats: Published: ..., *Published ...*,  **Published:** ...
     published_match = (
-        re.search(r"^Published: (.+)$", text, re.MULTILINE)
+        re.search(r"^Published\s+(.+)$", text, re.MULTILINE)
         or re.search(r"^\*Published (.+)\*$", text, re.MULTILINE)
         or re.search(r"\*\*Published:\*\*\s*(\S+)", text)
     )
@@ -773,7 +773,7 @@ def write_story_files(
                 _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
                 + " at "
                 + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
-                + f" {tz_abbr}"
+                + f" {tz_abbr} ({tz_name})"
             )
             fh.write(f"Published {pub_formatted}\n")
             if video_id:
