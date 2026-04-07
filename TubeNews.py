@@ -2152,7 +2152,8 @@ def _wsb_processor_thread(config: dict) -> None:
                 subs = {}
             renew_before = time.time() + 86400  # within next 24 h
             for cid, info in subs.items():
-                expires = info.get("subscribed_at", 0) + info.get("lease_seconds", _WSB_LEASE)
+                subscribed_at = _get_timestamp_as_float(info.get("subscribed_at", 0))
+                expires = subscribed_at + info.get("lease_seconds", _WSB_LEASE)
                 if expires <= renew_before:
                     logger.info(f"WebSub: renewing subscription for channel {cid}")
                     _wsb_subscribe(cid, config)
