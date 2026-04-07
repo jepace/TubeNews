@@ -767,12 +767,14 @@ def write_story_files(
                 pub_now = pub_now_utc.astimezone(tz)
             except Exception:
                 pub_now = pub_now_utc.astimezone(pytz.timezone("UTC"))
+            tz_abbr = pub_now.strftime("%Z")
             pub_formatted = (
                 _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
                 + " at "
                 + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
+                + f" {tz_abbr}"
             )
-            fh.write(f"Published: {pub_formatted}\n")
+            fh.write(f"Published {pub_formatted}\n")
             if video_id:
                 start_seconds = story.get('start_time_seconds', 0)
                 fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
