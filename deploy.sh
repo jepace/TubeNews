@@ -71,9 +71,11 @@ if uname -s | grep -q FreeBSD; then
     sudo bastille cmd "$JAIL" chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web
 
     # Fix state directory ownership (www user needs to write to state/)
+    # Note: must use jail-relative path, not host path
     echo "Fixing state directory ownership to www:www..."
-    sudo bastille cmd "$JAIL" chown -R www:www "$DEST/state"
-    sudo bastille cmd "$JAIL" chmod 755 "$DEST/state"
+    DEST_IN_JAIL="/var/www/TubeNews"
+    sudo bastille cmd "$JAIL" chown -R www:www "$DEST_IN_JAIL/state"
+    sudo bastille cmd "$JAIL" chmod 755 "$DEST_IN_JAIL/state"
 
     echo ""
     echo "Next steps:"
