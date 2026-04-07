@@ -741,7 +741,7 @@ def write_story_files(
 
         # Story Title
         *AP-style dateline*
-        *Published April 5, 2026 at 3:15 PM EST*
+        Published April 5, 2026 at 3:15 PM EST
         **Source:** https://youtu.be/<video_id>?t=120
 
         Body text …
@@ -775,7 +775,7 @@ def write_story_files(
                 + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
                 + f" {tz_abbr}"
             )
-            fh.write(f"*Published {pub_formatted}*\n")
+            fh.write(f"Published {pub_formatted}\n")
             if video_id:
                 start_seconds = story.get('start_time_seconds', 0)
                 fh.write(f"**Source:** https://youtu.be/{video_id}?t={start_seconds}\n")
