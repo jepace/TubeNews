@@ -36,6 +36,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
 from app import _rss_url, _feed_url, _prefs_to_classes  # noqa: E402
 
+# Add parent to path for TubeNews imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from TubeNews import now_utc_iso  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # _rss_url — no base_url configured
@@ -295,7 +299,7 @@ def flask_env(tmp_path, monkeypatch):
         "password_hash": generate_password_hash("adminpassword1"),
         "channel_ids": [],
         "feed_token": "admin-feed-token-xyz",
-        "created_at": int(time.time()),
+        "created_at": now_utc_iso(),
         "locked": False,
     }))
 
@@ -309,7 +313,7 @@ def flask_env(tmp_path, monkeypatch):
         "password_hash": generate_password_hash("targetpassword1"),
         "channel_ids": [],
         "feed_token": "target-feed-token-abc",
-        "created_at": int(time.time()),
+        "created_at": now_utc_iso(),
         "locked": False,
     }))
 
