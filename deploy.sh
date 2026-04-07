@@ -9,7 +9,7 @@
 #
 # On FreeBSD: also installs rc.d scripts and fixes state directory ownership.
 
-SRC="/home/jepace/dev/TubeNews"
+SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST="/usr/local/bastille/jails/TubeNews/root/var/www/TubeNews"
 JAIL="TubeNews"
 
