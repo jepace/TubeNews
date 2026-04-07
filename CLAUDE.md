@@ -208,21 +208,27 @@ Channel configuration lives in `state/channels.json` (see `channels.json.sample`
 ## Running
 
 ```bash
-# Normal run
+# Daemon mode (default; runs indefinitely as WebSub receiver)
+# Logs to state/run_logs/tubenews_daemon.log (rotating, 10MB max)
+# Config changes to TubeNews.json are reloaded on each processor cycle
 python3 TubeNews.py
 
-# Debug mode (verbose logging, shows API calls and raw responses)
+# Debug mode with daemon (verbose logging, shows API calls and raw responses)
 python3 TubeNews.py --debug
 
-# WebSub daemon mode (runs indefinitely; receives YouTube push notifications)
-# Config changes to TubeNews.json are reloaded on each processor cycle
-python3 TubeNews.py --daemon
+# Single-run mode (process all channels once and exit)
+python3 TubeNews.py --single-run
+
+# Single-run debug mode
+python3 TubeNews.py --single-run --debug
 
 # Start the web server (gunicorn — never use python3 web/app.py in any environment)
 ./serve.sh
 ```
 
-**Daemon mode note:** When running in daemon mode, most TubeNews.json configuration changes (API keys, timeouts, daemon parameters, etc.) are automatically reloaded on each processor cycle without requiring a restart. See **Configuration Reference** section for details on which keys are reloadable vs. which require restart.
+**Daemon mode note:** TubeNews now runs in daemon mode by default, subscribing to YouTube push notifications and processing new videos immediately. Logs are written to `state/run_logs/tubenews_daemon.log` with automatic rotation at 10MB. Most TubeNews.json configuration changes (API keys, timeouts, daemon parameters, etc.) are automatically reloaded on each processor cycle without requiring a restart. See **Configuration Reference** section for details on which keys are reloadable vs. which require restart.
+
+**Single-run mode:** Use `--single-run` to process all configured channels once and exit. Useful for cron jobs or ad-hoc processing. Logs to `state/run_logs/run-<pid>.log`.
 
 ### First Run on a Channel with Existing Videos
 
@@ -367,7 +373,7 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 
 ### Daemon Config Reload
 
-When running in daemon mode (`python3 TubeNews.py --daemon`), the following configuration keys are **automatically reloaded** from `TubeNews.json` on each processor cycle (~every 10 minutes):
+When running in daemon mode (the default, `python3 TubeNews.py`), the following configuration keys are **automatically reloaded** from `TubeNews.json` on each processor cycle (~every 10 minutes):
 
 **Reloadable keys** (changes take effect immediately or next cycle):
 - `gemini_api_key`, `supadata_api_key` — next API call uses new key
@@ -381,7 +387,7 @@ When running in daemon mode (`python3 TubeNews.py --daemon`), the following conf
 
 Changes to other keys (like `content_dir`, `state_dir`, `port`, `admin_users`) are handled by the web app when those are modified; they don't affect the daemon.
 
-**Note:** In single-run mode (`python3 TubeNews.py`), `TubeNews.json` is loaded once at startup. To pick up config changes, restart the process.
+**Note:** In single-run mode (`python3 TubeNews.py --single-run`), `TubeNews.json` is loaded once at startup. To pick up config changes, restart the process.
 
 ---
 
