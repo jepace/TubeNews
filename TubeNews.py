@@ -363,9 +363,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         and not l.startswith("**Source:**")
         and not l.startswith("**Topics:**")
         and not l.startswith("**Users:**")
-        and not l.startswith("**Published:**")     # legacy format (bottom block)
-        and not re.match(r"^\*Published .+\*$", l) # legacy format (italic top)
-        and not l.startswith("Published:")         # current format (plain top)
+        and not l.startswith("Published")
     ]
     body_html = "<br>".join(html.escape(l) for l in body_lines)
 
@@ -384,13 +382,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         if users_match else []
     )
 
-    # Current format: Published April 5, 2026 at 3:15 PM EST (America/Los_Angeles)
-    # Legacy formats: Published: ..., *Published ...*,  **Published:** ...
-    published_match = (
-        re.search(r"^Published\s+(.+)$", text, re.MULTILINE)
-        or re.search(r"^\*Published (.+)\*$", text, re.MULTILINE)
-        or re.search(r"\*\*Published:\*\*\s*(\S+)", text)
-    )
+    published_match = re.search(r"^Published\s+(.+)$", text, re.MULTILINE)
     published = published_match.group(1).strip() if published_match else ""
 
     return {
