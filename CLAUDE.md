@@ -124,7 +124,7 @@ Defined in `web/app.py`:
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* is a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
 | `_collect_channel_focuses(channel_id, feed_focus)` | Reads `state/users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses are read from `user["channels"][channel_id]`; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
-| `_recover_orphaned_videos()` | Scans `content/` for meeting directories that have no `metadata.json` (interrupted runs or manually deleted metadata). Each orphaned video is added to `state/queue/push_queue.json` with `queued_at = 0` so it is immediately ripe on the next processor cycle. Videos already in the queue are left untouched. Returns the number of newly queued videos. Called once per 24 hours by `_wsb_processor_thread`. |
+| `_recover_orphaned_videos()` | Scans `content/` for meeting directories that have no `metadata.json` (interrupted runs or manually deleted metadata). Each orphaned video is added to `state/queue/push_queue.json` with `queued_at = null` (ISO 8601 null) so it is immediately ripe on the next processor cycle. Videos already in the queue are left untouched. Returns the number of newly queued videos. Called once per 24 hours by `_wsb_processor_thread`. |
 
 ### YouTube data-gathering
 
@@ -295,12 +295,14 @@ Story body text in AP inverted pyramid style...
   "video_id": "dQw4w9WgXcQ",
   "video_title": "Regular Meeting March 14 2026",
   "status": "processed",
-  "processed_at": 1741910400,
+  "processed_at": "2026-04-07T00:14:36Z",
   "processed_focuses": ["housing, zoning, permits", "transportation, roads"]
 }
 ```
 
 `status` values: `"processed"` | `"ignored_too_old"` | `"ignored_short"` (video is a YouTube Short; will not be retried) | `"no_stories"` (AI ran but returned no relevant stories) | `"no_transcript_available"` (Supadata confirmed no captions exist; will not be retried) | `"livestream_in_progress"` (video is a livestream currently broadcasting; will be retried after broadcast ends without penalty to retry_count)
+
+`processed_at` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format (e.g., `"2026-04-07T00:14:36Z"`). Stored as a string; represents when the video was processed by TubeNews. Supports backward compatibility with legacy Unix float timestamps.
 
 `skip_reason` — present only when `status` is `"no_transcript_available"`. Values: `"no_captions"` (Supadata returned empty content or a generic error), `"members_only_or_restricted"` (HTTP 403 from Supadata — video is members-only or region-restricted), `"video_not_found"` (HTTP 404 from Supadata — video ID is invalid or deleted). Key absent on all other status values and on older entries.
 
@@ -318,7 +320,7 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
   "date": "2026-03-14T14:30:00Z",
   "scheduled_start": "2026-03-14T18:00:00Z",
   "raw_entry_xml": "<entry><yt:videoId>dQw4w9WgXcQ</yt:videoId>...</entry>",
-  "queued_at": 1741910400.123,
+  "queued_at": "2026-04-07T00:14:36Z",
   "retry_count": 0
 }
 ```
@@ -327,7 +329,7 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 - `date`: The video's publish timestamp from YouTube's push notification (ISO 8601 format, may be UTC `Z`-suffixed). For regular videos, this is the upload time. Videos with **future dates are skipped during processing** — the processor holds them in the queue until the publish date passes, without incrementing `retry_count`. This prevents premature drop-off of videos scheduled days in advance.
 - `scheduled_start`: Optional ISO 8601 timestamp from YouTube's Atom feed (via `yt:scheduledStartTime` element) if the video is a scheduled livestream. `null` or absent if not present in the push notification. When present, this represents the actual scheduled broadcast time (distinct from `date` which is video creation time).
 - `raw_entry_xml`: Complete serialized Atom feed entry XML from YouTube's WebSub push notification. Preserved for future metadata extraction or debugging purposes. String format; contains all fields sent by YouTube.
-- `queued_at`: Unix timestamp (float) when the notification arrived. The processor only processes "ripe" entries where `queued_at <= now - websub_min_age_minutes`.
+- `queued_at`: ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format when the notification arrived, or `null` for entries marked for immediate processing (orphan recovery). The processor only processes "ripe" entries where the timestamp is at least `websub_min_age_minutes` old. `null` timestamps are always ripe. Supports backward compatibility with legacy Unix float timestamps.
 - `retry_count`: Tracks failed processing attempts. When a video fails processing and is still needed (no `metadata.json` written), `retry_count` is incremented. **Videos are dropped after exceeding `_QUEUE_MAX_RETRIES` (10)**, but this is rare in practice because:
   - **Permanent failures** (members-only, video deleted, no captions available) write `metadata.json` immediately, removing the video from the queue entirely.
   - **Livestream failures** (video currently broadcasting) write `metadata.json` with `status: "livestream_in_progress"`, removing the video without penalty to `retry_count`.
@@ -465,8 +467,8 @@ state/users/
     "UCyyyyyyy": []
   },
   "feed_token": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": 1741910400,
-  "last_accessed": 1741910400,
+  "created_at": "2026-04-07T00:14:36Z",
+  "last_accessed": "2026-04-07T00:14:36Z",
   "locked": false,
   "feed_name": "Alice's Local News",
   "preferences": {"dark_mode": false, "font_size": "normal"},
@@ -478,7 +480,8 @@ state/users/
 ```
 
 - `channels` — merged subscription + focus dict. Keys are subscribed channel IDs; values are **lists of focus strings** (one per focus line, up to 3). An empty list means no filter (show all stories from that channel). Every subscribed channel must appear as a key, even with an empty focus list. `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
-- `last_accessed` — Unix timestamp (float) of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes per user). Key absent on accounts created before this field was added.
+- `created_at` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format (e.g., `"2026-04-07T00:14:36Z"`) when the user account was created. Supports backward compatibility with legacy Unix timestamp format.
+- `last_accessed` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes per user). Key absent on accounts created before this field was added. Supports backward compatibility with legacy Unix timestamp format.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
 - `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.

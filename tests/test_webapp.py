@@ -24,6 +24,7 @@ os.environ.setdefault("TUBENEWS_SECRET_KEY", "test-secret-key-32-bytes-xxxxxxxx"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from TubeNews import now_utc_iso, unix_to_iso8601
 import web.app as webapp
 from web.app import app as flask_app
 
@@ -53,7 +54,7 @@ def _make_meeting(channel_dir: Path, date_prefix: str, video_id: str,
         "video_id": video_id,
         "video_title": title,
         "status": status,
-        "processed_at": int(time.time()),
+        "processed_at": now_utc_iso(),
     }))
     return meeting_dir
 
@@ -82,7 +83,7 @@ def _make_user(users_root: Path, name: str, email: str, channel_ids: list[str],
         "password_hash": generate_password_hash(password),
         "channels": {cid: [] for cid in channel_ids},
         "feed_token": token,
-        "created_at": int(time.time()),
+        "created_at": now_utc_iso(),
     }
     (user_dir / "user.json").write_text(json.dumps(data))
     return data
@@ -1190,7 +1191,9 @@ def test_last_accessed_set_on_authenticated_request(logged_in_client, archive):
         d = _json.loads(uj.read_text())
         if d.get("email") == "test@example.com":
             assert "last_accessed" in d
-            assert d["last_accessed"] > 0
+            # last_accessed is now an ISO 8601 string
+            assert isinstance(d["last_accessed"], str)
+            assert d["last_accessed"].endswith("Z") or "+00:00" in d["last_accessed"]
             return
     pytest.fail("User not found")
 
@@ -1198,18 +1201,20 @@ def test_last_accessed_set_on_authenticated_request(logged_in_client, archive):
 def test_last_accessed_not_written_when_fresh(logged_in_client, archive):
     """last_accessed is not rewritten when it was updated less than 5 min ago."""
     import json as _json
+    from TubeNews import unix_to_iso8601
     import web.app as webapp
 
-    # Pre-seed a recent last_accessed timestamp
+    # Pre-seed a recent last_accessed timestamp (ISO 8601 format)
     users_dir = webapp.STATE_ROOT / "users"
-    recent_ts = time.time() - 10  # 10 seconds ago
+    recent_ts_unix = time.time() - 10  # 10 seconds ago
+    recent_ts_iso = unix_to_iso8601(recent_ts_unix)
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if not uj.exists():
             continue
         d = _json.loads(uj.read_text())
         if d.get("email") == "test@example.com":
-            d["last_accessed"] = recent_ts
+            d["last_accessed"] = recent_ts_iso
             uj.write_text(_json.dumps(d))
             break
 
@@ -1221,8 +1226,8 @@ def test_last_accessed_not_written_when_fresh(logged_in_client, archive):
             continue
         d = _json.loads(uj.read_text())
         if d.get("email") == "test@example.com":
-            # last_accessed must not have changed — still close to recent_ts
-            assert abs(d["last_accessed"] - recent_ts) < 1
+            # last_accessed must not have changed — debounce prevents write within 5 min
+            assert d["last_accessed"] == recent_ts_iso
             return
     pytest.fail("User not found")
 
@@ -1381,7 +1386,7 @@ def test_run_now_sends_ntfy(archive, monkeypatch):
         "password_hash": _gph("adminpassword1"),
         "channels": {},
         "feed_token": str(uuid.uuid4()),
-        "created_at": int(time.time()),
+        "created_at": now_utc_iso(),
     }))
     import web.app as _wa
     cfg_path = _wa.CONFIG_FILE
@@ -2421,7 +2426,7 @@ def test_login_locked_account_shows_error(client, archive):
         "password_hash": generate_password_hash("correctpassword1"),
         "channels": {},
         "feed_token": str(uuid.uuid4()),
-        "created_at": int(time.time()),
+        "created_at": now_utc_iso(),
         "locked": True,
     }
     user_dir = archive / "state" / "users" / str(uuid.uuid4())
@@ -2445,7 +2450,7 @@ def test_login_locked_account_does_not_authenticate(client, archive):
         "password_hash": generate_password_hash("correctpassword1"),
         "channels": {},
         "feed_token": str(uuid.uuid4()),
-        "created_at": int(time.time()),
+        "created_at": now_utc_iso(),
         "locked": True,
     }
     user_dir = archive / "state" / "users" / str(uuid.uuid4())

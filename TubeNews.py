@@ -30,7 +30,7 @@ import socket
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TypedDict
 
@@ -209,6 +209,81 @@ def _fmt_no_leading_zeros(dt: datetime, fmt: str) -> str:
         'January 5, 2026 at 9:30 AM'
     """
     return re.sub(r" 0(\d)", r" \1", dt.strftime(fmt))
+
+
+def now_utc_iso() -> str:
+    """Return current UTC time as ISO 8601 string with Z suffix.
+
+    Format: YYYY-MM-DDTHH:MM:SSZ (e.g., 2026-04-07T00:14:36Z)
+    """
+    return datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def unix_to_iso8601(unix_ts: float | int) -> str:
+    """Convert Unix timestamp to ISO 8601 UTC string with Z suffix.
+
+    Args:
+        unix_ts: Seconds since epoch (as float or int)
+
+    Returns:
+        ISO 8601 string: YYYY-MM-DDTHH:MM:SSZ
+    """
+    return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def iso8601_to_unix(iso_str: str | None) -> float | None:
+    """Convert ISO 8601 UTC string to Unix timestamp.
+
+    Args:
+        iso_str: ISO 8601 string (with Z or +00:00 suffix), or None
+
+    Returns:
+        Unix timestamp as float, or None if input is None/empty
+    """
+    if not iso_str:
+        return None
+    return datetime.fromisoformat(iso_str.replace('Z', '+00:00')).timestamp()
+
+
+def is_ripe(queued_at_iso: str | None, min_age_minutes: int) -> bool:
+    """Check if a queued entry is old enough to process.
+
+    Args:
+        queued_at_iso: ISO 8601 timestamp when entry was queued, or None for immediate processing
+        min_age_minutes: Minimum age in minutes before processing
+
+    Returns:
+        True if entry is old enough or immediately processable (None timestamp)
+    """
+    if queued_at_iso is None:
+        return True  # null timestamp = process immediately
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=min_age_minutes)
+        return datetime.fromisoformat(queued_at_iso.replace('Z', '+00:00')) <= cutoff
+    except (ValueError, TypeError):
+        return True  # Invalid timestamp = process immediately
+
+
+def _get_timestamp_as_float(ts_value: str | float | int | None) -> float:
+    """Convert any timestamp format to Unix float for display/calculations.
+
+    Handles both legacy Unix timestamps (float/int) and new ISO 8601 strings.
+    Used for backward compatibility when reading stored timestamps.
+
+    Args:
+        ts_value: ISO 8601 string, Unix float/int, or None
+
+    Returns:
+        Unix timestamp as float; current time if input is None/invalid
+    """
+    if ts_value is None:
+        return time.time()
+    if isinstance(ts_value, (int, float)):
+        return float(ts_value)  # Already Unix
+    if isinstance(ts_value, str):
+        result = iso8601_to_unix(ts_value)
+        return result if result is not None else time.time()
+    return time.time()  # Fallback for unknown types
 
 
 def parse_story_file(story_path: Path) -> ParsedStory:
@@ -827,7 +902,7 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
             )
             feed_entry.published(
                 datetime.fromtimestamp(
-                    entry["meta"].get("processed_at", time.time())
+                    _get_timestamp_as_float(entry["meta"].get("processed_at"))
                 ).astimezone()
             )
         except Exception as exc:
@@ -922,7 +997,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
             )
             feed_entry.published(
                 datetime.fromtimestamp(
-                    entry["meta"].get("processed_at", time.time())
+                    _get_timestamp_as_float(entry["meta"].get("processed_at"))
                 ).astimezone()
             )
         except Exception as exc:
@@ -1282,7 +1357,7 @@ def process_video(
                 "video_id": video_id,
                 "video_title": video_title,
                 "status": "ignored_short",
-                "processed_at": time.time(),
+                "processed_at": now_utc_iso(),
             }))
             return "skipped", 0
         logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
@@ -1321,7 +1396,7 @@ def process_video(
                 "video_title": video_title,
                 "status": "no_transcript_available",
                 "skip_reason": skip_reason,
-                "processed_at": time.time(),
+                "processed_at": now_utc_iso(),
             }
             (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
             logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: No transcript available — marked permanent, will not retry")
@@ -1337,7 +1412,7 @@ def process_video(
                     "video_id": video_id,
                     "video_title": video_title,
                     "status": "livestream_in_progress",
-                    "processed_at": time.time(),
+                    "processed_at": now_utc_iso(),
                 }
                 (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
                 logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — deferred without penalty, will not retry until broadcast ends")
@@ -1397,7 +1472,7 @@ def process_video(
             "video_id": video_id,
             "video_title": video_title,
             "status": "processed",
-            "processed_at": time.time(),
+            "processed_at": now_utc_iso(),
             "processed_focuses": sorted(f for f, _ in focuses),
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
@@ -1410,7 +1485,7 @@ def process_video(
         "video_id": video_id,
         "video_title": video_title,
         "status": "no_stories",
-        "processed_at": time.time(),
+        "processed_at": now_utc_iso(),
         "processed_focuses": sorted(f for f, _ in focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
@@ -1562,7 +1637,7 @@ def process_feed(
             (stub_dir / "metadata.json").write_text(json.dumps({
                 "video_id": video_info["id"],
                 "status": "ignored_too_old",
-                "processed_at": time.time(),
+                "processed_at": now_utc_iso(),
             }))
             content_changed = True
             continue
@@ -1649,7 +1724,7 @@ def _wsb_record_subscription(channel_id: str, callback_url: str) -> None:
     except Exception:
         subs = {}
     subs[channel_id] = {
-        "subscribed_at": time.time(),
+        "subscribed_at": now_utc_iso(),
         "lease_seconds": _WSB_LEASE,
         "callback_url": callback_url,
     }
@@ -1767,8 +1842,17 @@ def _read_push_queue(min_age_minutes: float) -> list[dict]:
         items: list[dict] = json.loads(path.read_text())
     except Exception:
         return []
-    cutoff = time.time() - min_age_minutes * 60
-    return [i for i in items if i.get("queued_at", 0) <= cutoff]
+    # Use is_ripe() helper which handles both ISO 8601 strings and legacy Unix floats,
+    # and treats None/0 as immediate processing
+    result = []
+    for i in items:
+        queued_at = i.get("queued_at")
+        # Handle legacy format: 0 means immediate processing
+        if isinstance(queued_at, (int, float)) and queued_at == 0:
+            queued_at = None
+        if is_ripe(queued_at, int(min_age_minutes)):
+            result.append(i)
+    return result
 
 
 _QUEUE_MAX_RETRIES = 10
@@ -1875,7 +1959,7 @@ def _recover_orphaned_videos() -> int:
                 "channel_id": channel_id,
                 "title":      "",
                 "date":       parts[0],
-                "queued_at":  0,
+                "queued_at":  None,
             })
             already_queued.add(video_id)
 
@@ -1968,7 +2052,7 @@ def _wsb_receiver_thread(config: dict) -> None:
                 self.end_headers()
                 return
 
-            now = time.time()
+            now = now_utc_iso()
             new_entries: list[dict] = []
             for entry in root.findall("atom:entry", _YT_NS):
                 vid_el   = entry.find("yt:videoId",    _YT_NS)
@@ -2514,7 +2598,7 @@ def _main_body(args) -> None:
 
     # Check cached Supadata balance before doing any work.
     quota_ok, cached_balance = _check_supadata_quota(config)
-    started_at = time.time()
+    started_at = now_utc_iso()
     if not quota_ok:
         run_log_path = STATE_ROOT / "run_logs" / "run_log.json"
         run_log_path.parent.mkdir(exist_ok=True)
@@ -2524,7 +2608,7 @@ def _main_body(args) -> None:
             runs = []
         runs.append({
             "started_at": started_at,
-            "finished_at": time.time(),
+            "finished_at": now_utc_iso(),
             "total_stories": 0,
             "ai_rate_limited": False,
             "transcript_quota_exhausted": True,
@@ -2599,7 +2683,7 @@ def _main_body(args) -> None:
         runs = []
     runs.append({
         "started_at": started_at,
-        "finished_at": time.time(),
+        "finished_at": now_utc_iso(),
         "total_stories": total_stories,
         "ai_rate_limited": ai_rate_limit_event.is_set(),
         "transcript_quota_exhausted": transcript_rate_limit_event.is_set(),
