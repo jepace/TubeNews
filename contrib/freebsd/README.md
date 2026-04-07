@@ -2,6 +2,19 @@
 
 Scripts and instructions for running TubeNews in a FreeBSD Bastille jail with auto-start on reboot.
 
+## Prerequisites
+
+### State Directory Permissions
+
+Both services run as the `www` user. Ensure the `state/` directory (used for user data, run logs, and lock files) is owned by `www`:
+
+```bash
+sudo bastille console TubeNews
+chown -R www:www /var/www/TubeNews/state
+chmod 755 /var/www/TubeNews/state
+exit
+```
+
 ## Installation
 
 ### 1. Copy rc.d scripts into the jail
@@ -42,6 +55,15 @@ service tubenews_web status
 exit
 ```
 
+Check log files:
+
+```bash
+sudo bastille console TubeNews
+tail -f /var/log/tubenews_daemon.log
+tail -f /var/log/tubenews_web.log
+exit
+```
+
 After reboot, verify both services are running:
 
 ```bash
@@ -52,6 +74,11 @@ ps aux | grep -i tubenews
 ## Services
 
 - **tubenews_daemon**: Runs `python3 TubeNews.py --daemon` for WebSub push notifications
+  - Logs to `/var/log/tubenews_daemon.log`
+  - Runs as `www` user
+  
 - **tubenews_web**: Runs `./serve.sh` for the Flask web UI (gunicorn)
+  - Logs to `/var/log/tubenews_web.log`
+  - Runs as `www` user
 
-Both services will auto-start when the jail boots.
+Both services will auto-start when the jail boots, with output redirected to log files (not console).

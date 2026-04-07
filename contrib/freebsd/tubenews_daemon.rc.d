@@ -13,19 +13,15 @@
 name="tubenews_daemon"
 rcvar=tubenews_daemon_enable
 pidfile="/var/run/tubenews_daemon.pid"
+logfile="/var/log/tubenews_daemon.log"
 
 : ${tubenews_daemon_enable:="NO"}
 : ${tubenews_daemon_user:="www"}
 : ${tubenews_daemon_dir:="/var/www/TubeNews"}
 
-command="/usr/local/bin/python3"
-command_args="${tubenews_daemon_dir}/TubeNews.py --daemon"
-start_precmd="${name}_precmd"
-
-tubenews_daemon_precmd()
-{
-    cd ${tubenews_daemon_dir}
-}
+command="/usr/sbin/daemon"
+command_args="-P ${pidfile} -u ${tubenews_daemon_user} -o ${logfile} /usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py --daemon"
 
 load_rc_config $name
 run_rc_command "$1"
+
