@@ -102,6 +102,29 @@
                {% if u._data.get('preferences', {}).get('dark_mode') %}checked{% endif %}>
         Dark mode
       </label>
+      <div class="form-row" style="margin-top:1rem;">
+        <label for="timezone">Timezone</label>
+        <select name="timezone" id="timezone" style="max-width: 300px;">
+          <option value="">Use system default</option>
+          <optgroup label="United States">
+            <option value="America/New_York" {% if u._data.get('preferences', {}).get('timezone') == 'America/New_York' %}selected{% endif %}>Eastern</option>
+            <option value="America/Chicago" {% if u._data.get('preferences', {}).get('timezone') == 'America/Chicago' %}selected{% endif %}>Central</option>
+            <option value="America/Denver" {% if u._data.get('preferences', {}).get('timezone') == 'America/Denver' %}selected{% endif %}>Mountain</option>
+            <option value="America/Los_Angeles" {% if u._data.get('preferences', {}).get('timezone') == 'America/Los_Angeles' %}selected{% endif %}>Pacific</option>
+            <option value="America/Anchorage" {% if u._data.get('preferences', {}).get('timezone') == 'America/Anchorage' %}selected{% endif %}>Alaska</option>
+            <option value="Pacific/Honolulu" {% if u._data.get('preferences', {}).get('timezone') == 'Pacific/Honolulu' %}selected{% endif %}>Hawaii</option>
+          </optgroup>
+          <optgroup label="Canada">
+            <option value="America/Toronto" {% if u._data.get('preferences', {}).get('timezone') == 'America/Toronto' %}selected{% endif %}>Eastern</option>
+            <option value="America/Winnipeg" {% if u._data.get('preferences', {}).get('timezone') == 'America/Winnipeg' %}selected{% endif %}>Central</option>
+            <option value="America/Edmonton" {% if u._data.get('preferences', {}).get('timezone') == 'America/Edmonton' %}selected{% endif %}>Mountain</option>
+            <option value="America/Vancouver" {% if u._data.get('preferences', {}).get('timezone') == 'America/Vancouver' %}selected{% endif %}>Pacific</option>
+          </optgroup>
+          <optgroup label="Other">
+            <option value="Europe/London" {% if u._data.get('preferences', {}).get('timezone') == 'Europe/London' %}selected{% endif %}>London (GMT/BST)</option>
+          </optgroup>
+        </select>
+      </div>
       <button type="submit">Save display preferences</button>
     </form>
   </section>

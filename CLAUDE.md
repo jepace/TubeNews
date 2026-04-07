@@ -472,7 +472,7 @@ state/users/
   "last_accessed": "2026-04-07T00:14:36Z",
   "locked": false,
   "feed_name": "Alice's Local News",
-  "preferences": {"dark_mode": false, "font_size": "normal"},
+  "preferences": {"dark_mode": false, "font_size": "normal", "timezone": "America/Los_Angeles"},
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "read_articles": ["abc123hash", "def456hash"],
   "starred_articles": ["abc123hash"],
@@ -486,7 +486,7 @@ state/users/
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
 - `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
-- `preferences` — display settings dict with keys `dark_mode` (bool) and `font_size` (`"normal"` | `"large"` | `"larger"`). Converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. Key absent means all defaults (light mode, normal font).
+- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), and `timezone` (IANA timezone string, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` overrides the system timezone for display of timestamps (admin pages, story published times). Defaults to system timezone if not set. Key absent means all defaults (light mode, normal font, system timezone).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/feed` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 - `starred_articles` — sorted list of `content_hash` strings for articles the user has starred. `/starred` shows only these stories. Key absent means no starred articles. Written by the `account_mark_starred` and `account_mark_unstarred` routes. Independent of read/unread state.

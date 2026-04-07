@@ -175,6 +175,30 @@
         Dark mode
       </label>
 
+      <div class="form-row" style="margin-top:1rem;">
+        <label for="timezone">Timezone</label>
+        <select name="timezone" id="timezone" style="max-width: 300px;">
+          <option value="">Use system default</option>
+          <optgroup label="United States">
+            <option value="America/New_York" {% if prefs.get('timezone') == 'America/New_York' %}selected{% endif %}>Eastern</option>
+            <option value="America/Chicago" {% if prefs.get('timezone') == 'America/Chicago' %}selected{% endif %}>Central</option>
+            <option value="America/Denver" {% if prefs.get('timezone') == 'America/Denver' %}selected{% endif %}>Mountain</option>
+            <option value="America/Los_Angeles" {% if prefs.get('timezone') == 'America/Los_Angeles' %}selected{% endif %}>Pacific</option>
+            <option value="America/Anchorage" {% if prefs.get('timezone') == 'America/Anchorage' %}selected{% endif %}>Alaska</option>
+            <option value="Pacific/Honolulu" {% if prefs.get('timezone') == 'Pacific/Honolulu' %}selected{% endif %}>Hawaii</option>
+          </optgroup>
+          <optgroup label="Canada">
+            <option value="America/Toronto" {% if prefs.get('timezone') == 'America/Toronto' %}selected{% endif %}>Eastern</option>
+            <option value="America/Winnipeg" {% if prefs.get('timezone') == 'America/Winnipeg' %}selected{% endif %}>Central</option>
+            <option value="America/Edmonton" {% if prefs.get('timezone') == 'America/Edmonton' %}selected{% endif %}>Mountain</option>
+            <option value="America/Vancouver" {% if prefs.get('timezone') == 'America/Vancouver' %}selected{% endif %}>Pacific</option>
+          </optgroup>
+          <optgroup label="Other">
+            <option value="Europe/London" {% if prefs.get('timezone') == 'Europe/London' %}selected{% endif %}>London (GMT/BST)</option>
+          </optgroup>
+        </select>
+      </div>
+
       <button type="submit" class="btn-save">Save display preferences</button>
     </form>
   </section>
