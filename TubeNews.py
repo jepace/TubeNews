@@ -259,8 +259,14 @@ def is_ripe(queued_at_iso: str | None, min_age_minutes: int) -> bool:
         return True  # null timestamp = process immediately
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=min_age_minutes)
-        return datetime.fromisoformat(queued_at_iso.replace('Z', '+00:00')) <= cutoff
-    except (ValueError, TypeError):
+        # Handle both ISO 8601 strings and legacy Unix floats
+        if isinstance(queued_at_iso, (int, float)):
+            # Legacy Unix timestamp
+            return datetime.fromtimestamp(queued_at_iso, tz=timezone.utc) <= cutoff
+        else:
+            # ISO 8601 string
+            return datetime.fromisoformat(queued_at_iso.replace('Z', '+00:00')) <= cutoff
+    except (ValueError, TypeError, AttributeError):
         return True  # Invalid timestamp = process immediately
 
 
