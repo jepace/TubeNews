@@ -1,18 +1,29 @@
 {
+  "_comment": "TubeNews Configuration Template. See CLAUDE.md for full documentation.",
+
   "gemini_api_key": "ADD-GEMINI-KEY",
   "gemini_model": "gemini-2.5-flash",
-  "supadata_api_key": "ADD_SUPADATA-KEY",
-  "base_url": "",
+  "supadata_api_key": "ADD-SUPADATA-KEY",
+
   "content_dir": "",
   "state_dir": "",
+
   "request_timeout": 15,
-  "gemini_call_delay": 5,
-  "ntfy_topic": "TubeNewsAdmin",
+  "gemini_call_delay": 8,
+  "max_parallel_feeds": 1,
+
+  "base_url": "",
+
+  "port": 8000,
   "tubenews_key": "generate with: python -c 'import secrets; print(secrets.token_hex(32))'",
   "admin_users": ["you@example.com"],
+
+  "ntfy_topic": "TubeNewsAdmin",
+
   "websub_callback_url": "https://yourdomain.com/youtube/push",
   "websub_secret": "generate with: python3 -c 'import secrets; print(secrets.token_hex(32))'",
   "websub_daemon_port": 8675,
   "websub_min_age_minutes": 360,
-  "websub_check_interval_minutes": 10
+  "websub_check_interval_minutes": 10,
+  "websub_max_videos_per_cycle": 3
 }
