@@ -2,6 +2,18 @@
 
 ---
 
+## Deferred: Deploy Script Flexibility
+
+`deploy.sh` is currently hardcoded to one Bastille jail path. Future improvements:
+- Accept jail name as argument (e.g., `./deploy.sh TubeNews`)
+- Auto-detect Bastille jails or ask operator to choose
+- Support non-Bastille FreeBSD installations
+- Query operator for paths if they don't match defaults
+
+Currently acceptable since the script is specific to one operator's setup.
+
+---
+
 ## Potential Future Improvement: Parallelization
 
 Parallel channel processing is implemented via `ThreadPoolExecutor` in
