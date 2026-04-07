@@ -20,7 +20,7 @@ logfile="/var/log/tubenews_daemon.log"
 : ${tubenews_daemon_dir:="/var/www/TubeNews"}
 
 command="/usr/sbin/daemon"
-command_args="-P ${pidfile} -u ${tubenews_daemon_user} -o ${logfile} /usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py --daemon"
+command_args="-P ${pidfile} -u ${tubenews_daemon_user} -o ${logfile} /usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py"
 
 load_rc_config $name
 run_rc_command "$1"

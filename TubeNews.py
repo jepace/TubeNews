@@ -129,6 +129,32 @@ def _add_run_log_file_handler() -> None:
     logging.getLogger().addHandler(fh)
 
 
+def _setup_daemon_logging() -> None:
+    """Set up rotating file logging for daemon mode.
+
+    Writes to state/run_logs/tubenews_daemon.log with rotation at 10MB.
+    Keeps up to 5 backup files. Daemon mode runs indefinitely, so we use
+    RotatingFileHandler instead of a fixed per-run file.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = STATE_ROOT / "run_logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / "tubenews_daemon.log"
+
+    # Rotate at 10MB, keep 5 backup files
+    handler = RotatingFileHandler(
+        log_path,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+        encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    logging.getLogger().addHandler(handler)
+
+
 # ---------------------------------------------------------------------------
 # Data contracts (TypedDicts)
 # ---------------------------------------------------------------------------
@@ -2569,21 +2595,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="TubeNews — YouTube channel monitor")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug output")
     parser.add_argument(
-        "--daemon",
+        "--single-run",
         action="store_true",
-        help="Run as a WebSub daemon (subscribe all channels and process push notifications)",
+        help="Run once and exit (process all channels immediately). Default: run as WebSub daemon",
     )
     args = parser.parse_args()
 
     setup_logging(args.debug)
 
-    if args.daemon:
+    # Default is daemon mode; --single-run for one-time processing
+    if not args.single_run:
         try:
             with open(CONFIG_FILE, "r") as f:
                 config = json.load(f)
         except Exception as exc:
             logger.error(f"TubeNews daemon: could not load config: {exc}")
             return
+        _setup_daemon_logging()
+        logger.info("TubeNews daemon starting in WebSub mode...")
         _run_daemon(config)
         return
 
