@@ -15,11 +15,10 @@ rcvar=tubenews_daemon_enable
 pidfile="/var/www/TubeNews/state/tubenews_daemon.pid"
 
 : ${tubenews_daemon_enable:="NO"}
-: ${tubenews_daemon_user:="www"}
 : ${tubenews_daemon_dir:="/var/www/TubeNews"}
 
 command="/usr/sbin/daemon"
-command_args="-P ${pidfile} /usr/bin/su -m ${tubenews_daemon_user} -c '/usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py'"
+command_args="-P ${pidfile} /usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py"
 
 load_rc_config $name
 run_rc_command "$1"
