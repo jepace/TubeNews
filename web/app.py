@@ -72,6 +72,8 @@ from TubeNews import (  # noqa: E402
     rebuild_aggregate_feed,
     _wsb_subscribe,
     _wsb_unsubscribe,
+    now_utc_iso,
+    _get_timestamp_as_float,
 )
 
 CONFIG_FILE = BASE_DIR / "TubeNews.json"
@@ -424,8 +426,9 @@ def inject_body_classes():
             unseen_count = 0
         # Debounced last_accessed update — at most one disk write per 5 minutes.
         now = time.time()
-        if now - current_user._data.get("last_accessed", 0) > 300:
-            current_user._data["last_accessed"] = now
+        last_accessed_ts = _get_timestamp_as_float(current_user._data.get("last_accessed"))
+        if now - last_accessed_ts > 300:
+            current_user._data["last_accessed"] = now_utc_iso()
             current_user._save()
     else:
         classes = ""
@@ -434,17 +437,19 @@ def inject_body_classes():
 
 
 @app.template_filter("format_ts")
-def format_ts(ts: int) -> str:
+def format_ts(ts: int | str | None) -> str:
     if not ts:
         return "—"
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    ts_float = _get_timestamp_as_float(ts)
+    return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
 @app.template_filter("format_datetime")
-def format_datetime(ts: int) -> str:
+def format_datetime(ts: int | str | None) -> str:
     if not ts:
         return "—"
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    ts_float = _get_timestamp_as_float(ts)
+    return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _sanitize_focus(text: str) -> str:
@@ -544,7 +549,7 @@ def _archive_channel_stats() -> list[ChannelStat]:
                 if status == "processed":
                     processed += 1
                     story_count += len(list(meta_file.parent.glob("[0-9]*.md")))
-                    last_processed = max(last_processed, meta.get("processed_at", 0))
+                    last_processed = max(last_processed, _get_timestamp_as_float(meta.get("processed_at")))
                 elif status == "ignored_too_old":
                     ignored += 1
                 elif status == "no_stories":
@@ -637,7 +642,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
             except Exception as exc:
                 logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
-        raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
+        raw.sort(key=lambda e: _get_timestamp_as_float(e["meta"].get("processed_at")), reverse=True)
         stories = []
         for entry in raw:
             try:
@@ -655,7 +660,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                     "channel_slug": entry.get("channel_slug", ""),
                     "meeting_id": entry.get("meeting_id", ""),
                     "story_filename": entry["file"].name,
-                    "processed_at": entry["meta"].get("processed_at", 0),
+                    "processed_at": _get_timestamp_as_float(entry["meta"].get("processed_at")),
                     "channel_id": channel_id,
                     "published": s.get("published", ""),
                     "comment_count": _story_comment_count(entry["file"]),
@@ -697,7 +702,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             except Exception as exc:
                 logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
-    raw.sort(key=lambda e: e["meta"].get("processed_at", 0), reverse=True)
+    raw.sort(key=lambda e: _get_timestamp_as_float(e["meta"].get("processed_at")), reverse=True)
     stories = []
     for entry in raw:
         try:
@@ -718,7 +723,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "channel_slug": entry.get("channel_slug", ""),
                 "meeting_id": entry.get("meeting_id", ""),
                 "story_filename": entry["file"].name,
-                "processed_at": entry["meta"].get("processed_at", 0),
+                "processed_at": _get_timestamp_as_float(entry["meta"].get("processed_at")),
                 "content_hash": s.get("content_hash", ""),
                 "channel_id": entry["channel_id"],
                 "published": s.get("published", ""),
@@ -877,8 +882,8 @@ def register():
                 "password_hash": generate_password_hash(password),
                 "channels": {},
                 "feed_token": str(uuid.uuid4()),
-                "created_at": int(datetime.now(timezone.utc).timestamp()),
-                "last_accessed": int(datetime.now(timezone.utc).timestamp()),
+                "created_at": now_utc_iso(),
+                "last_accessed": now_utc_iso(),
             }
             (user_dir / "user.json").write_text(json.dumps(data, indent=2))
             _index_add(email, user_uuid)
@@ -1777,8 +1782,8 @@ def admin_user_add():
             "password_hash": generate_password_hash(password),
             "channels": {},
             "feed_token": str(uuid.uuid4()),
-            "created_at": int(datetime.now(timezone.utc).timestamp()),
-            "last_accessed": int(datetime.now(timezone.utc).timestamp()),
+            "created_at": now_utc_iso(),
+            "last_accessed": now_utc_iso(),
         }
         (user_dir / "user.json").write_text(json.dumps(data, indent=2))
         _index_add(email, user_uuid)
@@ -2005,7 +2010,7 @@ def admin_all_stories():
                             "channel_slug": channel_dir.name,
                             "meeting_id": meeting_dir.name,
                             "story_filename": story_file.name,
-                            "processed_at": meta.get("processed_at", 0),
+                            "processed_at": _get_timestamp_as_float(meta.get("processed_at")),
                             "published": s.get("published", ""),
                         })
                 except Exception as exc:
