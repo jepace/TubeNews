@@ -16,9 +16,9 @@ pidfile="/var/www/TubeNews/state/tubenews_web.pid"
 
 : ${tubenews_web_enable:="NO"}
 : ${tubenews_web_dir:="/var/www/TubeNews"}
+: ${tubenews_web_user:="www"}
 
-command="/usr/sbin/daemon"
-command_args="-P ${pidfile} ${tubenews_web_dir}/serve.sh"
+procname="${tubenews_web_dir}/serve.sh"
 
 load_rc_config $name
 run_rc_command "$1"
