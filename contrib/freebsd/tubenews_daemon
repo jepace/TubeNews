@@ -12,7 +12,7 @@
 
 name="tubenews_daemon"
 rcvar=tubenews_daemon_enable
-pidfile="/var/run/tubenews_daemon.pid"
+pidfile="/var/www/TubeNews/state/tubenews_daemon.pid"
 
 : ${tubenews_daemon_enable:="NO"}
 : ${tubenews_daemon_user:="www"}

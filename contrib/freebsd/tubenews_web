@@ -12,7 +12,7 @@
 
 name="tubenews_web"
 rcvar=tubenews_web_enable
-pidfile="/var/run/tubenews_web.pid"
+pidfile="/var/www/TubeNews/state/tubenews_web.pid"
 
 : ${tubenews_web_enable:="NO"}
 : ${tubenews_web_user:="www"}
