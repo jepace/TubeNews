@@ -395,6 +395,68 @@ def _get_timezone() -> str:
         return "UTC"
 
 
+def _get_user_timezone(user) -> str:
+    """Get user's timezone, fallback to system default."""
+    if user and user._data.get("preferences", {}).get("timezone"):
+        return user._data["preferences"]["timezone"]
+    return _get_timezone()
+
+
+def _reformat_published_timestamp(published_str: str, user_timezone: str) -> str:
+    """Parse published timestamp string and reformat to user's timezone.
+
+    Input format: "April 5, 2026 at 3:15 PM EST"
+    Output format: "April 5, 2026 at 12:15 PM PST" (reformatted to user TZ)
+
+    Falls back to original string if parsing fails.
+    """
+    if not published_str or not user_timezone:
+        return published_str
+
+    try:
+        # Parse the published string: "April 5, 2026 at 3:15 PM EST"
+        import re
+        match = re.match(
+            r"(\w+)\s+(\d+),\s+(\d+)\s+at\s+(\d+):(\d+)\s+(AM|PM)\s+(\w+)",
+            published_str
+        )
+        if not match:
+            return published_str
+
+        month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_str = match.groups()
+
+        # Parse original timezone
+        orig_tz = pytz.timezone(orig_tz_str) if orig_tz_str in pytz.all_timezones else pytz.UTC
+
+        # Convert month name to number
+        from datetime import datetime as dt_class
+        month_num = dt_class.strptime(month_str, "%B").month
+
+        # Build datetime in original timezone
+        hour = int(hour_str)
+        if ampm_str == "PM" and hour != 12:
+            hour += 12
+        elif ampm_str == "AM" and hour == 12:
+            hour = 0
+
+        orig_dt = orig_tz.localize(
+            dt_class(int(year_str), month_num, int(day_str), hour, int(min_str), 0)
+        )
+
+        # Convert to user's timezone
+        user_tz = pytz.timezone(user_timezone)
+        user_dt = orig_dt.astimezone(user_tz)
+
+        # Format with _fmt_no_leading_zeros
+        formatted_date = _fmt_no_leading_zeros(user_dt, "%B %d, %Y")
+        formatted_time = _fmt_no_leading_zeros(user_dt, "%I:%M %p")
+        tz_abbr = user_dt.strftime("%Z")
+
+        return f"{formatted_date} at {formatted_time} {tz_abbr}"
+    except Exception:
+        return published_str
+
+
 def _rss_url(token: str) -> str:
     base = _base_url()
     if base:
@@ -450,7 +512,7 @@ def format_ts(ts: int | str | None) -> str:
     if not ts:
         return "—"
     ts_float = _get_timestamp_as_float(ts)
-    tz_name = _get_timezone()
+    tz_name = _get_user_timezone(current_user)
     try:
         tz = pytz.timezone(tz_name)
         dt = datetime.fromtimestamp(ts_float, tz=timezone.utc).astimezone(tz)
@@ -465,7 +527,7 @@ def format_datetime(ts: int | str | None) -> str:
     if not ts:
         return "—"
     ts_float = _get_timestamp_as_float(ts)
-    tz_name = _get_timezone()
+    tz_name = _get_user_timezone(current_user)
     try:
         tz = pytz.timezone(tz_name)
         dt = datetime.fromtimestamp(ts_float, tz=timezone.utc).astimezone(tz)
@@ -673,6 +735,10 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                 s = parse_story_file(entry["file"])
                 vid = entry["meta"]["video_id"]
                 vt = entry["meta"].get("video_title", "")
+                published = s.get("published", "")
+                # Reformat published timestamp to system timezone if present
+                if published:
+                    published = _reformat_published_timestamp(published, _get_timezone())
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
@@ -686,7 +752,7 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                     "story_filename": entry["file"].name,
                     "processed_at": _get_timestamp_as_float(entry["meta"].get("processed_at")),
                     "channel_id": channel_id,
-                    "published": s.get("published", ""),
+                    "published": published,
                     "comment_count": _story_comment_count(entry["file"]),
                 })
             except Exception as exc:
@@ -736,6 +802,11 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 continue
             vid = entry["meta"]["video_id"]
             vt = entry["meta"].get("video_title", "")
+            # Reformat published timestamp to user's timezone if present
+            published = s.get("published", "")
+            if published:
+                user_tz = user_data.get("preferences", {}).get("timezone", _get_timezone())
+                published = _reformat_published_timestamp(published, user_tz)
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
@@ -750,7 +821,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "processed_at": _get_timestamp_as_float(entry["meta"].get("processed_at")),
                 "content_hash": s.get("content_hash", ""),
                 "channel_id": entry["channel_id"],
-                "published": s.get("published", ""),
+                "published": published,
                 "comment_count": _story_comment_count(entry["file"]),
             })
         except Exception as exc:
@@ -1152,7 +1223,13 @@ def account():
             if font_size not in ("normal", "large", "larger"):
                 font_size = "normal"
             dark_mode = "dark_mode" in request.form
+            timezone = request.form.get("timezone", "").strip()
+            if timezone and timezone not in pytz.all_timezones:
+                flash("Invalid timezone.", "error")
+                return redirect(url_for("account"))
             current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+            if timezone:
+                current_user._data["preferences"]["timezone"] = timezone
             current_user._save()
             flash("Display preferences saved.", "success")
             return redirect(url_for("account"))
@@ -1693,7 +1770,13 @@ def admin_user_prefs(uid: str):
     if font_size not in ("normal", "large", "larger"):
         font_size = "normal"
     dark_mode = "dark_mode" in request.form
+    timezone = request.form.get("timezone", "").strip()
+    if timezone and timezone not in pytz.all_timezones:
+        flash("Invalid timezone.", "error")
+        return redirect(url_for("admin_user", uid=uid))
     user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+    if timezone:
+        user._data["preferences"]["timezone"] = timezone
     user._save()
     flash("Display preferences updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
