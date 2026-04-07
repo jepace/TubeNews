@@ -73,12 +73,12 @@ ps aux | grep -i tubenews
 
 ## Services
 
-- **tubenews_daemon**: Runs `python3 TubeNews.py --daemon` for WebSub push notifications
-  - Logs to `/var/log/tubenews_daemon.log`
+- **tubenews_daemon**: Runs `python3 TubeNews.py` for WebSub push notifications (daemon mode is default)
+  - Logs to `state/run_logs/tubenews_daemon.log` (rotating, 10MB max with 5 backups)
   - Runs as `www` user
   
 - **tubenews_web**: Runs `./serve.sh` for the Flask web UI (gunicorn)
-  - Logs to `/var/log/tubenews_web.log`
+  - Logs to stdout/stderr (gunicorn handles log rotation)
   - Runs as `www` user
 
-Both services will auto-start when the jail boots, with output redirected to log files (not console).
+Both services will auto-start when the jail boots, with output handled via their respective logging mechanisms.
