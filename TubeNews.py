@@ -741,6 +741,7 @@ def write_story_files(
 
         # Story Title
         *AP-style dateline*
+        Published April 5, 2026 at 3:15 PM EST
         **Source:** https://youtu.be/<video_id>?t=120
 
         Body text …

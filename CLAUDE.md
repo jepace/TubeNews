@@ -276,6 +276,7 @@ All content scanners (`rebuild_aggregate_feed`, `build_user_feed_xml`, `_archive
 ```markdown
 # Story Title
 *CITY, State — Month DD, YYYY*
+Published April 5, 2026 at 3:15 PM EST
 
 Story body text in AP inverted pyramid style...
 
@@ -284,6 +285,7 @@ Story body text in AP inverted pyramid style...
 **Topics:** housing, zoning, permits
 ```
 
+- `Published ...` is the timestamp when TubeNews processed the story, in the configured system timezone. Parsed by `parse_story_file()` into `ParsedStory.published` and reformatted at display time to the user's configured timezone by `_reformat_published_timestamp()`. Displayed in the story header with CSS styling (italics).
 - `**Segment Start:**` links back to the exact timestamp in the source YouTube video. Parsed by `parse_story_file()` and embedded in RSS entry links as `?t=<seconds>`.
 - `**Topics:**` is a comma-separated list of 2–6 lowercase keywords assigned by Gemini. Parsed into `ParsedStory.topics` and used by `_story_matches_focus()`. Not used for serve-time filtering — that role is now handled by `**Users:**`.
 - `**Users:**` is a comma-separated list of user UUID directory names. Written by `write_story_files()` when the story was generated for a user-level focus (not the feed-level focus). At serve time, `_get_user_stories()` and `build_user_feed_xml()` skip stories whose `user_ids` list does not include the requesting user's UUID. Absent on feed-level stories and all legacy stories — those are always shown to every subscriber.
