@@ -20,8 +20,8 @@ exit
 ### 1. Copy rc.d scripts into the jail
 
 ```bash
-sudo bastille cp TubeNews contrib/freebsd/tubenews_daemon.rc.d /etc/rc.d/tubenews_daemon
-sudo bastille cp TubeNews contrib/freebsd/tubenews_web.rc.d /etc/rc.d/tubenews_web
+sudo bastille cp TubeNews contrib/freebsd/tubenews_daemon /etc/rc.d/tubenews_daemon
+sudo bastille cp TubeNews contrib/freebsd/tubenews_web /etc/rc.d/tubenews_web
 sudo bastille console TubeNews -c "chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web"
 ```
 
