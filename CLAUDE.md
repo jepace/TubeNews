@@ -350,6 +350,7 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `request_timeout` | No | Seconds before giving up on YouTube RSS and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `gemini_call_delay` | No | Minimum seconds between any two Gemini API calls, enforced globally via a lock (default: `8`). Applies across focus passes and across different videos so the free-tier 15 RPM limit is never exceeded regardless of backlog size. At 8 s the effective rate is ~7.5 RPM. Set to `0` to disable (not recommended). |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
+| `timezone` | No | IANA timezone for display on the web UI (e.g. `"America/Los_Angeles"`, `"Europe/London"`). All timestamps are stored in UTC internally; this setting only affects how dates are displayed on webpages (default: `"UTC"`) |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `1`; capped at number of feeds). Keep at `1` unless you have a paid Gemini tier with higher RPM limits. |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
@@ -370,7 +371,7 @@ When running in daemon mode (`python3 TubeNews.py --daemon`), the following conf
 - `gemini_api_key`, `supadata_api_key` — next API call uses new key
 - `request_timeout` — applied immediately via `socket.setdefaulttimeout()`
 - `gemini_call_delay`, `gemini_model` — picked up by next processing cycle
-- `base_url`, `ntfy_topic` — used at next operation
+- `base_url`, `ntfy_topic`, `timezone` — used at next web request
 - `websub_check_interval_minutes`, `websub_min_age_minutes`, `websub_max_videos_per_cycle` — applied next cycle
 
 **Immutable keys** (require daemon restart if changed):

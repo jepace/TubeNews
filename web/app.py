@@ -22,6 +22,7 @@ import time
 import uuid
 
 from datetime import datetime, timezone
+import pytz
 from functools import wraps
 from pathlib import Path
 from typing import TypedDict
@@ -386,6 +387,14 @@ def _base_url() -> str:
         return ""
 
 
+def _get_timezone() -> str:
+    """Get configured timezone for display."""
+    try:
+        return json.loads(CONFIG_FILE.read_text()).get("timezone", "UTC")
+    except Exception:
+        return "UTC"
+
+
 def _rss_url(token: str) -> str:
     base = _base_url()
     if base:
@@ -441,7 +450,14 @@ def format_ts(ts: int | str | None) -> str:
     if not ts:
         return "—"
     ts_float = _get_timestamp_as_float(ts)
-    return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
+    tz_name = _get_timezone()
+    try:
+        tz = pytz.timezone(tz_name)
+        dt = datetime.fromtimestamp(ts_float, tz=timezone.utc).astimezone(tz)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        # Fallback to UTC if timezone is invalid
+        return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
 @app.template_filter("format_datetime")
@@ -449,7 +465,15 @@ def format_datetime(ts: int | str | None) -> str:
     if not ts:
         return "—"
     ts_float = _get_timestamp_as_float(ts)
-    return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    tz_name = _get_timezone()
+    try:
+        tz = pytz.timezone(tz_name)
+        dt = datetime.fromtimestamp(ts_float, tz=timezone.utc).astimezone(tz)
+        tz_abbr = dt.strftime("%Z")
+        return dt.strftime("%Y-%m-%d %H:%M") + f" {tz_abbr}"
+    except Exception:
+        # Fallback to UTC if timezone is invalid
+        return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _sanitize_focus(text: str) -> str:
