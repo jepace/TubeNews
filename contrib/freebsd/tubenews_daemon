@@ -19,7 +19,7 @@ pidfile="/var/www/TubeNews/state/tubenews_daemon.pid"
 : ${tubenews_daemon_dir:="/var/www/TubeNews"}
 
 command="/usr/sbin/daemon"
-command_args="-P ${pidfile} -u ${tubenews_daemon_user} /usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py"
+command_args="-P ${pidfile} -r -u ${tubenews_daemon_user} /usr/local/bin/python3 ${tubenews_daemon_dir}/TubeNews.py"
 
 load_rc_config $name
 run_rc_command "$1"
