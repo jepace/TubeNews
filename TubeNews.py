@@ -794,7 +794,7 @@ def write_story_files(
                 _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
                 + " at "
                 + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
-                + f" {tz_abbr} ({tz_name})"
+                + f" {tz_abbr}"
             )
             fh.write(f"Published {pub_formatted}\n")
             if video_id:
