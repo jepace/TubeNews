@@ -1,5 +1,6 @@
 TubeNews.json
 content/
+state/
 venv/
 __pycache__/
 .pytest_cache/

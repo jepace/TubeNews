@@ -2558,6 +2558,7 @@ def _wsb_receiver_thread(config: dict) -> None:
     secret = config.get("websub_secret", "").encode()
     channels = _read_channels()
     known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
+    channel_name_map = {ch["channel_id"]: ch["channel_name"] for ch in channels}
 
     queue_dir = STATE_ROOT / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
@@ -2651,8 +2652,9 @@ def _wsb_receiver_thread(config: dict) -> None:
                             tmp = queue_path.with_suffix(".tmp")
                             tmp.write_text(json.dumps(updated, indent=2))
                             tmp.replace(queue_path)
-                            ids = ", ".join(e["video_id"] for e in new_entries)
-                            logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
+                            for ne in new_entries:
+                                ch_name = channel_name_map.get(ne["channel_id"], ne["channel_id"])
+                                logger.info(f"WebSub: {ch_name}: queued \"{ne['title']}\" ({ne['video_id']})")
                         except Exception as exc:
                             logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
                 except Exception as exc:
@@ -2821,6 +2823,28 @@ def _wsb_processor_thread(config: dict) -> None:
                 if not _needs_processing(vid, feed_dir):
                     resolved_ids.add(vid)
                     continue
+
+                # If this is a scheduled livestream/premier that hasn't started yet,
+                # defer without calling Supadata — the retry window must start after
+                # the broadcast ends, not from the moment YouTube announced it.
+                scheduled_start_str = entry.get("scheduled_start")
+                if scheduled_start_str:
+                    try:
+                        sched_dt = datetime.fromisoformat(
+                            scheduled_start_str.replace("Z", "+00:00")
+                        )
+                        if sched_dt > datetime.now(timezone.utc):
+                            next_try_at = (
+                                sched_dt + timedelta(hours=1)
+                            ).isoformat(timespec="seconds").replace("+00:00", "Z")
+                            retry_updates.append({**entry, "next_try_at": next_try_at})
+                            logger.info(
+                                f"WebSub processor: [{vid}] scheduled for "
+                                f"{scheduled_start_str} — deferring until {next_try_at}"
+                            )
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Malformed scheduled_start — fall through to normal handling
 
                 # Try to obtain the transcript (returns immediately if cached).
                 fetch_result = _wsb_try_fetch_transcript(

@@ -2,6 +2,7 @@ requests
 feedgen==0.4.0
 supadata
 flask
+werkzeug
 flask-login
 flask-wtf
 flask-limiter

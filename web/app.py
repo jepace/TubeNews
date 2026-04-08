@@ -1583,7 +1583,7 @@ def post_comment():
     new_comment = {
         "user_id": current_user.get_id(),
         "user_name": current_user.name,
-        "posted_at": time.time(),
+        "posted_at": now_utc_iso(),
         "body": body,
     }
     try:
@@ -1663,7 +1663,7 @@ def comment_edit():
     if comments[idx].get("user_id") != current_user.get_id():
         abort(403)
     comments[idx]["body"] = body
-    comments[idx]["edited_at"] = time.time()
+    comments[idx]["edited_at"] = now_utc_iso()
     tmp = comment_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(comments, indent=2), encoding="utf-8")
     tmp.rename(comment_path)
@@ -2162,7 +2162,7 @@ def admin_feed_add():
             if any(ch["channel_id"] == channel_id for ch in channels):
                 flash("A feed with that channel ID already exists.", "error")
             else:
-                channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus, "added_at": int(time.time())})
+                channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus, "added_at": now_utc_iso()})
                 _save_channels(channels)
                 config = _load_config()
                 if _wsb_subscribe(channel_id, config):
