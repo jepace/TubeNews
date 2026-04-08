@@ -73,6 +73,71 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, Path
     return storage_root, state_root, request_timeout
 
 
+def _validate_config(config: dict) -> None:
+    """Validate required config keys exist and have valid values.
+
+    Raises ValueError with a clear error message if validation fails.
+    This prevents confusing KeyError crashes later.
+
+    Args:
+        config: Loaded TubeNews.json configuration dict.
+
+    Raises:
+        ValueError: If required keys are missing or invalid.
+    """
+    required_keys = {
+        "gemini_api_key": "Google Gemini API key (get from https://aistudio.google.com)",
+        "gemini_model": "Gemini model name (e.g., 'gemini-2.5-flash')",
+        "supadata_api_key": "Supadata API key (get from https://supadata.ai)",
+    }
+
+    missing = []
+    for key, description in required_keys.items():
+        if key not in config or not config[key]:
+            missing.append(f"  • {key}: {description}")
+
+    if missing:
+        raise ValueError(
+            f"TubeNews: Missing required configuration keys in {CONFIG_FILE}:\n"
+            + "\n".join(missing) + "\n"
+            "Copy TubeNews.json.sample and fill in your API keys."
+        )
+
+    # Validate API keys are strings and non-empty
+    for key in required_keys.keys():
+        if not isinstance(config[key], str) or not config[key].strip():
+            raise ValueError(
+                f"TubeNews: {key} must be a non-empty string in {CONFIG_FILE}"
+            )
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Atomically write content to a file using write-then-rename.
+
+    Ensures that if the process crashes or fails during write, the original
+    file is not corrupted. On failure, raises an exception and cleans up the
+    temporary file.
+
+    Args:
+        path: Path to write to (e.g., /var/data/file.json).
+        content: String content to write.
+
+    Raises:
+        Exception: On write or rename failure (cleaned up).
+    """
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(content)
+        tmp.replace(path)
+    except Exception as exc:
+        # Clean up temporary file if it exists
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise exc
+
+
 STORAGE_ROOT, STATE_ROOT, REQUEST_TIMEOUT = _resolve_early_config(CONFIG_FILE, BASE_DIR)
 STATE_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -711,21 +776,76 @@ def call_gemini_api(
     try:
         response = requests.post(api_url, json=payload, timeout=150)
         if response.status_code == 200:
-            raw_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            # Safely extract response text with bounds checking
+            try:
+                resp_json = response.json()
+                if not isinstance(resp_json, dict):
+                    logger.error(f"{prefix}Gemini: Invalid response format (expected dict, got {type(resp_json).__name__})")
+                    return None
+
+                candidates = resp_json.get("candidates")
+                if not isinstance(candidates, list) or len(candidates) == 0:
+                    logger.error(f"{prefix}Gemini: Invalid response: 'candidates' missing or empty")
+                    return None
+
+                first_candidate = candidates[0]
+                if not isinstance(first_candidate, dict):
+                    logger.error(f"{prefix}Gemini: Invalid response: candidate is not a dict")
+                    return None
+
+                content = first_candidate.get("content")
+                if not isinstance(content, dict):
+                    logger.error(f"{prefix}Gemini: Invalid response: 'content' missing or not a dict")
+                    return None
+
+                parts = content.get("parts")
+                if not isinstance(parts, list) or len(parts) == 0:
+                    logger.error(f"{prefix}Gemini: Invalid response: 'parts' missing or empty")
+                    return None
+
+                first_part = parts[0]
+                if not isinstance(first_part, dict):
+                    logger.error(f"{prefix}Gemini: Invalid response: part is not a dict")
+                    return None
+
+                raw_text = first_part.get("text")
+                if not isinstance(raw_text, str):
+                    logger.error(f"{prefix}Gemini: Invalid response: 'text' missing or not a string")
+                    return None
+
+            except (KeyError, TypeError, AttributeError) as exc:
+                logger.error(f"{prefix}Gemini: Failed to parse response structure: {exc}")
+                return None
+
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
             if not json_match:
                 logger.info(f"{prefix}Gemini: No stories returned (no JSON in response)")
                 return []
-            stories = json.loads(json_match.group(0))
-            logger.info(f"{prefix}Gemini: {len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
-            return stories
+
+            try:
+                stories = json.loads(json_match.group(0))
+                if not isinstance(stories, list):
+                    logger.error(f"{prefix}Gemini: JSON parse result is not a list (got {type(stories).__name__})")
+                    return None
+                logger.info(f"{prefix}Gemini: {len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
+                return stories
+            except json.JSONDecodeError as exc:
+                logger.error(f"{prefix}Gemini: Failed to parse JSON from response: {exc}")
+                return None
+
         elif response.status_code == 429:
             logger.warning(f"{prefix}Gemini: Rate limit hit (429) — AI disabled for this cycle")
             return False
-    except Exception as exc:
-        logger.error(f"{prefix}Gemini: API call failed: {exc}")
+        else:
+            logger.error(f"{prefix}Gemini: HTTP {response.status_code}: {response.text[:200]}")
+            return None
 
-    return None
+    except requests.RequestException as exc:
+        logger.error(f"{prefix}Gemini: Network error: {exc}")
+        return None
+    except Exception as exc:
+        logger.error(f"{prefix}Gemini: Unexpected error: {exc}", exc_info=True)
+        return None
 
 
 def write_story_files(
@@ -1779,9 +1899,7 @@ def _wsb_record_subscription(channel_id: str, callback_url: str) -> None:
         "lease_seconds": _WSB_LEASE,
         "callback_url": callback_url,
     }
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(subs, indent=2))
-    tmp.replace(path)
+    _atomic_write(path, json.dumps(subs, indent=2))
 
 
 def _wsb_remove_subscription(channel_id: str) -> None:
@@ -1794,9 +1912,7 @@ def _wsb_remove_subscription(channel_id: str) -> None:
     except Exception:
         return
     subs.pop(channel_id, None)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(subs, indent=2))
-    tmp.replace(path)
+    _atomic_write(path, json.dumps(subs, indent=2))
 
 
 def _wsb_subscribe(channel_id: str, config: dict) -> bool:
@@ -1928,9 +2044,7 @@ def _update_queue_retry_counts(updated_entries: list[dict]) -> None:
     try:
         by_vid = {e["video_id"]: e for e in updated_entries}
         merged = [by_vid.get(i.get("video_id"), i) for i in items]
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(merged, indent=2))
-        tmp.replace(path)
+        _atomic_write(path, json.dumps(merged, indent=2))
     except Exception as exc:
         logger.error(f"Queue retry-count update failed ({path}): {exc}")
 
@@ -1954,9 +2068,7 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
         return
     try:
         remaining = [i for i in items if i.get("video_id") not in processed_ids]
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(remaining, indent=2))
-        tmp.replace(path)
+        _atomic_write(path, json.dumps(remaining, indent=2))
     except Exception as exc:
         logger.error(f"Queue removal update failed ({path}): {exc}")
 
@@ -2272,6 +2384,8 @@ def _wsb_processor_thread(config: dict) -> None:
             interval = float(_daemon_config.get("websub_check_interval_minutes", 10)) * 60
             min_age = float(_daemon_config.get("websub_min_age_minutes", 360))
             supadata_key = _daemon_config.get("supadata_api_key")
+            # Make a shallow copy of _daemon_config for use outside the lock
+            current_config = _daemon_config.copy()
         supadata_client = Supadata(api_key=supadata_key)
         # -- Renewal check ----------------------------------------------------
         subs_path = STATE_ROOT / "subscriptions.json"
@@ -2286,7 +2400,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 expires = subscribed_at + info.get("lease_seconds", _WSB_LEASE)
                 if expires <= renew_before:
                     logger.info(f"WebSub: renewing subscription for channel {cid}")
-                    _wsb_subscribe(cid, config)
+                    _wsb_subscribe(cid, current_config)
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
         if time.time() - _last_orphan_recovery >= 86400:
@@ -2304,7 +2418,7 @@ def _wsb_processor_thread(config: dict) -> None:
         # Cap how many videos are processed per cycle so we don't burst-call
         # Gemini with the entire backlog at once.  Remaining entries stay ripe
         # and are picked up next cycle.  Default: 3 videos per cycle.
-        max_per_cycle = int(config.get("websub_max_videos_per_cycle", 3))
+        max_per_cycle = int(current_config.get("websub_max_videos_per_cycle", 3))
         if len(ripe) > max_per_cycle:
             logger.info(
                 f"WebSub processor: {len(ripe)} ripe entries — "
@@ -2355,7 +2469,7 @@ def _wsb_processor_thread(config: dict) -> None:
             for cid, video_infos in by_channel.items():
                 feed = channel_map[cid]
                 content_changed, ai_rate_limited, _ = process_feed(
-                    feed, supadata_client, config,
+                    feed, supadata_client, current_config,
                     ai_event, transcript_event,
                     forced_videos=video_infos,
                 )
@@ -2709,8 +2823,29 @@ def main() -> None:
 
 def _main_body(args) -> None:
     """Core run logic, called from main() after the lock is acquired."""
-    with open(CONFIG_FILE, "r") as config_file:
-        config = json.load(config_file)
+    try:
+        with open(CONFIG_FILE, "r") as config_file:
+            config = json.load(config_file)
+    except FileNotFoundError:
+        logger.error(
+            f"TubeNews: Configuration file not found: {CONFIG_FILE}\n"
+            f"Copy TubeNews.json.sample to {CONFIG_FILE} and fill in your API keys."
+        )
+        return
+    except json.JSONDecodeError as exc:
+        logger.error(
+            f"TubeNews: Configuration file {CONFIG_FILE} contains invalid JSON: {exc}"
+        )
+        return
+    except Exception as exc:
+        logger.error(f"TubeNews: Failed to load configuration: {exc}")
+        return
+
+    try:
+        _validate_config(config)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return
 
     channels = _read_channels()
     if not channels:
