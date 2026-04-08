@@ -2558,6 +2558,7 @@ def _wsb_receiver_thread(config: dict) -> None:
     secret = config.get("websub_secret", "").encode()
     channels = _read_channels()
     known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
+    channel_name_map = {ch["channel_id"]: ch["channel_name"] for ch in channels}
 
     queue_dir = STATE_ROOT / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
@@ -2651,8 +2652,9 @@ def _wsb_receiver_thread(config: dict) -> None:
                             tmp = queue_path.with_suffix(".tmp")
                             tmp.write_text(json.dumps(updated, indent=2))
                             tmp.replace(queue_path)
-                            ids = ", ".join(e["video_id"] for e in new_entries)
-                            logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
+                            for ne in new_entries:
+                                ch_name = channel_name_map.get(ne["channel_id"], ne["channel_id"])
+                                logger.info(f"WebSub: {ch_name}: queued \"{ne['title']}\" ({ne['video_id']})")
                         except Exception as exc:
                             logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
                 except Exception as exc:
