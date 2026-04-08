@@ -275,13 +275,13 @@ def iso8601_to_unix(iso_str: str | None) -> float | None:
 def _get_timezone() -> str:
     """Get configured timezone for display (IANA name, e.g., 'America/Los_Angeles').
 
+    DEPRECATED: This now always returns 'UTC'. All data is stored in UTC on disk.
+    Timezone conversion is handled only at display time by the web app.
+
     Returns:
-        Timezone string from config, or 'UTC' if not set or invalid.
+        Always returns 'UTC'. Server-side timezone config is no longer used.
     """
-    try:
-        return json.loads(CONFIG_FILE.read_text()).get("timezone", "UTC")
-    except Exception:
-        return "UTC"
+    return "UTC"
 
 
 def is_ripe(queued_at_iso: str | None, min_age_minutes: int) -> bool:
@@ -781,19 +781,13 @@ def write_story_files(
             fh.write(f"# {story['title']}\n")
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
             # Record when TubeNews wrote this story (not the YouTube publish date).
-            # Convert current UTC time to configured timezone for display.
+            # Always stored in UTC. Timezone conversion happens at display time in the web app.
             pub_now_utc = datetime.now(timezone.utc)
-            tz_name = _get_timezone()
-            try:
-                tz = pytz.timezone(tz_name)
-                pub_now = pub_now_utc.astimezone(tz)
-            except Exception:
-                pub_now = pub_now_utc.astimezone(pytz.timezone("UTC"))
-            tz_abbr = pub_now.strftime("%Z")
+            tz_abbr = "UTC"
             pub_formatted = (
-                _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
+                _fmt_no_leading_zeros(pub_now_utc, "%B %d, %Y")
                 + " at "
-                + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
+                + _fmt_no_leading_zeros(pub_now_utc, "%I:%M %p")
                 + f" {tz_abbr}"
             )
             fh.write(f"Published {pub_formatted}\n")

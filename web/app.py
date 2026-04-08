@@ -388,11 +388,16 @@ def _base_url() -> str:
 
 
 def _get_timezone() -> str:
-    """Get configured timezone for display."""
-    try:
-        return json.loads(CONFIG_FILE.read_text()).get("timezone", "UTC")
-    except Exception:
-        return "UTC"
+    """Get configured timezone for display.
+
+    DEPRECATED: This now always returns 'UTC'. All data is stored in UTC on disk.
+    Timezone conversion is handled only at display time using user preferences.
+    Server-side timezone config is no longer used.
+
+    Returns:
+        Always returns 'UTC'.
+    """
+    return "UTC"
 
 
 def _get_user_timezone(user) -> str:

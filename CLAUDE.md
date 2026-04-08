@@ -291,7 +291,7 @@ Story body text in AP inverted pyramid style...
 **Topics:** housing, zoning, permits
 ```
 
-- `Published ...` is the timestamp when TubeNews processed the story, in the configured system timezone. Parsed by `parse_story_file()` into `ParsedStory.published` and reformatted at display time to the user's configured timezone by `_reformat_published_timestamp()`. Displayed in the story header with CSS styling (italics).
+- `Published ...` is the timestamp when TubeNews processed the story, always stored in UTC on disk. Parsed by `parse_story_file()` into `ParsedStory.published` and reformatted at display time to the user's configured timezone by `_reformat_published_timestamp()`. Displayed in the story header with CSS styling (italics).
 - `**Segment Start:**` links back to the exact timestamp in the source YouTube video. Parsed by `parse_story_file()` and embedded in RSS entry links as `?t=<seconds>`.
 - `**Topics:**` is a comma-separated list of 2–6 lowercase keywords assigned by Gemini. Parsed into `ParsedStory.topics` and used by `_story_matches_focus()`. Not used for serve-time filtering — that role is now handled by `**Users:**`.
 - `**Users:**` is a comma-separated list of user UUID directory names. Written by `write_story_files()` when the story was generated for a user-level focus (not the feed-level focus). At serve time, `_get_user_stories()` and `build_user_feed_xml()` skip stories whose `user_ids` list does not include the requesting user's UUID. Absent on feed-level stories and all legacy stories — those are always shown to every subscriber.
@@ -358,7 +358,6 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `request_timeout` | No | Seconds before giving up on YouTube RSS and Supadata API calls (default: `15`). Increase on slow or high-latency connections |
 | `gemini_call_delay` | No | Minimum seconds between any two Gemini API calls, enforced globally via a lock (default: `8`). Applies across focus passes and across different videos so the free-tier 15 RPM limit is never exceeded regardless of backlog size. At 8 s the effective rate is ~7.5 RPM. Set to `0` to disable (not recommended). |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
-| `timezone` | No | IANA timezone for display on the web UI (e.g. `"America/Los_Angeles"`, `"Europe/London"`). All timestamps are stored in UTC internally; this setting only affects how dates are displayed on webpages (default: `"UTC"`) |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `1`; capped at number of feeds). Keep at `1` unless you have a paid Gemini tier with higher RPM limits. |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
@@ -379,7 +378,7 @@ When running in daemon mode (the default, `python3 TubeNews.py`), the following 
 - `gemini_api_key`, `supadata_api_key` — next API call uses new key
 - `request_timeout` — applied immediately via `socket.setdefaulttimeout()`
 - `gemini_call_delay`, `gemini_model` — picked up by next processing cycle
-- `base_url`, `ntfy_topic`, `timezone` — used at next web request
+- `base_url`, `ntfy_topic` — used at next web request
 - `websub_check_interval_minutes`, `websub_min_age_minutes`, `websub_max_videos_per_cycle` — applied next cycle
 
 **Immutable keys** (require daemon restart if changed):
@@ -494,7 +493,7 @@ state/users/
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
 - `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
-- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), and `timezone` (IANA timezone string, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` overrides the system timezone for display of timestamps (admin pages, story published times). Defaults to system timezone if not set. Key absent means all defaults (light mode, normal font, system timezone).
+- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), and `timezone` (IANA timezone string, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` controls display of timestamps in the web UI (admin pages, story published times). Defaults to UTC if not set (since all stored data is in UTC). Key absent means all defaults (light mode, normal font, UTC display).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/feed` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 - `starred_articles` — sorted list of `content_hash` strings for articles the user has starred. `/starred` shows only these stories. Key absent means no starred articles. Written by the `account_mark_starred` and `account_mark_unstarred` routes. Independent of read/unread state.
