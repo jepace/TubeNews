@@ -1338,6 +1338,9 @@ def process_video(
     total_videos: int = 0,
     focuses: list[tuple[str, list[str]]] | None = None,
     transcript_rate_limit_event: threading.Event | None = None,
+    channel_id: str = "",
+    scheduled_start: str | None = None,
+    raw_entry_xml: str = "",
 ) -> tuple[str, int]:
     """Fetch, analyse, and archive one video.
 
@@ -1452,17 +1455,28 @@ def process_video(
             # Transient failure — quota exhausted, livestream, or network error.
             if _livestream_error and _livestream_error[0]:
                 # Video is a livestream currently broadcasting.
-                # Write metadata to defer without incrementing retry_count.
-                meeting_dir = feed_dir / f"{video_date}_{video_id}"
-                meeting_dir.mkdir(exist_ok=True)
-                metadata: MetadataDict = {
-                    "video_id": video_id,
-                    "video_title": video_title,
-                    "status": "livestream_in_progress",
-                    "processed_at": now_utc_iso(),
-                }
-                (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-                logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — deferred without penalty, will not retry until broadcast ends")
+                # Re-queue with delayed queued_at so it retries after stream ends.
+                # Calculate retry time: use scheduled_start if available, else now + 1 hour.
+                if scheduled_start:
+                    try:
+                        stream_end = datetime.fromisoformat(scheduled_start.replace('Z', '+00:00'))
+                        # Add 1 hour for transcription to complete
+                        retry_time = stream_end + timedelta(hours=1)
+                    except (ValueError, TypeError):
+                        retry_time = datetime.now(timezone.utc) + timedelta(hours=1)
+                else:
+                    retry_time = datetime.now(timezone.utc) + timedelta(hours=1)
+                retry_queued_at = retry_time.isoformat().replace('+00:00', 'Z')
+                _requeue_video(
+                    video_id=video_id,
+                    channel_id=channel_id or feed["channel_id"],
+                    title=video_title,
+                    date=video_date,
+                    scheduled_start=scheduled_start,
+                    queued_at=retry_queued_at,
+                    raw_entry_xml=raw_entry_xml,
+                )
+                logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — re-queued for {retry_queued_at}")
                 return "skipped", 0
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
@@ -1608,6 +1622,8 @@ def process_feed(
             ai_disabled = ai_rate_limited or (
                 ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
             )
+            # Extract queue entry fields if present (from WebSub daemon)
+            queue_entry = video_info.get("_queue_entry", {})
             result, n = process_video(
                 video_id=video_info["id"],
                 video_title=video_info["title"],
@@ -1621,6 +1637,9 @@ def process_feed(
                 total_videos=total,
                 focuses=focuses,
                 transcript_rate_limit_event=transcript_rate_limit_event,
+                channel_id=queue_entry.get("channel_id", ""),
+                scheduled_start=queue_entry.get("scheduled_start"),
+                raw_entry_xml=queue_entry.get("raw_entry_xml", ""),
             )
             if result == "content_written":
                 content_changed = True
@@ -1948,6 +1967,62 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
     tmp.replace(path)
 
 
+def _requeue_video(
+    video_id: str,
+    channel_id: str,
+    title: str,
+    date: str,
+    scheduled_start: str | None,
+    queued_at: str,
+    raw_entry_xml: str = "",
+) -> None:
+    """Re-queue a video for later processing (livestream still broadcasting).
+
+    Updates the video's ``queued_at`` timestamp to defer processing until
+    after the livestream ends. If the video is not yet in the queue, it is
+    added. Existing ``retry_count`` is preserved.
+
+    Args:
+        video_id: YouTube video ID
+        channel_id: YouTube channel ID
+        title: Video title
+        date: Video publish date (ISO 8601)
+        scheduled_start: Scheduled stream start time (ISO 8601), or None
+        queued_at: New timestamp for when this video becomes ripe (ISO 8601)
+        raw_entry_xml: Raw Atom entry XML from WebSub notification
+    """
+    queue_dir = STATE_ROOT / "queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    queue_path = queue_dir / "push_queue.json"
+
+    with queue_lock:
+        try:
+            items: list[dict] = json.loads(queue_path.read_text()) if queue_path.exists() else []
+        except Exception:
+            items = []
+
+        # Preserve existing entry if present, only update queued_at
+        by_vid = {i["video_id"]: i for i in items}
+        existing_retry_count = by_vid.get(video_id, {}).get("retry_count", 0)
+
+        entry = {
+            "video_id": video_id,
+            "channel_id": channel_id,
+            "title": title,
+            "date": date,
+            "scheduled_start": scheduled_start,
+            "raw_entry_xml": raw_entry_xml,
+            "queued_at": queued_at,
+            "retry_count": existing_retry_count,
+        }
+        by_vid[video_id] = entry
+
+        updated = list(by_vid.values())
+        tmp = queue_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(updated, indent=2))
+        tmp.replace(queue_path)
+
+
 def _recover_orphaned_videos() -> int:
     """Scan the content archive for meeting dirs that have no ``metadata.json``.
 
@@ -2237,17 +2312,20 @@ def _wsb_processor_thread(config: dict) -> None:
             channels = _read_channels()
             channel_map = {ch["channel_id"]: ch for ch in channels}
 
-            by_channel: dict[str, list[VideoInfo]] = {}
+            by_channel: dict[str, list[dict]] = {}
             today_str = date.today().isoformat()
             for entry in ripe:
                 cid = entry.get("channel_id", "")
                 vid = entry.get("video_id", "")
                 if cid and vid and cid in channel_map:
-                    by_channel.setdefault(cid, []).append({
+                    video_info = {
                         "id":    vid,
                         "title": entry.get("title", "") or "[title unknown]",
                         "date":  entry.get("date", "") or today_str,
-                    })
+                        # Preserve full queue entry fields for process_video
+                        "_queue_entry": entry,
+                    }
+                    by_channel.setdefault(cid, []).append(video_info)
 
             if not by_channel:
                 _remove_from_queue({e["video_id"] for e in ripe})
