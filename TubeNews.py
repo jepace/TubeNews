@@ -1909,7 +1909,8 @@ def _read_push_queue(min_age_minutes: float) -> list[dict]:
         return []
     try:
         items: list[dict] = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Queue read failed ({path}): {exc}")
         return []
     # Use is_ripe() helper which handles both ISO 8601 strings and legacy Unix floats,
     # and treats None/0 as immediate processing
@@ -1939,13 +1940,17 @@ def _update_queue_retry_counts(updated_entries: list[dict]) -> None:
         return
     try:
         items: list[dict] = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Queue read failed ({path}): {exc}")
         return
-    by_vid = {e["video_id"]: e for e in updated_entries}
-    merged = [by_vid.get(i.get("video_id"), i) for i in items]
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(merged, indent=2))
-    tmp.replace(path)
+    try:
+        by_vid = {e["video_id"]: e for e in updated_entries}
+        merged = [by_vid.get(i.get("video_id"), i) for i in items]
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(merged, indent=2))
+        tmp.replace(path)
+    except Exception as exc:
+        logger.error(f"Queue retry-count update failed ({path}): {exc}")
 
 
 def _remove_from_queue(processed_ids: set[str]) -> None:
@@ -1962,12 +1967,16 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
         return
     try:
         items: list[dict] = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Queue read failed ({path}): {exc}")
         return
-    remaining = [i for i in items if i.get("video_id") not in processed_ids]
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(remaining, indent=2))
-    tmp.replace(path)
+    try:
+        remaining = [i for i in items if i.get("video_id") not in processed_ids]
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(remaining, indent=2))
+        tmp.replace(path)
+    except Exception as exc:
+        logger.error(f"Queue removal update failed ({path}): {exc}")
 
 
 def _requeue_video(
@@ -2001,29 +2010,33 @@ def _requeue_video(
     with _queue_lock:
         try:
             items: list[dict] = json.loads(queue_path.read_text()) if queue_path.exists() else []
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Queue read failed ({queue_path}): {exc}")
             items = []
 
-        # Preserve existing entry if present, only update queued_at
-        by_vid = {i["video_id"]: i for i in items}
-        existing_retry_count = by_vid.get(video_id, {}).get("retry_count", 0)
+        try:
+            # Preserve existing entry if present, only update queued_at
+            by_vid = {i["video_id"]: i for i in items}
+            existing_retry_count = by_vid.get(video_id, {}).get("retry_count", 0)
 
-        entry = {
-            "video_id": video_id,
-            "channel_id": channel_id,
-            "title": title,
-            "date": date,
-            "scheduled_start": scheduled_start,
-            "raw_entry_xml": raw_entry_xml,
-            "queued_at": queued_at,
-            "retry_count": existing_retry_count,
-        }
-        by_vid[video_id] = entry
+            entry = {
+                "video_id": video_id,
+                "channel_id": channel_id,
+                "title": title,
+                "date": date,
+                "scheduled_start": scheduled_start,
+                "raw_entry_xml": raw_entry_xml,
+                "queued_at": queued_at,
+                "retry_count": existing_retry_count,
+            }
+            by_vid[video_id] = entry
 
-        updated = list(by_vid.values())
-        tmp = queue_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(updated, indent=2))
-        tmp.replace(queue_path)
+            updated = list(by_vid.values())
+            tmp = queue_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(updated, indent=2))
+            tmp.replace(queue_path)
+        except Exception as exc:
+            logger.error(f"Requeue failed for {video_id} ({queue_path}): {exc}")
 
 
 def _recover_orphaned_videos() -> int:
@@ -2046,7 +2059,8 @@ def _recover_orphaned_videos() -> int:
     # Load existing queue so we don't duplicate entries
     try:
         existing: list[dict] = json.loads(queue_path.read_text()) if queue_path.exists() else []
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Queue read failed during orphan recovery ({queue_path}): {exc}")
         existing = []
     already_queued: set[str] = {e.get("video_id", "") for e in existing}
 
@@ -2089,14 +2103,17 @@ def _recover_orphaned_videos() -> int:
             already_queued.add(video_id)
 
     if new_entries:
-        by_vid = {e["video_id"]: e for e in existing}
-        for ne in new_entries:
-            by_vid[ne["video_id"]] = ne
-        tmp = queue_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(list(by_vid.values()), indent=2))
-        tmp.replace(queue_path)
-        ids = ", ".join(e["video_id"] for e in new_entries)
-        logger.info(f"Orphan recovery: queued {len(new_entries)} video(s): {ids}")
+        try:
+            by_vid = {e["video_id"]: e for e in existing}
+            for ne in new_entries:
+                by_vid[ne["video_id"]] = ne
+            tmp = queue_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(list(by_vid.values()), indent=2))
+            tmp.replace(queue_path)
+            ids = ", ".join(e["video_id"] for e in new_entries)
+            logger.info(f"Orphan recovery: queued {len(new_entries)} video(s): {ids}")
+        except Exception as exc:
+            logger.error(f"Orphan recovery queue update failed ({queue_path}): {exc}")
 
     return len(new_entries)
 
@@ -2201,22 +2218,29 @@ def _wsb_receiver_thread(config: dict) -> None:
                     })
 
             if new_entries:
-                with _queue_lock:
-                    try:
-                        existing: list[dict] = (
-                            json.loads(queue_path.read_text()) if queue_path.exists() else []
-                        )
-                    except Exception:
-                        existing = []
-                    by_vid = {e["video_id"]: e for e in existing}
-                    for ne in new_entries:
-                        by_vid[ne["video_id"]] = ne  # keep latest queued_at
-                    updated = list(by_vid.values())
-                    tmp = queue_path.with_suffix(".tmp")
-                    tmp.write_text(json.dumps(updated, indent=2))
-                    tmp.replace(queue_path)
-                ids = ", ".join(e["video_id"] for e in new_entries)
-                logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
+                try:
+                    with _queue_lock:
+                        try:
+                            existing: list[dict] = (
+                                json.loads(queue_path.read_text()) if queue_path.exists() else []
+                            )
+                        except Exception as exc:
+                            logger.warning(f"WebSub: queue read failed ({queue_path}): {exc}")
+                            existing = []
+                        try:
+                            by_vid = {e["video_id"]: e for e in existing}
+                            for ne in new_entries:
+                                by_vid[ne["video_id"]] = ne  # keep latest queued_at
+                            updated = list(by_vid.values())
+                            tmp = queue_path.with_suffix(".tmp")
+                            tmp.write_text(json.dumps(updated, indent=2))
+                            tmp.replace(queue_path)
+                            ids = ", ".join(e["video_id"] for e in new_entries)
+                            logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
+                        except Exception as exc:
+                            logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
+                except Exception as exc:
+                    logger.error(f"WebSub: queue lock acquisition failed: {exc}")
 
             self.send_response(204)
             self.end_headers()
@@ -2423,6 +2447,8 @@ def _wsb_processor_thread(config: dict) -> None:
                 f"WebSub processor: resolved {done} video(s)"
                 + (f", kept {kept} for retry" if kept else "")
             )
+        except Exception as exc:
+            logger.error(f"WebSub processor cycle failed: {exc}", exc_info=True)
         finally:
             _release_lock()
 
