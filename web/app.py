@@ -176,7 +176,9 @@ class User(UserMixin):
         return not self.is_locked
 
     def _save(self) -> None:
-        (self._dir / "user.json").write_text(json.dumps(self._data, indent=2))
+        tmp = self._dir / "user.json.tmp"
+        tmp.write_text(json.dumps(self._data, indent=2))
+        tmp.rename(self._dir / "user.json")
 
 
 # ---------------------------------------------------------------------------
