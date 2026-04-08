@@ -104,6 +104,8 @@ header {
   font-size: 0.95rem;
   text-decoration: none;
   flex-shrink: 0;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
 }
 
 .profile-thumbnail:hover {
@@ -217,9 +219,14 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
   .hs-center button.btn-sm {
     flex: 1;
     min-width: 0;
-    min-height: 2.5rem;
-    padding: 0.35rem 0.35rem;
+    height: 2.5rem;
+    padding: 0.3rem 0.3rem;
     font-size: 0.7rem;
+    line-height: 1.9rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -236,9 +243,13 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
   .search-input {
     flex: 1;
     min-width: 0;
-    min-height: 2.5rem;
-    padding: 0.35rem 0.35rem;
+    height: 2.5rem;
+    padding: 0.3rem 0.3rem;
     font-size: 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
   }
 
   /* Row 3: External links */
