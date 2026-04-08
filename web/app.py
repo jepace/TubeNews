@@ -402,30 +402,37 @@ def _get_user_timezone(user) -> str:
     return _get_timezone()
 
 
-def _reformat_published_timestamp(published_str: str, user_timezone: str) -> str:
+def _reformat_published_timestamp(published_str: str, user_timezone: str, server_timezone: str = "") -> str:
     """Parse published timestamp string and reformat to user's timezone.
 
-    Input format: "April 5, 2026 at 3:15 PM EST (America/Los_Angeles)"
-    Output format: "April 5, 2026 at 12:15 PM PST (America/Los_Angeles)" (reformatted to user TZ)
+    Input format: "April 5, 2026 at 3:15 PM EST"
+    Output format: "April 5, 2026 at 12:15 PM PDT" (reformatted to user TZ)
 
     Falls back to original string if parsing fails.
+
+    Args:
+        published_str: The published timestamp string to convert.
+        user_timezone: Target IANA timezone (e.g., "America/Los_Angeles").
+        server_timezone: Original IANA timezone the timestamp was written in.
+                        Defaults to system timezone if not provided.
     """
     if not published_str or not user_timezone:
         return published_str
 
     try:
-        # Parse: "April 5, 2026 at 3:15 PM EST (America/Los_Angeles)"
         import re
+        # Parse: "April 5, 2026 at 3:15 PM EST"
         match = re.match(
-            r"(\w+)\s+(\d+),\s+(\d+)\s+at\s+(\d+):(\d+)\s+(AM|PM)\s+(\w+)\s+\(([^)]+)\)",
+            r"(\w+)\s+(\d+),\s+(\d+)\s+at\s+(\d+):(\d+)\s+(AM|PM)\s+(\w+)$",
             published_str
         )
         if not match:
             return published_str
 
-        month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_abbr, orig_tz_name = match.groups()
+        month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_abbr = match.groups()
 
-        # Parse original timezone from IANA name in parentheses
+        # Use provided server timezone or fall back to configured timezone
+        orig_tz_name = server_timezone or _get_timezone()
         try:
             orig_tz = pytz.timezone(orig_tz_name)
         except Exception:
@@ -744,10 +751,10 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
                 vid = entry["meta"]["video_id"]
                 vt = entry["meta"].get("video_title", "")
                 published = s.get("published", "")
-                # Reformat published timestamp to specified timezone (or system default)
+                # Reformat published timestamp to user's timezone if present
                 if published:
-                    display_tz = user_timezone or _get_timezone()
-                    published = _reformat_published_timestamp(published, display_tz)
+                    tz = user_timezone or _get_timezone()
+                    published = _reformat_published_timestamp(published, tz, _get_timezone())
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
@@ -815,7 +822,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             published = s.get("published", "")
             if published:
                 user_tz = user_data.get("preferences", {}).get("timezone", _get_timezone())
-                published = _reformat_published_timestamp(published, user_tz)
+                published = _reformat_published_timestamp(published, user_tz, _get_timezone())
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
@@ -1203,8 +1210,8 @@ def channel_feed(channel_id: str):
     channels = _load_channels()
     if not any(ch["channel_id"] == channel_id for ch in channels):
         abort(404)
-    user_tz = _get_user_timezone(current_user)
-    channel_name, stories = _get_channel_stories(channel_id, user_timezone=user_tz)
+    user_tz = current_user.preferences.get("timezone", _get_timezone()) if hasattr(current_user, "preferences") else _get_timezone()
+    channel_name, stories = _get_channel_stories(channel_id, user_tz)
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )

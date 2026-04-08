@@ -794,7 +794,7 @@ def write_story_files(
                 _fmt_no_leading_zeros(pub_now, "%B %d, %Y")
                 + " at "
                 + _fmt_no_leading_zeros(pub_now, "%I:%M %p")
-                + f" {tz_abbr} ({tz_name})"
+                + f" {tz_abbr}"
             )
             fh.write(f"Published {pub_formatted}\n")
             if video_id:
@@ -871,7 +871,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
                     type="html",
                 )
                 feed_entry.published(
-                    datetime.fromtimestamp(metadata["processed_at"]).astimezone()
+                    datetime.fromtimestamp(_get_timestamp_as_float(metadata.get("processed_at"))).astimezone()
                 )
             except Exception as exc:
                 logger.debug(f"Skipping {story_file}: {exc}")
