@@ -596,7 +596,7 @@ def _validate_channel_id(channel_id: str) -> bool:
 
 
 def _sanitize_focus(text: str, max_length: int = 100) -> str:
-    """Sanitize focus text to prevent injection attacks.
+    r"""Sanitize focus text to prevent injection attacks.
 
     Removes or replaces characters outside [\w\s,\-], collapses whitespace,
     and truncates to max_length. Used to safely prepare user-entered focus
