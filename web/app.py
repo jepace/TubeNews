@@ -387,24 +387,11 @@ def _base_url() -> str:
         return ""
 
 
-def _get_timezone() -> str:
-    """Get configured timezone for display.
-
-    DEPRECATED: This now always returns 'UTC'. All data is stored in UTC on disk.
-    Timezone conversion is handled only at display time using user preferences.
-    Server-side timezone config is no longer used.
-
-    Returns:
-        Always returns 'UTC'.
-    """
-    return "UTC"
-
-
 def _get_user_timezone(user) -> str:
-    """Get user's timezone, fallback to system default."""
+    """Get user's timezone, fallback to UTC."""
     if user and user._data.get("preferences", {}).get("timezone"):
         return user._data["preferences"]["timezone"]
-    return _get_timezone()
+    return "UTC"
 
 
 def _reformat_published_timestamp(published_str: str, user_timezone: str, server_timezone: str = "") -> str:
@@ -437,7 +424,7 @@ def _reformat_published_timestamp(published_str: str, user_timezone: str, server
         month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_abbr = match.groups()
 
         # Use provided server timezone or fall back to configured timezone
-        orig_tz_name = server_timezone or _get_timezone()
+        orig_tz_name = server_timezone or "UTC"
         try:
             orig_tz = pytz.timezone(orig_tz_name)
         except Exception:
@@ -758,8 +745,8 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
                 published = s.get("published", "")
                 # Reformat published timestamp to user's timezone if present
                 if published:
-                    tz = user_timezone or _get_timezone()
-                    published = _reformat_published_timestamp(published, tz, _get_timezone())
+                    tz = user_timezone or "UTC"
+                    published = _reformat_published_timestamp(published, tz, "UTC")
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
@@ -826,8 +813,8 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             # Reformat published timestamp to user's timezone if present
             published = s.get("published", "")
             if published:
-                user_tz = user_data.get("preferences", {}).get("timezone", _get_timezone())
-                published = _reformat_published_timestamp(published, user_tz, _get_timezone())
+                user_tz = user_data.get("preferences", {}).get("timezone", "UTC")
+                published = _reformat_published_timestamp(published, user_tz, "UTC")
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
@@ -1215,7 +1202,7 @@ def channel_feed(channel_id: str):
     channels = _load_channels()
     if not any(ch["channel_id"] == channel_id for ch in channels):
         abort(404)
-    user_tz = current_user.preferences.get("timezone", _get_timezone()) if hasattr(current_user, "preferences") else _get_timezone()
+    user_tz = current_user.preferences.get("timezone", "UTC") if hasattr(current_user, "preferences") else "UTC"
     channel_name, stories = _get_channel_stories(channel_id, user_tz)
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id

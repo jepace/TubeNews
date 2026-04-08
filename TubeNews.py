@@ -272,18 +272,6 @@ def iso8601_to_unix(iso_str: str | None) -> float | None:
     return datetime.fromisoformat(iso_str.replace('Z', '+00:00')).timestamp()
 
 
-def _get_timezone() -> str:
-    """Get configured timezone for display (IANA name, e.g., 'America/Los_Angeles').
-
-    DEPRECATED: This now always returns 'UTC'. All data is stored in UTC on disk.
-    Timezone conversion is handled only at display time by the web app.
-
-    Returns:
-        Always returns 'UTC'. Server-side timezone config is no longer used.
-    """
-    return "UTC"
-
-
 def is_ripe(queued_at_iso: str | None, min_age_minutes: int) -> bool:
     """Check if a queued entry is old enough to process.
 
