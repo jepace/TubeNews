@@ -2,6 +2,9 @@
 {% block title %}{{ feed_name }}{% endblock %}
 {% block header_title %}{{ feed_name }}{% endblock %}
 {% block header_right %}
+{% if unseen_channel_count %}
+<span class="nav-badge">{{ unseen_channel_count }}</span>
+{% endif %}
 {% if channel_counts is defined and channel_counts and not channel_id %}
 <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776;</button>
 {% endif %}
@@ -67,6 +70,9 @@
   <div class="hs-right">
     {% if channel_id %}
     <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
+    {% endif %}
+    {% if feed_path %}
+    <a class="hs-rss" href="{{ feed_path }}" title="RSS Feed">RSS</a>
     {% endif %}
   </div>
 </div>

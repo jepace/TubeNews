@@ -499,11 +499,18 @@ def inject_body_classes():
         else:
             unseen_count = 0
         # Debounced last_accessed update — at most one disk write per 5 minutes.
+        # Update on first access (key absent) or if 5+ minutes have passed since last update.
         now = time.time()
-        last_accessed_ts = _get_timestamp_as_float(current_user._data.get("last_accessed"))
-        if now - last_accessed_ts > 300:
+        if "last_accessed" not in current_user._data:
+            # First access: set the timestamp immediately
             current_user._data["last_accessed"] = now_utc_iso()
             current_user._save()
+        else:
+            # Subsequent accesses: update only if 5+ minutes have passed
+            last_accessed_ts = _get_timestamp_as_float(current_user._data.get("last_accessed"))
+            if now - last_accessed_ts > 300:
+                current_user._data["last_accessed"] = now_utc_iso()
+                current_user._save()
     else:
         classes = ""
         unseen_count = 0

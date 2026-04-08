@@ -1110,11 +1110,11 @@ def test_nav_badge_shown_when_unseen_channel_exists(client, archive):
     import json as _json
     import web.app as webapp
 
-    # Create user subscribed to Alpha who has only "seen" Alpha (Beta is new to them)
+    # Create user subscribed to both Alpha and Beta, but has only "seen" Alpha
     users_dir = webapp.STATE_ROOT / "users"
     _make_user(
         users_dir, name="Partial User", email="partial@example.com",
-        channel_ids=["UC_ALPHA_ID"], token="partial-token-xyz",
+        channel_ids=["UC_ALPHA_ID", "UC_BETA__ID"], token="partial-token-xyz",
     )
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
@@ -1122,12 +1122,12 @@ def test_nav_badge_shown_when_unseen_channel_exists(client, archive):
             continue
         d = _json.loads(uj.read_text())
         if d.get("email") == "partial@example.com":
-            d["seen_channel_ids"] = ["UC_ALPHA_ID"]
+            d["seen_channel_ids"] = ["UC_ALPHA_ID"]  # Only seen Alpha, not Beta
             uj.write_text(_json.dumps(d))
             break
 
     client.post("/login", data={"email": "partial@example.com", "password": "testpassword123"})
-    # /blog renders for this user (they have a subscription); badge should appear
+    # Badge should appear showing 1 unseen channel (Beta)
     r = client.get("/feed")
     assert b'nav-badge' in r.data
     assert b'>1<' in r.data
@@ -1144,10 +1144,10 @@ def test_nav_badge_hidden_after_account_visit(client, archive):
     import json as _json
     import web.app as webapp
 
-    # Set up user with only Alpha seen
+    # Set up user subscribed to both channels but with only Alpha seen
     users_dir = webapp.STATE_ROOT / "users"
     _make_user(users_dir, name="Watcher", email="watcher@example.com",
-               channel_ids=["UC_ALPHA_ID"], token="watcher-token")
+               channel_ids=["UC_ALPHA_ID", "UC_BETA__ID"], token="watcher-token")
     for uid_dir in users_dir.iterdir():
         uj = uid_dir / "user.json"
         if not uj.exists():
