@@ -176,7 +176,9 @@ class User(UserMixin):
         return not self.is_locked
 
     def _save(self) -> None:
-        (self._dir / "user.json").write_text(json.dumps(self._data, indent=2))
+        tmp = self._dir / "user.json.tmp"
+        tmp.write_text(json.dumps(self._data, indent=2))
+        tmp.rename(self._dir / "user.json")
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +203,7 @@ class ChannelStat(TypedDict):
     last_processed: float
 
 
-class StoryDict(TypedDict):
+class StoryDict(TypedDict, total=False):
     """Fully-resolved story dict served to Flask templates and the feed builders."""
     title: str
     dateline: str
@@ -217,6 +219,8 @@ class StoryDict(TypedDict):
     content_hash: str
     channel_id: str
     published: str
+    comment_count: int
+    user_ids: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -1534,7 +1538,8 @@ def get_story_comments(channel_slug: str, meeting_id: str, basename: str):
         return jsonify([])
     try:
         comments = json.loads(comment_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.error(f"Failed to read comment file {comment_path}: {exc}")
         return jsonify([])
     name_cache: dict[str, str] = {}
     my_id = current_user.get_id()
@@ -1588,8 +1593,9 @@ def post_comment():
     }
     try:
         existing = json.loads(comment_path.read_text(encoding="utf-8")) if comment_path.exists() else []
-    except Exception:
-        existing = []
+    except Exception as exc:
+        logger.error(f"Failed to read comment file {comment_path}: {exc}")
+        return jsonify({"ok": False, "error": "Failed to read comments. Please try again."}), 500
     existing.append(new_comment)
     tmp = comment_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
