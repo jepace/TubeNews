@@ -34,10 +34,14 @@ from TubeNews import (
     _read_channels,
     _read_push_queue,
     _remove_from_queue,
-    _update_queue_retry_counts,
+    _update_queue_entries,
     _wsb_record_subscription,
     _wsb_remove_subscription,
     _recover_orphaned_videos,
+    _next_transcript_try,
+    _write_no_transcript_metadata,
+    _TRANSCRIPT_RETRY_OFFSETS,
+    _TRANSCRIPT_MAX_ATTEMPTS,
     now_utc_iso,
     unix_to_iso8601,
 )
@@ -2362,38 +2366,43 @@ def test_read_push_queue_absent_file(tmp_path, monkeypatch):
     """Returns [] when the queue file does not exist."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
-    result = _read_push_queue(60)
+    result = _read_push_queue()
     assert result == []
 
 
 def test_read_push_queue_all_fresh(tmp_path, monkeypatch):
-    """Returns [] when all entries were queued less than min_age_minutes ago."""
+    """Returns [] when all entries have next_try_at in the future."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
-    now = time.time()
+    future = (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     (queue_dir / "push_queue.json").write_text(json.dumps([
-        {"video_id": "vid1", "channel_id": "UCx", "queued_at": unix_to_iso8601(now - 30)},  # 30s ago
+        {"video_id": "vid1", "channel_id": "UCx", "queued_at": now_utc_iso(), "next_try_at": future},
     ]))
-    result = _read_push_queue(60)  # min_age = 60 min
+    result = _read_push_queue()
     assert result == []
 
 
 def test_read_push_queue_returns_ripe_entries(tmp_path, monkeypatch):
-    """Returns only entries old enough to process."""
+    """Returns only entries whose next_try_at has passed; legacy entries (no next_try_at) are always ripe."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
-    now = time.time()
+    past = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     (queue_dir / "push_queue.json").write_text(json.dumps([
-        {"video_id": "old_vid", "channel_id": "UCx", "queued_at": unix_to_iso8601(now - 400 * 60)},  # 400 min ago
-        {"video_id": "new_vid", "channel_id": "UCx", "queued_at": unix_to_iso8601(now - 10)},         # 10s ago
+        {"video_id": "ripe_vid",    "channel_id": "UCx", "queued_at": now_utc_iso(), "next_try_at": past},
+        {"video_id": "future_vid",  "channel_id": "UCx", "queued_at": now_utc_iso(), "next_try_at": future},
+        {"video_id": "legacy_vid",  "channel_id": "UCx", "queued_at": now_utc_iso()},  # no next_try_at → ripe
     ]))
-    result = _read_push_queue(360)  # min_age = 360 min
-    assert len(result) == 1
-    assert result[0]["video_id"] == "old_vid"
+    result = _read_push_queue()
+    assert len(result) == 2
+    ids = {e["video_id"] for e in result}
+    assert "ripe_vid" in ids
+    assert "legacy_vid" in ids
+    assert "future_vid" not in ids
 
 
 def test_remove_from_queue_removes_correct_ids(tmp_path, monkeypatch):
@@ -2447,16 +2456,16 @@ def test_read_push_queue_skips_future_dated_videos(tmp_path, monkeypatch):
         {"video_id": "past_vid",   "channel_id": "UC2", "date": past,   "queued_at": unix_to_iso8601(now - 400 * 60)},
     ]))
 
-    result = _read_push_queue(360)  # min_age = 360 min, so both are ripe by age
+    result = _read_push_queue()  # entries have no next_try_at → immediately ripe
 
     # Both should be returned as "ripe" from _read_push_queue
-    # (date filtering happens during processing, not during queueing)
+    # (publish-date filtering happens in the processor, not during queue reading)
     assert len(result) == 2
     assert {e["video_id"] for e in result} == {"future_vid", "past_vid"}
 
 
-def test_update_queue_retry_counts_preserves_future_videos(tmp_path, monkeypatch):
-    """Retry count updates don't overwrite entries not being retried (future-dated)."""
+def test_update_queue_entries_preserves_unmodified_entries(tmp_path, monkeypatch):
+    """_update_queue_entries leaves entries not in the update list unchanged."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
@@ -2464,28 +2473,19 @@ def test_update_queue_retry_counts_preserves_future_videos(tmp_path, monkeypatch
     queue_dir.mkdir()
     queue_path = queue_dir / "push_queue.json"
 
-    future = (datetime.now() + timedelta(days=1)).isoformat() + "Z"
-
-    # Initial queue with a future video and a past video
     queue_path.write_text(json.dumps([
-        {"video_id": "future_vid", "channel_id": "UC1", "date": future, "queued_at": None, "retry_count": 0},
-        {"video_id": "past_vid",   "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": None, "retry_count": 0},
+        {"video_id": "untouched", "channel_id": "UC1", "queued_at": None, "retry_count": 0},
+        {"video_id": "updated",   "channel_id": "UC2", "queued_at": None, "retry_count": 0},
     ]))
 
-    # Update only the past video's retry count
-    _update_queue_retry_counts([
-        {"video_id": "past_vid", "channel_id": "UC2", "date": "2026-01-01T00:00:00Z", "queued_at": None, "retry_count": 1},
+    _update_queue_entries([
+        {"video_id": "updated", "channel_id": "UC2", "queued_at": None, "retry_count": 1},
     ])
 
-    # Future video should be unchanged, past video updated
     remaining = json.loads(queue_path.read_text())
-    future_entry = next((e for e in remaining if e["video_id"] == "future_vid"), None)
-    past_entry = next((e for e in remaining if e["video_id"] == "past_vid"), None)
-
-    assert future_entry is not None
-    assert future_entry["retry_count"] == 0  # unchanged
-    assert past_entry is not None
-    assert past_entry["retry_count"] == 1   # updated
+    by_vid = {e["video_id"]: e for e in remaining}
+    assert by_vid["untouched"]["retry_count"] == 0  # unchanged
+    assert by_vid["updated"]["retry_count"] == 1     # updated
 
 
 # ---------------------------------------------------------------------------
@@ -2589,8 +2589,8 @@ def test_process_feed_forced_videos_processes_only_specified(tmp_path, monkeypat
 # _update_queue_retry_counts
 # ---------------------------------------------------------------------------
 
-def test_update_queue_retry_counts_increments_entry(tmp_path, monkeypatch):
-    """retry_count is updated for the matching entry; others are untouched."""
+def test_update_queue_entries_increments_entry(tmp_path, monkeypatch):
+    """Fields are updated for the matching entry; others are untouched."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     queue_dir = tmp_path / "queue"
@@ -2600,19 +2600,19 @@ def test_update_queue_retry_counts_increments_entry(tmp_path, monkeypatch):
         {"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 1},
         {"video_id": "bbb", "channel_id": "UC2", "queued_at": unix_to_iso8601(2000)},
     ]))
-    _update_queue_retry_counts([{"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 2}])
+    _update_queue_entries([{"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 2}])
     items = json.loads(queue_path.read_text())
     by_vid = {i["video_id"]: i for i in items}
     assert by_vid["aaa"]["retry_count"] == 2
     assert "retry_count" not in by_vid["bbb"]  # untouched
 
 
-def test_update_queue_retry_counts_noop_when_absent(tmp_path, monkeypatch):
+def test_update_queue_entries_noop_when_absent(tmp_path, monkeypatch):
     """No error when push_queue.json doesn't exist."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     (tmp_path / "queue").mkdir()
-    _update_queue_retry_counts([{"video_id": "aaa", "retry_count": 1}])  # must not raise
+    _update_queue_entries([{"video_id": "aaa", "retry_count": 1}])  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -2704,7 +2704,9 @@ def test_recover_orphaned_videos_queues_dirs_without_metadata(tmp_path, monkeypa
     assert queue[0]["video_id"] == "abcDEFGhijk"
     assert queue[0]["channel_id"] == "UC123"
     assert queue[0]["date"] == "2026-01-15"
-    assert queue[0]["queued_at"] is None  # immediately ripe
+    assert queue[0]["queued_at"] is None      # immediately ripe
+    assert queue[0]["next_try_at"] is None    # immediately ripe (new field)
+    assert queue[0]["transcript_attempts"] == 0  # fresh retry counter
 
 
 def test_recover_orphaned_videos_skips_dirs_with_metadata(tmp_path, monkeypatch):
@@ -2782,3 +2784,257 @@ def test_recover_orphaned_videos_returns_count(tmp_path, monkeypatch):
 
     count = _recover_orphaned_videos()
     assert count == 3
+
+
+# ---------------------------------------------------------------------------
+# _next_transcript_try — retry schedule helper
+# ---------------------------------------------------------------------------
+
+def test_next_transcript_try_attempt_0_is_five_minutes():
+    """Attempt 0 schedules T+5 minutes from queued_at."""
+    queued_at = "2026-04-08T10:00:00Z"
+    result = _next_transcript_try(queued_at, 0)
+    expected = "2026-04-08T10:05:00Z"
+    assert result == expected
+
+
+def test_next_transcript_try_attempt_1_is_one_hour():
+    """Attempt 1 schedules T+1 hour from queued_at."""
+    queued_at = "2026-04-08T10:00:00Z"
+    result = _next_transcript_try(queued_at, 1)
+    assert result == "2026-04-08T11:00:00Z"
+
+
+def test_next_transcript_try_attempt_12_is_twelve_hours():
+    """Attempt 12 (final) schedules T+12 hours from queued_at."""
+    queued_at = "2026-04-08T10:00:00Z"
+    result = _next_transcript_try(queued_at, 12)
+    assert result == "2026-04-08T22:00:00Z"
+
+
+def test_next_transcript_try_clamps_beyond_max():
+    """Attempt index beyond the table length clamps to the last offset."""
+    queued_at = "2026-04-08T10:00:00Z"
+    # Index 99 should clamp to the last offset (12 hours)
+    result = _next_transcript_try(queued_at, 99)
+    assert result == "2026-04-08T22:00:00Z"
+
+
+def test_next_transcript_try_malformed_queued_at_uses_now():
+    """A malformed queued_at falls back to current time without raising."""
+    result = _next_transcript_try("not-a-date", 0)
+    # Should return a valid ISO string (approximately now + 5 min); just check format
+    assert result.endswith("Z")
+    assert "T" in result
+
+
+def test_transcript_max_attempts_matches_offsets():
+    """_TRANSCRIPT_MAX_ATTEMPTS must equal len(_TRANSCRIPT_RETRY_OFFSETS)."""
+    assert _TRANSCRIPT_MAX_ATTEMPTS == len(_TRANSCRIPT_RETRY_OFFSETS)
+    assert _TRANSCRIPT_MAX_ATTEMPTS == 13
+
+
+# ---------------------------------------------------------------------------
+# _read_push_queue — next_try_at-based filtering
+# ---------------------------------------------------------------------------
+
+def test_read_push_queue_none_next_try_at_is_ripe(tmp_path, monkeypatch):
+    """Entries with next_try_at=None are immediately ripe (orphan/legacy compat)."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "push_queue.json").write_text(json.dumps([
+        {"video_id": "vid1", "channel_id": "UCx", "queued_at": now_utc_iso(), "next_try_at": None},
+    ]))
+    result = _read_push_queue()
+    assert len(result) == 1
+    assert result[0]["video_id"] == "vid1"
+
+
+def test_read_push_queue_malformed_next_try_at_treated_as_ripe(tmp_path, monkeypatch):
+    """Entries with malformed next_try_at are treated as ripe (fail-safe)."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "push_queue.json").write_text(json.dumps([
+        {"video_id": "bad", "channel_id": "UCx", "next_try_at": "not-a-date"},
+    ]))
+    result = _read_push_queue()
+    assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# _write_no_transcript_metadata
+# ---------------------------------------------------------------------------
+
+def test_write_no_transcript_metadata_creates_metadata_json(tmp_path):
+    """Writes metadata.json with status=no_transcript_available."""
+    feed_dir = tmp_path / "MyChannel"
+    feed_dir.mkdir()
+    _write_no_transcript_metadata("vidABC", feed_dir, "2026-04-08", "My Video")
+    meta_path = feed_dir / "2026-04-08_vidABC" / "metadata.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert meta["status"] == "no_transcript_available"
+    assert meta["video_id"] == "vidABC"
+    assert meta["skip_reason"] == "no_captions"
+
+
+def test_write_no_transcript_metadata_custom_skip_reason(tmp_path):
+    """skip_reason is stored as provided."""
+    feed_dir = tmp_path / "Chan"
+    feed_dir.mkdir()
+    _write_no_transcript_metadata("vidXYZ", feed_dir, "2026-01-01", "Title", "members_only_or_restricted")
+    meta = json.loads((feed_dir / "2026-01-01_vidXYZ" / "metadata.json").read_text())
+    assert meta["skip_reason"] == "members_only_or_restricted"
+
+
+# ---------------------------------------------------------------------------
+# _wsb_try_fetch_transcript
+# ---------------------------------------------------------------------------
+
+def test_wsb_try_fetch_transcript_returns_cached_when_transcript_exists(tmp_path, monkeypatch):
+    """Returns 'cached' immediately when transcript.txt is already on disk."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    channel_dir = tmp_path / "MyChan"
+    meeting_dir = channel_dir / "2026-04-08_vid123"
+    meeting_dir.mkdir(parents=True)
+    (meeting_dir / "transcript.txt").write_text("transcript content")
+
+    entry = {"video_id": "vid123", "channel_id": "UC1", "date": "2026-04-08", "title": "T"}
+    feed_cfg = {"channel_name": "MyChan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
+    assert result == "cached"
+
+
+def test_wsb_try_fetch_transcript_returns_success_and_writes_file(tmp_path, monkeypatch):
+    """Returns 'success' and writes transcript.txt when fetch succeeds."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: "0:00 --> Hello world")
+
+    channel_dir = tmp_path / "MyChan"
+    channel_dir.mkdir()
+
+    entry = {"video_id": "vid456", "channel_id": "UC1", "date": "2026-04-08T10:00:00Z", "title": "V"}
+    feed_cfg = {"channel_name": "MyChan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
+    assert result == "success"
+    transcript_path = channel_dir / "2026-04-08_vid456" / "transcript.txt"
+    assert transcript_path.exists()
+    assert transcript_path.read_text() == "0:00 --> Hello world"
+
+
+def test_wsb_try_fetch_transcript_returns_transient_on_none(tmp_path, monkeypatch):
+    """Returns 'transient' when fetch_transcript returns None (not quota/livestream)."""
+    import TubeNews
+    import threading
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: None)
+
+    (tmp_path / "MyChan").mkdir()
+    entry = {"video_id": "vid789", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    feed_cfg = {"channel_name": "MyChan"}
+    event = threading.Event()  # not set
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, event)
+    assert result == "transient"
+
+
+def test_wsb_try_fetch_transcript_returns_permanent_on_false(tmp_path, monkeypatch):
+    """Returns 'permanent' when fetch_transcript returns False."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
+
+    (tmp_path / "Chan").mkdir()
+    entry = {"video_id": "vidPerm", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    feed_cfg = {"channel_name": "Chan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
+    assert result == "permanent"
+
+
+def test_wsb_try_fetch_transcript_returns_quota_exhausted(tmp_path, monkeypatch):
+    """Returns 'quota_exhausted' when the rate-limit event is set after fetch returns None."""
+    import TubeNews
+    import threading
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    event = threading.Event()
+
+    def fake_fetch(*a, transcript_rate_limit_event=None, **kw):
+        if transcript_rate_limit_event is not None:
+            transcript_rate_limit_event.set()
+        return None
+
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+    (tmp_path / "Chan").mkdir()
+    entry = {"video_id": "vidQ", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    feed_cfg = {"channel_name": "Chan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, event)
+    assert result == "quota_exhausted"
+
+
+def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
+    """Returns 'livestream' when the livestream_error flag is set."""
+    import TubeNews
+    import threading
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    def fake_fetch(*a, livestream_error=None, **kw):
+        if livestream_error is not None:
+            livestream_error[0] = True
+        return None
+
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+    (tmp_path / "Chan").mkdir()
+    entry = {"video_id": "vidLS", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    feed_cfg = {"channel_name": "Chan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, threading.Event())
+    assert result == "livestream"
+
+
+# ---------------------------------------------------------------------------
+# Transcript retry scheduling in the queue
+# ---------------------------------------------------------------------------
+
+def test_transcript_retry_schedule_advances_next_try_at(tmp_path, monkeypatch):
+    """After a transient failure, next_try_at advances to the correct offset and transcript_attempts increments."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    queued_at = "2026-04-08T10:00:00Z"
+    entry = {
+        "video_id": "vid1", "channel_id": "UC1",
+        "queued_at": queued_at, "next_try_at": queued_at,
+        "transcript_attempts": 0,
+    }
+
+    # Simulate what the processor does on a transient failure for attempt 0
+    attempts = entry.get("transcript_attempts", 0) + 1
+    next_nta = _next_transcript_try(queued_at, attempts)
+
+    assert attempts == 1
+    assert next_nta == "2026-04-08T11:00:00Z"  # T+1hr for attempt 1
+
+
+def test_transcript_retry_schedule_final_attempt(tmp_path):
+    """After attempt 12 (the last), next_try_at is T+12h; any further failure should be permanent."""
+    queued_at = "2026-04-08T10:00:00Z"
+
+    # Simulate attempt 12 (index 12 in the offsets table)
+    nta_12 = _next_transcript_try(queued_at, 12)
+    assert nta_12 == "2026-04-08T22:00:00Z"  # T+12hr
+
+    # _TRANSCRIPT_MAX_ATTEMPTS is 13 total attempts (indices 0–12)
+    # At attempts == _TRANSCRIPT_MAX_ATTEMPTS, the processor marks permanent
+    assert _TRANSCRIPT_MAX_ATTEMPTS == 13

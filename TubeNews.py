@@ -1722,17 +1722,17 @@ def process_video(
                         retry_time = datetime.now(timezone.utc) + timedelta(hours=1)
                 else:
                     retry_time = datetime.now(timezone.utc) + timedelta(hours=1)
-                retry_queued_at = retry_time.isoformat().replace('+00:00', 'Z')
+                retry_next_try_at = retry_time.isoformat(timespec="seconds").replace('+00:00', 'Z')
                 _requeue_video(
                     video_id=video_id,
                     channel_id=channel_id or feed["channel_id"],
                     title=video_title,
                     date=video_date,
                     scheduled_start=scheduled_start,
-                    queued_at=retry_queued_at,
+                    next_try_at=retry_next_try_at,
                     raw_entry_xml=raw_entry_xml,
                 )
-                logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — re-queued for {retry_queued_at}")
+                logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — re-queued for {retry_next_try_at}")
                 return "skipped", 0
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
@@ -2151,19 +2151,16 @@ def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _read_push_queue(min_age_minutes: float) -> list[dict]:
-    """Return queue entries whose ``queued_at`` timestamp is old enough to process.
+def _read_push_queue() -> list[dict]:
+    """Return queue entries that are due for processing.
 
-    An entry is considered ripe when ``queued_at`` is at least
-    *min_age_minutes* minutes in the past.  This delay lets auto-captions
-    finish and live streams end before we fetch the transcript.
-
-    Args:
-        min_age_minutes: Minimum age in minutes before an entry is returned.
+    An entry is ripe when its ``next_try_at`` timestamp has passed.  Legacy
+    entries that pre-date the ``next_try_at`` field (absent or ``None``) are
+    treated as immediately ripe so they are not silently abandoned.
 
     Returns:
-        List of ripe queue dicts, each with ``video_id``, ``channel_id``,
-        and ``queued_at`` keys.  Returns ``[]`` when the queue file is absent
+        List of ripe queue dicts, each with at least ``video_id`` and
+        ``channel_id`` keys.  Returns ``[]`` when the queue file is absent
         or cannot be parsed.
     """
     path = STATE_ROOT / "queue" / "push_queue.json"
@@ -2174,28 +2171,72 @@ def _read_push_queue(min_age_minutes: float) -> list[dict]:
     except Exception as exc:
         logger.error(f"Queue read failed ({path}): {exc}")
         return []
-    # Use is_ripe() helper which handles both ISO 8601 strings and legacy Unix floats,
-    # and treats None/0 as immediate processing
+    now = datetime.now(timezone.utc)
     result = []
     for i in items:
-        queued_at = i.get("queued_at")
-        # Handle legacy format: 0 means immediate processing
-        if isinstance(queued_at, (int, float)) and queued_at == 0:
-            queued_at = None
-        if is_ripe(queued_at, int(min_age_minutes)):
+        nta = i.get("next_try_at")
+        if nta is None:
+            # No next_try_at: legacy entry or orphan — process immediately.
             result.append(i)
+        else:
+            try:
+                if datetime.fromisoformat(nta.replace("Z", "+00:00")) <= now:
+                    result.append(i)
+            except (ValueError, TypeError):
+                result.append(i)  # malformed timestamp — treat as ripe
     return result
 
 
 _QUEUE_MAX_RETRIES = 10
 
+# Transcript retry schedule: seconds from queued_at for each successive attempt.
+# Attempt 0 → T+5 min (first check, shortly after notification).
+# Attempts 1–12 → T+1h through T+12h (hourly, anchored to the original notification time).
+# After _TRANSCRIPT_MAX_ATTEMPTS failures the video is marked permanently no-transcript.
+_TRANSCRIPT_RETRY_OFFSETS: tuple[int, ...] = (
+    5 * 60,       # attempt 0:  T+5 min  (first check)
+    1 * 3600,     # attempt 1:  T+1 hr
+    2 * 3600,     # attempt 2:  T+2 hr
+    3 * 3600,     # attempt 3:  T+3 hr
+    4 * 3600,     # attempt 4:  T+4 hr
+    5 * 3600,     # attempt 5:  T+5 hr
+    6 * 3600,     # attempt 6:  T+6 hr
+    7 * 3600,     # attempt 7:  T+7 hr
+    8 * 3600,     # attempt 8:  T+8 hr
+    9 * 3600,     # attempt 9:  T+9 hr
+    10 * 3600,    # attempt 10: T+10 hr
+    11 * 3600,    # attempt 11: T+11 hr
+    12 * 3600,    # attempt 12: T+12 hr  (final; failure → permanent)
+)
+_TRANSCRIPT_MAX_ATTEMPTS: int = len(_TRANSCRIPT_RETRY_OFFSETS)  # 13
 
-def _update_queue_retry_counts(updated_entries: list[dict]) -> None:
-    """Update ``retry_count`` for queue entries that weren't resolved this cycle.
+
+def _next_transcript_try(queued_at_iso: str, attempt: int) -> str:
+    """Compute the ISO 8601 timestamp for the next transcript fetch attempt.
+
+    Args:
+        queued_at_iso: Original notification timestamp (ISO 8601, Z-suffixed).
+        attempt: The attempt number being scheduled (0 = first try at T+5min).
+
+    Returns:
+        ISO 8601 UTC string for when to next attempt the transcript fetch.
+    """
+    idx = min(attempt, len(_TRANSCRIPT_RETRY_OFFSETS) - 1)
+    try:
+        base = datetime.fromisoformat(queued_at_iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        base = datetime.now(timezone.utc)
+    result = base + timedelta(seconds=_TRANSCRIPT_RETRY_OFFSETS[idx])
+    return result.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _update_queue_entries(updated_entries: list[dict]) -> None:
+    """Persist updated queue entries back to ``push_queue.json``.
 
     Reads ``push_queue.json``, replaces matching entries with the updated
-    versions (which carry an incremented ``retry_count``), and writes back
-    atomically.  No-op when the queue file is absent.
+    versions (which may carry incremented ``retry_count``, updated
+    ``next_try_at``, or incremented ``transcript_attempts``), and writes
+    back atomically.  No-op when the queue file is absent.
     """
     path = STATE_ROOT / "queue" / "push_queue.json"
     if not path.exists():
@@ -2210,7 +2251,7 @@ def _update_queue_retry_counts(updated_entries: list[dict]) -> None:
         merged = [by_vid.get(i.get("video_id"), i) for i in items]
         _atomic_write(path, json.dumps(merged, indent=2))
     except Exception as exc:
-        logger.error(f"Queue retry-count update failed ({path}): {exc}")
+        logger.error(f"Queue entry update failed ({path}): {exc}")
 
 
 def _remove_from_queue(processed_ids: set[str]) -> None:
@@ -2243,23 +2284,25 @@ def _requeue_video(
     title: str,
     date: str,
     scheduled_start: str | None,
-    queued_at: str,
+    next_try_at: str,
     raw_entry_xml: str = "",
 ) -> None:
     """Re-queue a video for later processing (livestream still broadcasting).
 
-    Updates the video's ``queued_at`` timestamp to defer processing until
-    after the livestream ends. If the video is not yet in the queue, it is
-    added. Existing ``retry_count`` is preserved.
+    Sets ``next_try_at`` to *next_try_at* so the processor waits until after
+    the stream ends before fetching the transcript again.  Resets
+    ``transcript_attempts`` to 0 — the stream not being over is not a
+    transcript failure, and we want a fresh retry window once it ends.
+    Existing ``retry_count`` and ``queued_at`` are preserved.
 
     Args:
-        video_id: YouTube video ID
-        channel_id: YouTube channel ID
-        title: Video title
-        date: Video publish date (ISO 8601)
-        scheduled_start: Scheduled stream start time (ISO 8601), or None
-        queued_at: New timestamp for when this video becomes ripe (ISO 8601)
-        raw_entry_xml: Raw Atom entry XML from WebSub notification
+        video_id: YouTube video ID.
+        channel_id: YouTube channel ID.
+        title: Video title.
+        date: Video publish date (ISO 8601).
+        scheduled_start: Scheduled stream start time (ISO 8601), or ``None``.
+        next_try_at: ISO 8601 UTC timestamp for when to next attempt processing.
+        raw_entry_xml: Raw Atom entry XML from WebSub notification.
     """
     queue_dir = STATE_ROOT / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
@@ -2273,9 +2316,11 @@ def _requeue_video(
             items = []
 
         try:
-            # Preserve existing entry if present, only update queued_at
+            # Preserve existing entry's queued_at and retry_count; reset transcript_attempts.
             by_vid = {i["video_id"]: i for i in items}
-            existing_retry_count = by_vid.get(video_id, {}).get("retry_count", 0)
+            existing = by_vid.get(video_id, {})
+            existing_queued_at = existing.get("queued_at", now_utc_iso())
+            existing_retry_count = existing.get("retry_count", 0)
 
             entry = {
                 "video_id": video_id,
@@ -2284,7 +2329,9 @@ def _requeue_video(
                 "date": date,
                 "scheduled_start": scheduled_start,
                 "raw_entry_xml": raw_entry_xml,
-                "queued_at": queued_at,
+                "queued_at": existing_queued_at,
+                "next_try_at": next_try_at,
+                "transcript_attempts": 0,  # fresh retry window after stream ends
                 "retry_count": existing_retry_count,
             }
             by_vid[video_id] = entry
@@ -2297,6 +2344,112 @@ def _requeue_video(
             logger.error(f"Requeue failed for {video_id} ({queue_path}): {exc}")
 
 
+def _write_no_transcript_metadata(
+    video_id: str,
+    feed_dir: Path,
+    video_date: str,
+    video_title: str,
+    skip_reason: str = "no_captions",
+) -> None:
+    """Write a permanent ``no_transcript_available`` metadata.json for a video.
+
+    Creates the meeting directory if needed.  Called from both
+    :func:`process_video` (for the 48-hour age path) and the WebSub processor
+    (when all transcript retry attempts are exhausted).
+
+    Args:
+        video_id: YouTube video ID.
+        feed_dir: Channel content directory (``STORAGE_ROOT / slugify(channel_name)``).
+        video_date: Video date in ``YYYY-MM-DD`` format (used as meeting dir prefix).
+        video_title: Video title (stored in metadata for human reference).
+        skip_reason: Reason code — ``"no_captions"``, ``"members_only_or_restricted"``,
+            or ``"video_not_found"``.
+    """
+    meeting_dir = feed_dir / f"{video_date}_{video_id}"
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+    metadata: MetadataDict = {
+        "video_id": video_id,
+        "video_title": video_title,
+        "status": "no_transcript_available",
+        "skip_reason": skip_reason,
+        "processed_at": now_utc_iso(),
+    }
+    (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
+    logger.info(
+        f"[{video_id}] {video_title}: No transcript available — "
+        f"marked permanent (reason: {skip_reason})"
+    )
+
+
+def _wsb_try_fetch_transcript(
+    entry: dict,
+    feed_cfg: dict,
+    supadata_client: object,
+    transcript_rate_limit_event: threading.Event | None,
+) -> str:
+    """Try to fetch and cache the transcript for a single queue entry.
+
+    Checks whether ``transcript.txt`` already exists in the video's meeting
+    directory.  If not, calls :func:`fetch_transcript` and writes the result
+    to disk on success.
+
+    This function is called by the WebSub processor's transcript-phase loop
+    before the Gemini phase.  It never runs Gemini — only Supadata.
+
+    Args:
+        entry: Queue entry dict (must have ``video_id``, ``date``, ``title``).
+        feed_cfg: Channel config dict (must have ``channel_name``).
+        supadata_client: Authenticated Supadata client instance.
+        transcript_rate_limit_event: Threading event; set when Supadata quota
+            is exhausted so the processor can halt further transcript fetches.
+
+    Returns:
+        One of:
+        ``"cached"``         — transcript.txt already on disk (from a prior run).
+        ``"success"``        — transcript fetched and written to transcript.txt.
+        ``"transient"``      — temporary failure; schedule a later retry.
+        ``"permanent"``      — Supadata confirmed no transcript exists.
+        ``"livestream"``     — video is a live stream still broadcasting.
+        ``"quota_exhausted"``— Supadata credit quota is exhausted this session.
+    """
+    video_id = entry.get("video_id", "")
+    date_prefix = (entry.get("date") or "")[:10]
+    feed_dir = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
+    meeting_dir = feed_dir / f"{date_prefix}_{video_id}"
+
+    if (meeting_dir / "transcript.txt").exists():
+        return "cached"
+
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+
+    failure_reason: list[str] = []
+    livestream_error: list[bool] = [False]
+    result = fetch_transcript(
+        video_id,
+        supadata_client,
+        feed_name=feed_cfg.get("channel_name", ""),
+        video_title=entry.get("title", ""),
+        transcript_rate_limit_event=transcript_rate_limit_event,
+        failure_reason=failure_reason,
+        livestream_error=livestream_error,
+    )
+
+    if result is None:
+        if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
+            return "quota_exhausted"
+        if livestream_error[0]:
+            return "livestream"
+        return "transient"
+
+    if result is False:
+        return "permanent"
+
+    # Transcript text successfully returned — cache it for the Gemini phase.
+    (meeting_dir / "transcript.txt").write_text(result, encoding="utf-8")
+    logger.debug(f"[{video_id}] Transcript cached at {meeting_dir / 'transcript.txt'}")
+    return "success"
+
+
 def _recover_orphaned_videos() -> int:
     """Scan the content archive for meeting dirs that have no ``metadata.json``.
 
@@ -2304,9 +2457,9 @@ def _recover_orphaned_videos() -> int:
     processed) but never completed — e.g. the daemon was interrupted mid-run,
     or the operator deleted a ``metadata.json`` to force a re-run.
 
-    Each orphaned video is added to the push queue with ``queued_at = 0`` so
-    it is immediately ripe on the next processor cycle.  Videos already in the
-    queue are left untouched (their existing ``queued_at`` is preserved).
+    Each orphaned video is added to the push queue with ``queued_at = None``
+    and ``next_try_at = None`` so it is immediately ripe on the next processor
+    cycle.  Videos already in the queue are left untouched.
 
     Returns the number of newly queued videos.
     """
@@ -2353,11 +2506,13 @@ def _recover_orphaned_videos() -> int:
             if not video_id or video_id in already_queued:
                 continue
             new_entries.append({
-                "video_id":   video_id,
-                "channel_id": channel_id,
-                "title":      "",
-                "date":       parts[0],
-                "queued_at":  None,
+                "video_id":          video_id,
+                "channel_id":        channel_id,
+                "title":             "",
+                "date":              parts[0],
+                "queued_at":         None,
+                "next_try_at":       None,  # immediately ripe
+                "transcript_attempts": 0,
             })
             already_queued.add(video_id)
 
@@ -2474,6 +2629,8 @@ def _wsb_receiver_thread(config: dict) -> None:
                         "scheduled_start": sched_start,
                         "raw_entry_xml": raw_entry,
                         "queued_at":  now,
+                        "next_try_at": _next_transcript_try(now, 0),  # T+5 min
+                        "transcript_attempts": 0,
                     })
 
             if new_entries:
@@ -2512,26 +2669,36 @@ def _wsb_receiver_thread(config: dict) -> None:
 def _wsb_processor_thread(config: dict) -> None:
     """Thread 2: periodically checks the push queue and processes ripe entries.
 
-    On each wake-up:
+    On each wake-up the processor runs two sequential phases:
 
-    1. **Config reload:** checks TubeNews.json for changes and applies them
-       (daemon config is reloaded from disk on each cycle).
-    2. **Renewal check:** re-subscribes any channel whose WebSub lease expires
+    **Phase 1 — Transcript fetching (uncapped):**
+    For every ripe entry that does not yet have a cached ``transcript.txt``,
+    calls :func:`_wsb_try_fetch_transcript`.  On transient failure the entry's
+    ``next_try_at`` is advanced per :data:`_TRANSCRIPT_RETRY_OFFSETS` (T+5 min,
+    T+1 h, T+2 h, … T+12 h).  After :data:`_TRANSCRIPT_MAX_ATTEMPTS` failures
+    the video is permanently marked ``no_transcript_available``.  Entries with
+    existing ``transcript.txt`` pass straight to Phase 2.
+
+    **Phase 2 — Gemini processing (capped by** ``websub_max_videos_per_cycle``):**
+    Calls :func:`process_feed` for each channel that has transcript-ready videos,
+    up to *max_per_cycle* videos total.  A Gemini rate-limit backoff only affects
+    this phase; transcript fetching (Phase 1) continues unimpeded.
+
+    Other tasks each cycle:
+    1. **Config reload:** checks TubeNews.json for changes and applies them.
+    2. **Renewal check:** re-subscribes channels whose WebSub lease expires
        within the next 24 hours.
     3. **Orphan recovery (once per day):** scans the content archive for meeting
-       directories without ``metadata.json`` and queues them for processing.
-    4. **Queue processing:** reads ripe entries (older than
-       ``websub_min_age_minutes``), acquires the run lock, calls
-       :func:`process_feed` for each affected channel, rebuilds the aggregate
-       feed if anything changed, then removes processed entries from the queue.
+       directories without ``metadata.json`` and queues them.
 
-    Sleep interval is ``websub_check_interval_minutes`` (default 10 minutes).
+    Sleep interval is ``websub_check_interval_minutes`` (default 1 minute).
     Runs until the process exits (daemon thread).
     """
     # When Gemini returns 429, back off for this many seconds before retrying
     # AI calls.  Videos stay in the queue; only the AI step is skipped.
     _AI_BACKOFF_SECONDS = 3600  # 1 hour
     _ai_backoff_until: float = 0.0
+    _deprecated_min_age_warned = False
 
     # Run orphan recovery immediately on startup, then once per 24 h.
     try:
@@ -2546,12 +2713,21 @@ def _wsb_processor_thread(config: dict) -> None:
 
         # Read current values from reloadable config
         with _config_lock:
-            interval = _safe_float(_daemon_config.get("websub_check_interval_minutes", 10), 10) * 60
-            min_age = _safe_float(_daemon_config.get("websub_min_age_minutes", 360), 360)
+            interval = _safe_float(_daemon_config.get("websub_check_interval_minutes", 1), 1) * 60
             supadata_key = _daemon_config.get("supadata_api_key")
+            # Deprecation notice: websub_min_age_minutes is superseded by per-entry
+            # next_try_at scheduling and is no longer read by _read_push_queue.
+            if "websub_min_age_minutes" in _daemon_config and not _deprecated_min_age_warned:
+                logger.warning(
+                    "websub_min_age_minutes is deprecated and has no effect. "
+                    "Per-entry next_try_at scheduling is used instead. "
+                    "You may remove it from TubeNews.json."
+                )
+                _deprecated_min_age_warned = True
             # Make a shallow copy of _daemon_config for use outside the lock
             current_config = _daemon_config.copy()
         supadata_client = Supadata(api_key=supadata_key)
+
         # -- Renewal check ----------------------------------------------------
         subs_path = STATE_ROOT / "subscriptions.json"
         if subs_path.exists():
@@ -2577,47 +2753,22 @@ def _wsb_processor_thread(config: dict) -> None:
             _last_orphan_recovery = time.time()
 
         # -- Queue processing -------------------------------------------------
-        ripe = _read_push_queue(min_age)
+        ripe = _read_push_queue()
         if not ripe:
+            time.sleep(interval)
             continue
-
-        # Cap how many videos are processed per cycle so we don't burst-call
-        # Gemini with the entire backlog at once.  Remaining entries stay ripe
-        # and are picked up next cycle.  Default: 3 videos per cycle.
-        max_per_cycle = int(current_config.get("websub_max_videos_per_cycle", 3))
-        if len(ripe) > max_per_cycle:
-            logger.info(
-                f"WebSub processor: {len(ripe)} ripe entries — "
-                f"processing {max_per_cycle} this cycle, {len(ripe) - max_per_cycle} deferred"
-            )
-            ripe = ripe[:max_per_cycle]
 
         if not _acquire_lock():
             logger.debug("WebSub processor: lock held by another process — skipping this cycle")
+            time.sleep(interval)
             continue
 
         try:
             channels = _read_channels()
             channel_map = {ch["channel_id"]: ch for ch in channels}
 
-            by_channel: dict[str, list[dict]] = {}
-            today_str = date.today().isoformat()
-            for entry in ripe:
-                cid = entry.get("channel_id", "")
-                vid = entry.get("video_id", "")
-                if cid and vid and cid in channel_map:
-                    video_info = {
-                        "id":    vid,
-                        "title": entry.get("title", "") or "[title unknown]",
-                        "date":  entry.get("date", "") or today_str,
-                        # Preserve full queue entry fields for process_video
-                        "_queue_entry": entry,
-                    }
-                    by_channel.setdefault(cid, []).append(video_info)
-
-            if not by_channel:
-                _remove_from_queue({e["video_id"] for e in ripe})
-                continue
+            # max_per_cycle caps Gemini calls only (not transcript fetches).
+            max_per_cycle = int(current_config.get("websub_max_videos_per_cycle", 3))
 
             ai_in_backoff = time.time() < _ai_backoff_until
             if ai_in_backoff:
@@ -2630,10 +2781,163 @@ def _wsb_processor_thread(config: dict) -> None:
             if ai_in_backoff:
                 ai_event.set()  # pre-set so process_feed skips AI immediately
             transcript_event = threading.Event()
-            any_changed = False
 
-            for cid, video_infos in by_channel.items():
+            resolved_ids: set[str] = set()
+            retry_updates: list[dict] = []
+
+            # ----------------------------------------------------------------
+            # Phase 1 — Transcript fetching (no Gemini cap)
+            # ----------------------------------------------------------------
+            transcript_ready: list[dict] = []
+
+            for entry in ripe:
+                vid = entry.get("video_id", "")
+                cid = entry.get("channel_id", "")
+                date_str = entry.get("date", "")
+
+                # Drop future-dated entries without retrying — the date check
+                # prevents processing videos before they are published.
+                if date_str:
+                    try:
+                        pub_time = datetime.fromisoformat(date_str.replace("Z", "+00:00")).timestamp()
+                        if pub_time > time.time():
+                            logger.debug(
+                                f"WebSub processor: {vid} publish date is in future; "
+                                f"skipping until {date_str}"
+                            )
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Malformed date — proceed
+
+                feed_cfg = channel_map.get(cid)
+                if not feed_cfg:
+                    # Channel removed from config — discard the entry.
+                    resolved_ids.add(vid)
+                    continue
+
+                feed_dir = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
+
+                # Already fully processed (metadata.json exists) — clean up.
+                if not _needs_processing(vid, feed_dir):
+                    resolved_ids.add(vid)
+                    continue
+
+                # Try to obtain the transcript (returns immediately if cached).
+                fetch_result = _wsb_try_fetch_transcript(
+                    entry, feed_cfg, supadata_client, transcript_event
+                )
+
+                if fetch_result in ("success", "cached"):
+                    transcript_ready.append(entry)
+
+                elif fetch_result == "quota_exhausted":
+                    logger.warning(
+                        "WebSub processor: Supadata quota exhausted — "
+                        "halting transcript fetches this cycle"
+                    )
+                    break  # Leave remaining entries in queue unchanged
+
+                elif fetch_result == "livestream":
+                    # Re-queue with next_try_at deferred past when the stream ends.
+                    # Use scheduled_start if present; fall back to now + 1 hour.
+                    scheduled_start = entry.get("scheduled_start")
+                    if scheduled_start:
+                        try:
+                            stream_end = datetime.fromisoformat(
+                                scheduled_start.replace("Z", "+00:00")
+                            )
+                            retry_dt = stream_end + timedelta(hours=1)
+                        except (ValueError, TypeError):
+                            retry_dt = datetime.now(timezone.utc) + timedelta(hours=1)
+                    else:
+                        retry_dt = datetime.now(timezone.utc) + timedelta(hours=1)
+                    next_try_at = retry_dt.isoformat(timespec="seconds").replace("+00:00", "Z")
+                    _requeue_video(
+                        video_id=vid,
+                        channel_id=cid,
+                        title=entry.get("title", ""),
+                        date=date_str,
+                        scheduled_start=scheduled_start,
+                        next_try_at=next_try_at,
+                        raw_entry_xml=entry.get("raw_entry_xml", ""),
+                    )
+                    resolved_ids.add(vid)
+                    logger.info(
+                        f"WebSub processor: [{vid}] livestream detected — "
+                        f"re-queued for {next_try_at}"
+                    )
+
+                elif fetch_result == "permanent":
+                    # Supadata confirmed no transcript — mark permanently.
+                    video_date = date_str[:10]
+                    _write_no_transcript_metadata(
+                        vid, feed_dir, video_date, entry.get("title", "")
+                    )
+                    resolved_ids.add(vid)
+
+                elif fetch_result == "transient":
+                    # Schedule next attempt per the retry table.
+                    attempts = entry.get("transcript_attempts", 0) + 1
+                    queued_at_str = entry.get("queued_at")
+                    if attempts >= _TRANSCRIPT_MAX_ATTEMPTS or not queued_at_str:
+                        logger.warning(
+                            f"WebSub processor: [{vid}] no transcript after "
+                            f"{_TRANSCRIPT_MAX_ATTEMPTS} attempts — marking permanent"
+                        )
+                        video_date = date_str[:10]
+                        _write_no_transcript_metadata(
+                            vid, feed_dir, video_date, entry.get("title", "")
+                        )
+                        resolved_ids.add(vid)
+                    else:
+                        next_nta = _next_transcript_try(queued_at_str, attempts)
+                        retry_updates.append({
+                            **entry,
+                            "transcript_attempts": attempts,
+                            "next_try_at": next_nta,
+                        })
+                        logger.debug(
+                            f"WebSub processor: [{vid}] transcript not ready "
+                            f"(attempt {attempts}/{_TRANSCRIPT_MAX_ATTEMPTS}) — "
+                            f"next try at {next_nta}"
+                        )
+
+            # ----------------------------------------------------------------
+            # Phase 2 — Gemini processing (capped by max_per_cycle)
+            # ----------------------------------------------------------------
+            # Group transcript-ready entries by channel so process_feed is called
+            # once per channel (it handles focus-based multi-pass Gemini calls).
+            channels_for_gemini: dict[str, list[dict]] = {}
+            for entry in transcript_ready:
+                channels_for_gemini.setdefault(entry["channel_id"], []).append(entry)
+
+            if channels_for_gemini:
+                logger.info(
+                    f"WebSub processor: {len(transcript_ready)} transcript-ready video(s) "
+                    f"across {len(channels_for_gemini)} channel(s); "
+                    f"Gemini cap: {max_per_cycle}/cycle"
+                )
+
+            gemini_count = 0
+            any_changed = False
+            today_str = date.today().isoformat()
+
+            for cid, entries in channels_for_gemini.items():
+                if gemini_count >= max_per_cycle or ai_event.is_set():
+                    # Defer remaining channels — their entries stay in the queue
+                    # with transcript.txt cached, so Phase 1 will skip them next cycle.
+                    break
+
                 feed = channel_map[cid]
+                video_infos = [
+                    {
+                        "id":    e["video_id"],
+                        "title": e.get("title", "") or "[title unknown]",
+                        "date":  e.get("date", "") or today_str,
+                        "_queue_entry": e,
+                    }
+                    for e in entries
+                ]
                 content_changed, ai_rate_limited, _ = process_feed(
                     feed, supadata_client, current_config,
                     ai_event, transcript_event,
@@ -2649,66 +2953,47 @@ def _wsb_processor_thread(config: dict) -> None:
                         f"AI calls for {_AI_BACKOFF_SECONDS // 60} minutes"
                     )
 
+                gemini_count += len(entries)
+
+                # Determine which of this channel's entries are now resolved.
+                feed_dir = STORAGE_ROOT / slugify(feed["channel_name"])
+                for entry in entries:
+                    evid = entry["video_id"]
+                    if not _needs_processing(evid, feed_dir):
+                        resolved_ids.add(evid)
+                    else:
+                        # Gemini failed or was skipped; use retry_count backstop.
+                        rc = entry.get("retry_count", 0) + 1
+                        if rc > _QUEUE_MAX_RETRIES:
+                            logger.warning(
+                                f"WebSub processor: dropping {evid} after "
+                                f"{_QUEUE_MAX_RETRIES} Gemini-phase retries"
+                            )
+                            resolved_ids.add(evid)
+                        else:
+                            retry_updates.append({**entry, "retry_count": rc})
+
             if any_changed or not (STORAGE_ROOT / "rss.xml").exists():
                 try:
                     with _config_lock:
                         base_url = _daemon_config.get("base_url", "")
                     rebuild_aggregate_feed(base_url=base_url)
                 except Exception as exc:
-                    logger.error(f"WebSub processor: aggregate feed rebuild failed: {exc}", exc_info=True)
-
-            # Only remove videos that were permanently resolved (metadata.json
-            # now exists).  Unresolved items (AI rate-limited, transcript not
-            # ready yet) stay in the queue and are retried next cycle.
-            # Cap retries at _QUEUE_MAX_RETRIES to avoid queue bloat.
-            resolved_ids: set[str] = set()
-            retry_updates: list[dict] = []
-            for entry in ripe:
-                vid = entry.get("video_id", "")
-                cid = entry.get("channel_id", "")
-                date_str = entry.get("date", "")
-
-                # Skip if video's publish date is still in the future
-                if date_str:
-                    try:
-                        from datetime import datetime as _dt_check
-                        pub_time = _dt_check.fromisoformat(date_str.replace('Z', '+00:00')).timestamp()
-                        if pub_time > time.time():
-                            logger.debug(
-                                f"WebSub processor: {vid} publish date is in future; "
-                                f"skipping until {date_str}"
-                            )
-                            continue
-                    except (ValueError, TypeError):
-                        pass  # Malformed date; proceed with normal logic
-
-                feed_cfg = channel_map.get(cid)
-                if not feed_cfg:
-                    resolved_ids.add(vid)
-                    continue
-                feed_dir_q = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
-                if not _needs_processing(vid, feed_dir_q):
-                    resolved_ids.add(vid)
-                else:
-                    retry_count = entry.get("retry_count", 0) + 1
-                    if retry_count > _QUEUE_MAX_RETRIES:
-                        logger.warning(
-                            f"WebSub processor: dropping {vid} after "
-                            f"{_QUEUE_MAX_RETRIES} failed retries"
-                        )
-                        resolved_ids.add(vid)
-                    else:
-                        retry_updates.append({**entry, "retry_count": retry_count})
+                    logger.error(
+                        f"WebSub processor: aggregate feed rebuild failed: {exc}",
+                        exc_info=True,
+                    )
 
             _remove_from_queue(resolved_ids)
             if retry_updates:
-                _update_queue_retry_counts(retry_updates)
+                _update_queue_entries(retry_updates)
             kept = len(retry_updates)
             done = len(resolved_ids)
             logger.info(
                 f"WebSub processor: resolved {done} video(s)"
                 + (f", kept {kept} for retry" if kept else "")
             )
+
         except Exception as exc:
             logger.error(f"WebSub processor cycle failed: {exc}", exc_info=True)
         finally:

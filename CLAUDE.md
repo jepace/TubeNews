@@ -124,7 +124,10 @@ Defined in `web/app.py`:
 | `_story_matches_focus(story_topics, focuses)` | Returns `True` if any story topic overlaps with any of the user's focus strings. *focuses* is a list of strings (one per focus line). Always `True` when all focuses are empty or `story_topics` is empty. Still used in internal logic; no longer drives serve-time filtering (replaced by `user_ids` attribution). |
 | `_needs_processing(video_id, feed_dir)` | Returns `True` if the video has no `metadata.json` in the archive (new video or recovery path). Videos with any `metadata.json` are considered done and are not reprocessed. |
 | `_collect_channel_focuses(channel_id, feed_focus)` | Reads `state/users/*/user.json` and returns a list of `(focus, user_ids)` pairs for *channel_id*. Feed-level *feed_focus* comes first with `user_ids=[]` (unrestricted). User focuses are read from `user["channels"][channel_id]`; if multiple users share a focus their IDs are merged into one entry. Returns `[("", [])]` if nothing is configured (single unrestricted call). Capped at `MAX_FOCUSES_PER_CHANNEL` (10). |
-| `_recover_orphaned_videos()` | Scans `content/` for meeting directories that have no `metadata.json` (interrupted runs or manually deleted metadata). Each orphaned video is added to `state/queue/push_queue.json` with `queued_at = null` (ISO 8601 null) so it is immediately ripe on the next processor cycle. Videos already in the queue are left untouched. Returns the number of newly queued videos. Called once per 24 hours by `_wsb_processor_thread`. |
+| `_recover_orphaned_videos()` | Scans `content/` for meeting directories that have no `metadata.json` (interrupted runs or manually deleted metadata). Each orphaned video is added to `state/queue/push_queue.json` with `queued_at = null`, `next_try_at = null`, and `transcript_attempts = 0` so it is immediately ripe on the next processor cycle. Videos already in the queue are left untouched. Returns the number of newly queued videos. Called once per 24 hours by `_wsb_processor_thread`. |
+| `_next_transcript_try(queued_at_iso, attempt)` | Returns the ISO 8601 UTC timestamp for the next transcript fetch attempt, computed as `queued_at + _TRANSCRIPT_RETRY_OFFSETS[attempt]`. Clamps `attempt` to the last table entry. Falls back to `now()` if `queued_at_iso` is malformed. |
+| `_write_no_transcript_metadata(video_id, feed_dir, video_date, video_title, skip_reason)` | Creates the meeting directory if needed and writes `metadata.json` with `status = "no_transcript_available"`. Called from `process_video` (48h age path) and from the WebSub processor (12-attempt exhaustion path). |
+| `_wsb_try_fetch_transcript(entry, feed_cfg, supadata_client, transcript_rate_limit_event)` | Phase-1 helper for the WebSub processor. Checks for a cached `transcript.txt`; if absent, calls `fetch_transcript()` and caches the result. Returns one of `"cached"`, `"success"`, `"transient"`, `"permanent"`, `"livestream"`, or `"quota_exhausted"`. Never runs Gemini. |
 
 ### YouTube data-gathering
 
@@ -329,6 +332,8 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
   "scheduled_start": "2026-03-14T18:00:00Z",
   "raw_entry_xml": "<entry><yt:videoId>dQw4w9WgXcQ</yt:videoId>...</entry>",
   "queued_at": "2026-04-07T00:14:36Z",
+  "next_try_at": "2026-04-07T00:19:36Z",
+  "transcript_attempts": 0,
   "retry_count": 0
 }
 ```
@@ -337,12 +342,13 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 - `date`: The video's publish timestamp from YouTube's push notification (ISO 8601 format, may be UTC `Z`-suffixed). For regular videos, this is the upload time. Videos with **future dates are skipped during processing** — the processor holds them in the queue until the publish date passes, without incrementing `retry_count`. This prevents premature drop-off of videos scheduled days in advance.
 - `scheduled_start`: Optional ISO 8601 timestamp from YouTube's Atom feed (via `yt:scheduledStartTime` element) if the video is a scheduled livestream. `null` or absent if not present in the push notification. When present, this represents the actual scheduled broadcast time (distinct from `date` which is video creation time).
 - `raw_entry_xml`: Complete serialized Atom feed entry XML from YouTube's WebSub push notification. Preserved for future metadata extraction or debugging purposes. String format; contains all fields sent by YouTube.
-- `queued_at`: ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format when the notification arrived, or `null` for entries marked for immediate processing (orphan recovery). The processor only processes "ripe" entries where the timestamp is at least `websub_min_age_minutes` old. `null` timestamps are always ripe. Supports backward compatibility with legacy Unix float timestamps.
-- `retry_count`: Tracks failed processing attempts. When a video fails processing and is still needed (no `metadata.json` written), `retry_count` is incremented. **Videos are dropped after exceeding `_QUEUE_MAX_RETRIES` (10)**, but this is rare in practice because:
-  - **Permanent failures** (members-only, video deleted, no captions available) write `metadata.json` immediately, removing the video from the queue entirely.
-  - **Livestream failures** (video currently broadcasting) write `metadata.json` with `status: "livestream_in_progress"`, removing the video without penalty to `retry_count`.
-  - **Transient failures** (transcript encoding, network errors) skip writing metadata and naturally retry with the processor cycle interval.
-  - **Future-dated videos** never hit the retry counter (held by date check until publish time).
+- `queued_at`: ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format when the notification arrived, or `null` for orphan-recovery entries. Not used for scheduling — `next_try_at` controls when the entry becomes ripe. Preserved unchanged through all retries. Supports backward compatibility with legacy Unix float timestamps.
+- `next_try_at`: ISO 8601 UTC timestamp when the processor should next attempt this entry. Set to `queued_at + 5 minutes` when the entry is first created. On each transient transcript failure, advanced to the next slot in the retry schedule (T+1h, T+2h, … T+12h, anchored to `queued_at`). `null` or absent means immediately ripe (orphan-recovery entries and legacy entries pre-dating this field). The processor's `_read_push_queue()` filters by this field.
+- `transcript_attempts`: Count of how many times a transcript fetch has been attempted (and returned a transient failure). New entries start at `0`. After `_TRANSCRIPT_MAX_ATTEMPTS` (13) failures the video is written to disk as `no_transcript_available` and removed from the queue. Reset to `0` when a livestream entry is re-queued after the stream ends.
+- `retry_count`: Tracks Gemini-phase processing failures (after `transcript.txt` is cached). Incremented only when `process_feed` runs but does not produce `metadata.json` (e.g. AI rate limit or internal error). **Videos are dropped after exceeding `_QUEUE_MAX_RETRIES` (10)**, but this is rare because:
+  - **Permanent failures** (members-only, video deleted, no captions) write `metadata.json` immediately, removing the video from the queue entirely.
+  - **Transcript transient failures** are handled by `transcript_attempts` / `next_try_at` — `retry_count` is not touched.
+  - **Future-dated videos** never hit either retry counter (held by date check until publish time).
 
 ---
 
@@ -366,20 +372,21 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `websub_callback_url` | No | Public HTTPS URL TubeNews registers with YouTube's hub as the push endpoint (e.g. `https://yourdomain.com/youtube/push`). Required for `--daemon` mode. |
 | `websub_secret` | No | HMAC-SHA1 signing secret for verifying push payloads from the hub. Generate with `python3 -c 'import secrets; print(secrets.token_hex(32))'`. |
 | `websub_daemon_port` | No | Port the WebSub HTTP receiver listens on (default: `8675`). Must be accessible from the internet or a reverse proxy. |
-| `websub_min_age_minutes` | No | Minimum age (minutes) a queued push notification must reach before the processor acts on it (default: `360`). Avoids processing livestreams before they end. |
-| `websub_check_interval_minutes` | No | How often (minutes) the processor thread wakes to check for pending push notifications (default: `10`). |
-| `websub_max_videos_per_cycle` | No | Maximum number of videos to process per processor cycle (default: `3`). Limits burst Gemini calls when a large backlog exists; remaining ripe entries are deferred to the next cycle. |
+| `websub_min_age_minutes` | No | **Deprecated.** Previously controlled the minimum hold time before processing a queued entry. Replaced by per-entry `next_try_at` scheduling (T+5 min first try, then hourly for 12 hours). Setting this key logs a deprecation warning and has no effect. Safe to remove from `TubeNews.json`. |
+| `websub_check_interval_minutes` | No | How often (minutes) the processor thread wakes to check for pending push notifications (default: `1`). Lower values make the T+5min first-try window more accurate; higher values reduce disk I/O at the cost of timing precision. |
+| `websub_max_videos_per_cycle` | No | Maximum number of videos to run through Gemini per processor cycle (default: `3`). Transcript fetching is uncapped — only the Gemini phase is limited. Remaining Gemini-ready entries are deferred to the next cycle. |
 
 ### Daemon Config Reload
 
-When running in daemon mode (the default, `python3 TubeNews.py`), the following configuration keys are **automatically reloaded** from `TubeNews.json` on each processor cycle (~every 10 minutes):
+When running in daemon mode (the default, `python3 TubeNews.py`), the following configuration keys are **automatically reloaded** from `TubeNews.json` on each processor cycle (~every 1 minute):
 
 **Reloadable keys** (changes take effect immediately or next cycle):
 - `gemini_api_key`, `supadata_api_key` — next API call uses new key
 - `request_timeout` — applied immediately via `socket.setdefaulttimeout()`
 - `gemini_call_delay`, `gemini_model` — picked up by next processing cycle
 - `base_url`, `ntfy_topic` — used at next web request
-- `websub_check_interval_minutes`, `websub_min_age_minutes`, `websub_max_videos_per_cycle` — applied next cycle
+- `websub_check_interval_minutes`, `websub_max_videos_per_cycle` — applied next cycle
+- `websub_min_age_minutes` — deprecated (logs warning if present; has no effect)
 
 **Immutable keys** (require daemon restart if changed):
 - `websub_callback_url`, `websub_secret`, `websub_daemon_port` — changing these requires a restart. If you edit these, the daemon logs a warning and continues using the old values.
