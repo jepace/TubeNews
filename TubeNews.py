@@ -2824,6 +2824,28 @@ def _wsb_processor_thread(config: dict) -> None:
                     resolved_ids.add(vid)
                     continue
 
+                # If this is a scheduled livestream/premier that hasn't started yet,
+                # defer without calling Supadata — the retry window must start after
+                # the broadcast ends, not from the moment YouTube announced it.
+                scheduled_start_str = entry.get("scheduled_start")
+                if scheduled_start_str:
+                    try:
+                        sched_dt = datetime.fromisoformat(
+                            scheduled_start_str.replace("Z", "+00:00")
+                        )
+                        if sched_dt > datetime.now(timezone.utc):
+                            next_try_at = (
+                                sched_dt + timedelta(hours=1)
+                            ).isoformat(timespec="seconds").replace("+00:00", "Z")
+                            retry_updates.append({**entry, "next_try_at": next_try_at})
+                            logger.info(
+                                f"WebSub processor: [{vid}] scheduled for "
+                                f"{scheduled_start_str} — deferring until {next_try_at}"
+                            )
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Malformed scheduled_start — fall through to normal handling
+
                 # Try to obtain the transcript (returns immediately if cached).
                 fetch_result = _wsb_try_fetch_transcript(
                     entry, feed_cfg, supadata_client, transcript_event
