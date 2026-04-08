@@ -493,6 +493,73 @@ def _story_matches_focus(story_topics: list[str], focuses: list[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Input validation & sanitization
+# ---------------------------------------------------------------------------
+
+
+def _validate_video_id(video_id: str) -> bool:
+    """Check if a video_id is a valid YouTube ID (11 alphanumeric characters).
+
+    Args:
+        video_id: String to validate.
+
+    Returns:
+        True if valid, False otherwise.
+    """
+    return bool(video_id and len(video_id) == 11 and video_id.isalnum())
+
+
+def _validate_channel_id(channel_id: str) -> bool:
+    """Check if a channel_id is valid (starts with UC and is alphanumeric).
+
+    Args:
+        channel_id: String to validate.
+
+    Returns:
+        True if valid, False otherwise.
+    """
+    return bool(channel_id and channel_id.startswith("UC") and channel_id.isalnum() and len(channel_id) >= 20)
+
+
+def _sanitize_focus(text: str, max_length: int = 100) -> str:
+    """Sanitize focus text to prevent injection attacks.
+
+    Removes or replaces characters outside [\w\s,\-], collapses whitespace,
+    and truncates to max_length. Used to safely prepare user-entered focus
+    strings for use in Gemini prompts.
+
+    Args:
+        text: User-provided focus text.
+        max_length: Maximum output length in characters.
+
+    Returns:
+        Sanitized focus string.
+    """
+    # Keep only word chars, whitespace, comma, and hyphen
+    sanitized = re.sub(r"[^\w\s,\-]", "", text)
+    # Collapse whitespace
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    # Truncate
+    return sanitized[:max_length]
+
+
+def _validate_iso_date(date_str: str) -> bool:
+    """Check if a string is a valid ISO 8601 date (YYYY-MM-DD).
+
+    Args:
+        date_str: String to validate.
+
+    Returns:
+        True if valid, False otherwise.
+    """
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+# ---------------------------------------------------------------------------
 # YouTube data-gathering
 # ---------------------------------------------------------------------------
 
@@ -575,7 +642,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
             if attempt < 2:
                 time.sleep(2 ** attempt)
             else:
-                logger.warning(f"{prefix}YouTube RSS: Failed after 3 attempts: {exc}")
+                logger.error(f"{prefix}YouTube RSS: Failed to fetch after 3 attempts: {exc}")
     if resp is None:
         return []
     try:
@@ -734,6 +801,8 @@ def call_gemini_api(
                 cycle because the API returned HTTP 429 (rate-limited).
         None  – any other failure; the caller should skip this video.
     """
+    # Sanitize user input to prevent prompt injection
+    focus = _sanitize_focus(focus)
     global _gemini_last_call_time
     with _gemini_rate_lock:
         elapsed = time.time() - _gemini_last_call_time
@@ -1480,6 +1549,10 @@ def process_video(
                                         the video is not resubmitted to the AI
                                         on future runs.
     """
+    # Validate video_id to prevent directory traversal attacks
+    if not _validate_video_id(video_id):
+        return ("skipped", 0)
+
     if focuses is None:
         focuses = [(feed.get("focus", ""), [])]
 
@@ -1543,6 +1616,9 @@ def process_video(
                 )
                 return "skipped", 0
             # Old enough — permanent.
+            if not _validate_iso_date(video_date):
+                logger.error(f"{channel_name}: [{video_id}] Invalid video_date '{video_date}' — skipping")
+                return "skipped", 0
             meeting_dir = feed_dir / f"{video_date}_{video_id}"
             meeting_dir.mkdir(exist_ok=True)
             skip_reason = _transcript_failure_reason[0] if _transcript_failure_reason else "no_captions"
@@ -1588,6 +1664,9 @@ def process_video(
             logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetch failed — will retry later")
             return "skipped", 0
 
+        if not _validate_iso_date(video_date):
+            logger.error(f"{channel_name}: [{video_id}] Invalid video_date '{video_date}' — skipping")
+            return "skipped", 0
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
         meeting_dir.mkdir(exist_ok=True)
         (meeting_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
@@ -1694,6 +1773,12 @@ def process_feed(
         *ai_rate_limited* is True if Gemini hit its quota during this feed.
         *stories_written* is the total count of story files created.
     """
+    # Validate channel_id to prevent directory traversal attacks
+    channel_id = feed.get("channel_id", "")
+    if not _validate_channel_id(channel_id):
+        logger.error(f"Invalid channel_id '{channel_id}' — skipping feed")
+        return (False, False, 0)
+
     channel_slug = slugify(feed["channel_name"])
     channel_name = feed["channel_name"]
     logger.info(f"{channel_name}: TubeNews: Starting feed check")
@@ -2168,7 +2253,8 @@ def _recover_orphaned_videos() -> int:
             continue
         try:
             cinfo = json.loads(channel_json.read_text())
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Skipping corrupted channel.json at {channel_json}: {exc}")
             continue
         channel_id = cinfo.get("channel_id", "")
         if not channel_id:
@@ -2392,7 +2478,8 @@ def _wsb_processor_thread(config: dict) -> None:
         if subs_path.exists():
             try:
                 subs: dict = json.loads(subs_path.read_text())
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"WebSub: subscriptions.json is corrupted, resetting: {exc}")
                 subs = {}
             renew_before = time.time() + 86400  # within next 24 h
             for cid, info in subs.items():
@@ -2488,8 +2575,8 @@ def _wsb_processor_thread(config: dict) -> None:
                     with _config_lock:
                         base_url = _daemon_config.get("base_url", "")
                     rebuild_aggregate_feed(base_url=base_url)
-                except Exception:
-                    logger.warning("WebSub processor: aggregate feed rebuild failed")
+                except Exception as exc:
+                    logger.error(f"WebSub processor: aggregate feed rebuild failed: {exc}", exc_info=True)
 
             # Only remove videos that were permanently resolved (metadata.json
             # now exists).  Unresolved items (AI rate-limited, transcript not
@@ -2878,7 +2965,8 @@ def _main_body(args) -> None:
         run_log_path.parent.mkdir(exist_ok=True)
         try:
             runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"run_log.json is corrupted, starting fresh: {exc}")
             runs = []
         runs.append({
             "started_at": started_at,
@@ -2932,8 +3020,8 @@ def _main_body(args) -> None:
     if any_content_changed.is_set() or not (STORAGE_ROOT / "rss.xml").exists():
         try:
             rebuild_aggregate_feed(base_url=config.get("base_url", ""))
-        except Exception:
-            logger.warning("TubeNews: Meta feed rebuild failed — skipping; user feeds will still be rebuilt")
+        except Exception as exc:
+            logger.error(f"TubeNews: Meta feed rebuild failed: {exc}", exc_info=True)
 
     users_dir = STATE_ROOT / "users"
     if users_dir.is_dir():
@@ -2942,8 +3030,8 @@ def _main_body(args) -> None:
                 user = json.loads(user_json.read_text())
                 uid = user_json.parent.name
                 rebuild_user_feed(user, base_url=config.get("base_url", ""), user_id=uid)
-            except Exception:
-                logger.warning(f"TubeNews: Failed to rebuild feed for user {user_json.parent.name} — skipping")
+            except Exception as exc:
+                logger.warning(f"TubeNews: Failed to rebuild feed for user {user_json.parent.name}: {exc}")
 
     story_word = "story" if total_stories == 1 else "stories"
     logger.info(f"Session End. {total_stories} new {story_word} published.")
