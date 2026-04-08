@@ -455,7 +455,7 @@ def _reformat_published_timestamp(published_str: str, user_timezone: str) -> str
         formatted_time = _fmt_no_leading_zeros(user_dt, "%I:%M %p")
         tz_abbr = user_dt.strftime("%Z")
 
-        return f"{formatted_date} at {formatted_time} {tz_abbr}"
+        return f"{formatted_date} at {formatted_time} {tz_abbr} ({user_timezone})"
     except Exception:
         return published_str
 
@@ -699,12 +699,17 @@ def _story_comment_count(story_file: Path) -> int:
         return 0
 
 
-def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
+def _get_channel_stories(channel_id: str, timezone: str = "") -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
     All processed stories are returned with no time cutoff — this is a full
     archive browse, not a recency-filtered feed view.  Returns (None, []) if
     no matching channel archive is found.
+
+    Args:
+        channel_id: The channel ID to retrieve stories for.
+        timezone: Optional timezone for displaying published timestamps. Falls back
+                 to system timezone if not provided.
     """
     if not STORAGE_ROOT.is_dir():
         return None, []
@@ -739,9 +744,10 @@ def _get_channel_stories(channel_id: str) -> tuple[str | None, list[StoryDict]]:
                 vid = entry["meta"]["video_id"]
                 vt = entry["meta"].get("video_title", "")
                 published = s.get("published", "")
-                # Reformat published timestamp to system timezone if present
+                # Reformat published timestamp to specified timezone (or system default)
                 if published:
-                    published = _reformat_published_timestamp(published, _get_timezone())
+                    display_tz = timezone or _get_timezone()
+                    published = _reformat_published_timestamp(published, display_tz)
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
@@ -1197,7 +1203,8 @@ def channel_feed(channel_id: str):
     channels = _load_channels()
     if not any(ch["channel_id"] == channel_id for ch in channels):
         abort(404)
-    channel_name, stories = _get_channel_stories(channel_id)
+    user_tz = _get_user_timezone(current_user)
+    channel_name, stories = _get_channel_stories(channel_id, timezone=user_tz)
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
