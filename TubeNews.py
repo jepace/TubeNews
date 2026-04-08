@@ -895,7 +895,7 @@ def call_gemini_api(
     prefix = f"{prefix}: " if prefix else ""
 
     try:
-        response = requests.post(api_url, json=payload, timeout=150)
+        response = requests.post(api_url, json=payload, timeout=_GEMINI_TIMEOUT)
         if response.status_code == 200:
             # Safely extract response text with bounds checking
             try:
@@ -1658,7 +1658,7 @@ def process_video(
             try:
                 from datetime import datetime as _dt
                 pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
-                age_hours = (_dt.now() - pub_dt).total_seconds() / 3600
+                age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
             except Exception:
                 age_hours = float("inf")
             if age_hours < 48:
@@ -2017,6 +2017,10 @@ def _read_channels() -> list[FeedConfig]:
 
 _WSB_HUB = "https://pubsubhubbub.appspot.com/subscribe"
 _WSB_LEASE = 604800  # 7 days
+_SECONDS_PER_HOUR = 3600
+_SECONDS_PER_DAY = 86400
+_WEBSUB_POST_TIMEOUT = 10  # seconds for WebSub subscription POST
+_GEMINI_TIMEOUT = 150  # seconds for Gemini API calls
 
 
 def _wsb_topic(channel_id: str) -> str:
@@ -2073,7 +2077,7 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
             "hub.callback": cb,
             "hub.secret": sec,
             "hub.lease_seconds": _WSB_LEASE,
-        }, timeout=10)
+        }, timeout=_WEBSUB_POST_TIMEOUT)
         ok = r.status_code == 202
         if ok:
             _wsb_record_subscription(channel_id, cb)
@@ -2106,7 +2110,7 @@ def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
             "hub.topic": _wsb_topic(channel_id),
             "hub.callback": cb,
             "hub.secret": sec,
-        }, timeout=10)
+        }, timeout=_WEBSUB_POST_TIMEOUT)
         ok = r.status_code == 202
         if ok:
             _wsb_remove_subscription(channel_id)
@@ -2533,7 +2537,7 @@ def _wsb_processor_thread(config: dict) -> None:
             except Exception as exc:
                 logger.warning(f"WebSub: subscriptions.json is corrupted, resetting: {exc}")
                 subs = {}
-            renew_before = time.time() + 86400  # within next 24 h
+            renew_before = time.time() + _SECONDS_PER_DAY  # within next 24 h
             for cid, info in subs.items():
                 subscribed_at = _get_timestamp_as_float(info.get("subscribed_at", 0))
                 expires = subscribed_at + info.get("lease_seconds", _WSB_LEASE)
@@ -2542,7 +2546,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     _wsb_subscribe(cid, current_config)
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
-        if time.time() - _last_orphan_recovery >= 86400:
+        if time.time() - _last_orphan_recovery >= _SECONDS_PER_DAY:
             try:
                 _recover_orphaned_videos()
             except Exception as exc:
@@ -2706,6 +2710,11 @@ def _reload_config_from_disk() -> dict:
     values and returns existing config. Uses mtime check to avoid parsing
     unchanged files — only reloads if TubeNews.json has been modified.
 
+    Thread Safety: The mtime check (_config_mtime) is intentionally not locked
+    because it's an optimization, not correctness-critical. The actual
+    _daemon_config update is protected by _config_lock. Worst case (benign
+    race): reloading unchanged config. This avoids lock contention on hot path.
+
     Returns: The updated _daemon_config dict (same reference).
     """
     global _daemon_config, _config_mtime
@@ -2713,6 +2722,7 @@ def _reload_config_from_disk() -> dict:
     config_file = Path(__file__).parent / "TubeNews.json"
 
     # Fast gate: check if file has been modified since last reload
+    # NOTE: Reading _config_mtime without lock is safe (benign race); see docstring.
     try:
         current_mtime = config_file.stat().st_mtime
         if current_mtime == _config_mtime and _config_mtime > 0:
