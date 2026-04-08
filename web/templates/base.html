@@ -9,28 +9,36 @@
 </head>
 <body>
   <header>
-    <a class="site-title" href="{{ url_for('serve_feed') if current_user.is_authenticated else url_for('index') }}">TubeNews</a>
+    {% if current_user.is_authenticated %}
+    <div class="header-left">
+      <a href="{{ url_for('account') }}" class="profile-thumbnail" title="{{ current_user.name }}">
+        <span class="initials">{{ current_user.name[0].upper() }}</span>
+      </a>
+    </div>
+    <a class="site-title" href="{{ url_for('serve_feed') }}">{% block header_title %}TubeNews{% endblock %}</a>
+    <div class="header-right">
+      {% block header_right %}
+      {% if current_user.is_admin %}
+      <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+      {% endif %}
+      {% endblock %}
+    </div>
+    <nav id="main-nav">
+      {% if current_user.is_admin %}
+        <a href="{{ url_for('admin_users') }}">Users</a>
+        <a href="{{ url_for('admin_feeds') }}">Feeds</a>
+        <a href="{{ url_for('admin_runs') }}">Runs</a>
+      {% endif %}
+      {% block nav_extra %}{% endblock %}
+    </nav>
+    {% else %}
+    <a class="site-title" href="{{ url_for('index') }}">TubeNews</a>
     <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
     <nav id="main-nav">
-      {% if current_user.is_authenticated %}
-        {% if current_user.is_admin %}
-          <a href="{{ url_for('admin_users') }}">Users</a>
-          <a href="{{ url_for('admin_feeds') }}">Feeds</a>
-          <a href="{{ url_for('admin_runs') }}">Runs</a>
-        {% endif %}
-        {% block nav_extra %}{% endblock %}
-        <a href="{{ url_for('account') }}" class="nav-profile">
-          <svg class="nav-profile-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
-            <circle cx="12" cy="8" r="4"/>
-            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
-          </svg>
-          {{ current_user.name }}{% if unseen_channel_count and not current_user.is_admin %} <span class="nav-badge">{{ unseen_channel_count }}</span>{% endif %}
-        </a>
-      {% else %}
-        <a href="{{ url_for('login') }}">Log in</a>
-        <a href="{{ url_for('register') }}">Create account</a>
-      {% endif %}
+      <a href="{{ url_for('login') }}">Log in</a>
+      <a href="{{ url_for('register') }}">Create account</a>
     </nav>
+    {% endif %}
   </header>
   <script>
     (function () {
