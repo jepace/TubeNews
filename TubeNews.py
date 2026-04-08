@@ -111,6 +111,58 @@ def _validate_config(config: dict) -> None:
             )
 
 
+def _get_config_safe(config: dict, key: str, default: object) -> object:
+    """Safely get a config value with a default and type conversion.
+
+    Args:
+        config: Configuration dict.
+        key: Key to retrieve.
+        default: Value to return if key is missing or invalid.
+
+    Returns:
+        Value from config or default.
+    """
+    try:
+        val = config.get(key)
+        if val is None:
+            return default
+        return val
+    except Exception:
+        return default
+
+
+def _safe_int(val: object, default: int) -> int:
+    """Safely convert a value to int with a default fallback.
+
+    Args:
+        val: Value to convert.
+        default: Default if conversion fails.
+
+    Returns:
+        Converted int or default.
+    """
+    try:
+        return int(val) if val is not None else default
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(val: object, default: float) -> float:
+    """Safely convert a value to float with a default fallback.
+
+    Args:
+        val: Value to convert.
+        default: Default if conversion fails.
+
+    Returns:
+        Converted float or default.
+    """
+    try:
+        return float(val) if val is not None else default
+    except (ValueError, TypeError):
+        return default
+
+
 def _atomic_write(path: Path, content: str) -> None:
     """Atomically write content to a file using write-then-rename.
 
@@ -1692,7 +1744,7 @@ def process_video(
             gemini_api_key=config["gemini_api_key"],
             model_name=config["gemini_model"],
             feed_name=channel_name,
-            call_delay=float(config.get("gemini_call_delay", 8)),
+            call_delay=_safe_float(config.get("gemini_call_delay", 8), 8),
         )
         if result is False:
             return "ai_rate_limited", 0
@@ -2093,7 +2145,7 @@ def _read_push_queue(min_age_minutes: float) -> list[dict]:
     try:
         items: list[dict] = json.loads(path.read_text())
     except Exception as exc:
-        logger.warning(f"Queue read failed ({path}): {exc}")
+        logger.error(f"Queue read failed ({path}): {exc}")
         return []
     # Use is_ripe() helper which handles both ISO 8601 strings and legacy Unix floats,
     # and treats None/0 as immediate processing
@@ -2124,7 +2176,7 @@ def _update_queue_retry_counts(updated_entries: list[dict]) -> None:
     try:
         items: list[dict] = json.loads(path.read_text())
     except Exception as exc:
-        logger.warning(f"Queue read failed ({path}): {exc}")
+        logger.error(f"Queue read failed ({path}): {exc}")
         return
     try:
         by_vid = {e["video_id"]: e for e in updated_entries}
@@ -2149,7 +2201,7 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
     try:
         items: list[dict] = json.loads(path.read_text())
     except Exception as exc:
-        logger.warning(f"Queue read failed ({path}): {exc}")
+        logger.error(f"Queue read failed ({path}): {exc}")
         return
     try:
         remaining = [i for i in items if i.get("video_id") not in processed_ids]
@@ -2320,7 +2372,7 @@ def _wsb_receiver_thread(config: dict) -> None:
 
     Runs until the process exits (daemon thread).
     """
-    port = int(config.get("websub_daemon_port", 8675))
+    port = _safe_int(config.get("websub_daemon_port", 8675), 8675)
     secret = config.get("websub_secret", "").encode()
     channels = _read_channels()
     known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
@@ -2467,8 +2519,8 @@ def _wsb_processor_thread(config: dict) -> None:
 
         # Read current values from reloadable config
         with _config_lock:
-            interval = float(_daemon_config.get("websub_check_interval_minutes", 10)) * 60
-            min_age = float(_daemon_config.get("websub_min_age_minutes", 360))
+            interval = _safe_float(_daemon_config.get("websub_check_interval_minutes", 10), 10) * 60
+            min_age = _safe_float(_daemon_config.get("websub_min_age_minutes", 360), 360)
             supadata_key = _daemon_config.get("supadata_api_key")
             # Make a shallow copy of _daemon_config for use outside the lock
             current_config = _daemon_config.copy()
