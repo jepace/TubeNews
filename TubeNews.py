@@ -467,6 +467,9 @@ _YT_HEADERS = {
 _gemini_rate_lock = threading.Lock()
 _gemini_last_call_time: float = 0.0
 
+# Global lock for WebSub push queue access (shared by _wsb_receiver_thread and _requeue_video)
+_queue_lock = threading.Lock()
+
 
 def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
     """Return True if *video_id* is a YouTube Short.
@@ -1995,7 +1998,7 @@ def _requeue_video(
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_path = queue_dir / "push_queue.json"
 
-    with queue_lock:
+    with _queue_lock:
         try:
             items: list[dict] = json.loads(queue_path.read_text()) if queue_path.exists() else []
         except Exception:
@@ -2128,7 +2131,6 @@ def _wsb_receiver_thread(config: dict) -> None:
     queue_dir = STATE_ROOT / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_path = queue_dir / "push_queue.json"
-    queue_lock = threading.Lock()
 
     _YT_NS = {
         "atom": "http://www.w3.org/2005/Atom",
@@ -2199,7 +2201,7 @@ def _wsb_receiver_thread(config: dict) -> None:
                     })
 
             if new_entries:
-                with queue_lock:
+                with _queue_lock:
                     try:
                         existing: list[dict] = (
                             json.loads(queue_path.read_text()) if queue_path.exists() else []
