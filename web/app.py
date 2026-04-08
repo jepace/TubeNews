@@ -699,7 +699,7 @@ def _story_comment_count(story_file: Path) -> int:
         return 0
 
 
-def _get_channel_stories(channel_id: str, timezone: str = "") -> tuple[str | None, list[StoryDict]]:
+def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
     All processed stories are returned with no time cutoff — this is a full
@@ -707,9 +707,9 @@ def _get_channel_stories(channel_id: str, timezone: str = "") -> tuple[str | Non
     no matching channel archive is found.
 
     Args:
-        channel_id: The channel ID to retrieve stories for.
-        timezone: Optional timezone for displaying published timestamps. Falls back
-                 to system timezone if not provided.
+        channel_id: The channel ID to fetch stories for.
+        user_timezone: User's timezone preference (IANA format). Falls back to
+                       system timezone if not provided.
     """
     if not STORAGE_ROOT.is_dir():
         return None, []
@@ -746,7 +746,7 @@ def _get_channel_stories(channel_id: str, timezone: str = "") -> tuple[str | Non
                 published = s.get("published", "")
                 # Reformat published timestamp to specified timezone (or system default)
                 if published:
-                    display_tz = timezone or _get_timezone()
+                    display_tz = user_timezone or _get_timezone()
                     published = _reformat_published_timestamp(published, display_tz)
                 stories.append({
                     "title": s["title"],
@@ -1204,7 +1204,7 @@ def channel_feed(channel_id: str):
     if not any(ch["channel_id"] == channel_id for ch in channels):
         abort(404)
     user_tz = _get_user_timezone(current_user)
-    channel_name, stories = _get_channel_stories(channel_id, timezone=user_tz)
+    channel_name, stories = _get_channel_stories(channel_id, user_timezone=user_tz)
     display_name = channel_name or next(
         (ch["channel_name"] for ch in channels if ch["channel_id"] == channel_id), channel_id
     )
