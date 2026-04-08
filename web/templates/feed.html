@@ -1,13 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ feed_name }}{% endblock %}
+{% block header_title %}{{ feed_name }}{% endblock %}
+{% block header_right %}
+{% if channel_counts is defined and channel_counts and not channel_id %}
+<button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776;</button>
+{% endif %}
+{% if current_user.is_admin %}
+<button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+{% endif %}
+{% endblock %}
 
 {% block header_sub %}
 <div class="header-sub">
   <div class="hs-left">
-    {% if channel_counts is defined and channel_counts and not channel_id %}
-    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776; Channels</button>
-    {% endif %}
-    <span class="hs-feed-name">{{ feed_name }}</span>
     {% if current_user.is_authenticated and not channel_id %}
       {% set _ch = ('?bundle=' ~ active_bundle_slug) if active_bundle_slug is defined and active_bundle_slug else (('?channel=' ~ active_channel_id) if active_channel_id is defined and active_channel_id else '') %}
       <a class="hs-tab{% if not is_archive and not is_all and not is_starred %} hs-tab-active{% endif %}" href="{{ url_for('serve_feed') }}{{ _ch }}">Unread{% if not is_archive and not is_all and not is_starred %}<span class="tab-count" id="unread-badge"{% if not stories %} style="display:none"{% endif %}>{{ stories|length }}</span>{% endif %}</a>

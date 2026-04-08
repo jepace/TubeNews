@@ -73,11 +73,53 @@ header {
   justify-content: space-between;
 }
 
+.header-left, .header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-left { flex-shrink: 0; }
+.header-right { flex-shrink: 0; }
+
 .site-title {
+  flex: 1;
   font-weight: 700;
   font-size: 1.1rem;
   color: var(--accent);
   text-decoration: none;
+  text-align: center;
+}
+
+.profile-thumbnail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.profile-thumbnail:hover {
+  background: var(--accent-hover);
+}
+
+.header-right .sidebar-toggle,
+.header-right .nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  font-size: 1rem;
+  cursor: pointer;
+  color: var(--text);
+  padding: 0 0.4rem;
 }
 
 /* Optional sticky sub-header row (populated per-page via Jinja block) */
