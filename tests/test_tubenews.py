@@ -2086,7 +2086,8 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
     calls = []
 
     def fake_fetch(video_id, client, feed_name="", video_title="",
-                   transcript_rate_limit_event=None):
+                   transcript_rate_limit_event=None, failure_reason=None,
+                   livestream_error=None):
         calls.append(video_id)
         if transcript_rate_limit_event is not None:
             transcript_rate_limit_event.set()

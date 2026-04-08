@@ -18,6 +18,9 @@
     <a class="site-title" href="{{ url_for('serve_feed') }}">{% block header_title %}TubeNews{% endblock %}</a>
     <div class="header-right">
       {% block header_right %}
+      {% if unseen_channel_count %}
+      <span class="nav-badge">{{ unseen_channel_count }}</span>
+      {% endif %}
       {% if current_user.is_admin %}
       <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
       {% endif %}
