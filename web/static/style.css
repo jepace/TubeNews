@@ -189,8 +189,8 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
   .search-input {
     flex: 1;
     min-height: 2.75rem;
-    padding: 0.35rem 0.35rem;
-    font-size: 0.75rem;
+    padding: 0.5rem 0.625rem;
+    font-size: 0.8rem;
   }
 
   /* Row 3: External links */
@@ -235,7 +235,6 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
   }
 
   .search-input {
-    width: 80px;
     font-size: 0.7rem;
   }
 
