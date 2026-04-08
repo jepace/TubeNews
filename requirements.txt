@@ -1,5 +1,5 @@
 requests
-feedgen
+feedgen==0.4.0
 supadata
 flask
 flask-login
@@ -7,3 +7,4 @@ flask-wtf
 flask-limiter
 gunicorn
 pytz
+limits
