@@ -1682,7 +1682,8 @@ def process_video(
                 from datetime import datetime as _dt
                 pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
                 age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"{channel_name}: [{video_id}] Failed to parse video_date '{video_date}': {exc}")
                 age_hours = float("inf")
             if age_hours < 48:
                 logger.info(
@@ -2073,7 +2074,8 @@ def _wsb_remove_subscription(channel_id: str) -> None:
         return
     try:
         subs: dict = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.error(f"Failed to read subscriptions file {path}: {exc}")
         return
     subs.pop(channel_id, None)
     _atomic_write(path, json.dumps(subs, indent=2))
