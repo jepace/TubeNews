@@ -774,8 +774,13 @@ def fetch_transcript(
         False — permanent no-transcript (Supadata confirmed the video has no captions);
                 caller should write ``status: "no_transcript_available"`` and stop retrying.
     """
-    prefix = ": ".join(p for p in [feed_name, video_title] if p)
-    prefix = f"{prefix}: " if prefix else ""
+    # Format: "channel_name: video_title (video_id):" or "[video_id]:" if no title
+    prefix_parts = [p for p in [feed_name, video_title] if p]
+    if prefix_parts:
+        title_part = ": ".join(prefix_parts)
+        prefix = f"{title_part} ({video_id}): "
+    else:
+        prefix = f"[{video_id}]: "
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
@@ -862,6 +867,7 @@ def call_gemini_api(
     gemini_api_key: str,
     model_name: str,
     feed_name: str = "",
+    video_id: str = "",
     call_delay: float = 8.0,
 ) -> list[GeminiStory] | bool | None:
     """Send a transcript to Google Gemini and parse the returned news stories.
@@ -914,8 +920,13 @@ def call_gemini_api(
         ]
     }
 
-    prefix = ": ".join(p for p in [feed_name, video_title] if p)
-    prefix = f"{prefix}: " if prefix else ""
+    # Format: "channel_name: video_title (video_id):" or "[video_id]:" if no title
+    prefix_parts = [p for p in [feed_name, video_title] if p]
+    if prefix_parts:
+        title_part = ": ".join(prefix_parts)
+        prefix = f"{title_part} ({video_id}): " if video_id else f"{title_part}: "
+    else:
+        prefix = f"[{video_id}]: " if video_id else ""
 
     try:
         response = requests.post(api_url, json=payload, timeout=_GEMINI_TIMEOUT)
@@ -1639,10 +1650,13 @@ def process_video(
 
     channel_name = feed["channel_name"]
 
+    # Standardized log format: "channel: video_title (video_id):"
+    log_prefix = f"{channel_name}: {video_title} ({video_id}):"
+
     # --- Load or fetch transcript ---
     if existing_dir and (existing_dir / "transcript.txt").exists():
         # Re-use cached transcript; only the AI step needs to re-run.
-        logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Found cached transcript, re-running AI")
+        logger.info(f"{log_prefix} TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
@@ -1651,9 +1665,9 @@ def process_video(
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
             return "transcript_quota_exhausted", 0
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
-        logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Processing new video{counter}")
+        logger.info(f"{log_prefix} TubeNews: Processing new video{counter}")
         if _is_youtube_short(video_id, feed_name=channel_name):
-            logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: YouTube Short — skipping permanently")
+            logger.info(f"{log_prefix} TubeNews: YouTube Short — skipping permanently")
             short_dir = feed_dir / f"{video_date}_{video_id}"
             short_dir.mkdir(exist_ok=True)
             (short_dir / "metadata.json").write_text(json.dumps({
@@ -1663,7 +1677,7 @@ def process_video(
                 "processed_at": now_utc_iso(),
             }))
             return "skipped", 0
-        logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetching transcript")
+        logger.info(f"{log_prefix} Supadata: Fetching transcript")
         _transcript_failure_reason: list[str] = []
         _livestream_error: list[bool] = []
         transcript_text = fetch_transcript(
@@ -1683,17 +1697,17 @@ def process_video(
                 pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
                 age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
             except Exception as exc:
-                logger.debug(f"{channel_name}: [{video_id}] Failed to parse video_date '{video_date}': {exc}")
+                logger.debug(f"{log_prefix} Failed to parse video_date '{video_date}': {exc}")
                 age_hours = float("inf")
             if age_hours < 48:
                 logger.info(
-                    f"{channel_name}: [{video_id}] {video_title}: TubeNews: "
+                    f"{log_prefix} TubeNews: "
                     f"No transcript yet — video is only {age_hours:.0f}h old, will retry"
                 )
                 return "skipped", 0
             # Old enough — permanent.
             if not _validate_iso_date(video_date):
-                logger.error(f"{channel_name}: [{video_id}] Invalid video_date '{video_date}' — skipping")
+                logger.error(f"{log_prefix} Invalid video_date '{video_date}' — skipping")
                 return "skipped", 0
             meeting_dir = feed_dir / f"{video_date}_{video_id}"
             meeting_dir.mkdir(exist_ok=True)
@@ -1706,7 +1720,7 @@ def process_video(
                 "processed_at": now_utc_iso(),
             }
             (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-            logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: No transcript available — marked permanent, will not retry")
+            logger.info(f"{log_prefix} TubeNews: No transcript available — marked permanent, will not retry")
             return "skipped", 0
         elif not transcript_text:
             # Transient failure — quota exhausted, livestream, or network error.
@@ -1733,11 +1747,11 @@ def process_video(
                     next_try_at=retry_next_try_at,
                     raw_entry_xml=raw_entry_xml,
                 )
-                logger.info(f"{channel_name}: [{video_id}] {video_title}: TubeNews: Livestream detected — re-queued for {retry_next_try_at}")
+                logger.info(f"{log_prefix} TubeNews: Livestream detected — re-queued for {retry_next_try_at}")
                 return "skipped", 0
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
-            logger.info(f"{channel_name}: [{video_id}] {video_title}: Supadata: Fetch failed — will retry later")
+            logger.info(f"{log_prefix} Supadata: Fetch failed — will retry later")
             return "skipped", 0
 
         if not _validate_iso_date(video_date):
@@ -1768,6 +1782,7 @@ def process_video(
             gemini_api_key=config["gemini_api_key"],
             model_name=config["gemini_model"],
             feed_name=channel_name,
+            video_id=video_id,
             call_delay=_safe_float(config.get("gemini_call_delay", 8), 8),
         )
         if result is False:
@@ -1798,7 +1813,7 @@ def process_video(
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
         n = len(all_stories)
-        logger.info(f"{channel_name}: [{video_id}] {video_title}: Done — {n} stor{'y' if n == 1 else 'ies'} written")
+        logger.info(f"{log_prefix} Done — {n} stor{'y' if n == 1 else 'ies'} written")
         return "content_written", n
 
     # Gemini returned no stories for any focus.
@@ -1810,7 +1825,7 @@ def process_video(
         "processed_focuses": sorted(f for f, _ in focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-    logger.info(f"{channel_name}: [{video_id}] {video_title}: Done — no relevant stories found")
+    logger.info(f"{log_prefix} Done — no relevant stories found")
     return "skipped", 0
 
 
@@ -2448,7 +2463,14 @@ def _wsb_try_fetch_transcript(
 
     # Transcript text successfully returned — cache it for the Gemini phase.
     (meeting_dir / "transcript.txt").write_text(result, encoding="utf-8")
-    logger.debug(f"[{video_id}] Transcript cached at {meeting_dir / 'transcript.txt'}")
+    channel_name = feed_cfg.get("channel_name", "")
+    video_title = entry.get("title", "")
+    prefix_parts = [p for p in [channel_name, video_title] if p]
+    if prefix_parts:
+        prefix = ": ".join(prefix_parts) + f" ({video_id})"
+    else:
+        prefix = f"[{video_id}]"
+    logger.debug(f"{prefix}: Transcript cached at {meeting_dir / 'transcript.txt'}")
     return "success"
 
 
