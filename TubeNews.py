@@ -1175,7 +1175,7 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
                 logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
-    all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
+    all_stories.sort(key=lambda entry: _get_timestamp_as_float(entry["meta"].get("processed_at")), reverse=True)
 
     for entry in all_stories:
         try:
@@ -1267,7 +1267,7 @@ def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", chann
                 logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
-    all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
+    all_stories.sort(key=lambda entry: _get_timestamp_as_float(entry["meta"].get("processed_at")), reverse=True)
 
     for entry in all_stories:
         try:
@@ -1370,7 +1370,7 @@ def rebuild_user_feed_page(user: dict[str, object], base_url: str = "", user_id:
                 logger.debug(f"Skipping {meeting_dir}: {exc}")
                 continue
 
-    all_stories.sort(key=lambda entry: entry["meta"].get("processed_at", 0), reverse=True)
+    all_stories.sort(key=lambda entry: _get_timestamp_as_float(entry["meta"].get("processed_at")), reverse=True)
 
     CSS = """
         body { font-family: Georgia, serif; margin: 0; padding: 0;

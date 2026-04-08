@@ -1709,6 +1709,57 @@ def test_rebuild_aggregate_feed_skips_corrupt_metadata(tmp_path, monkeypatch):
     assert "Good Story" in rss
 
 
+def test_rebuild_aggregate_feed_mixed_processed_at_types(tmp_path, monkeypatch):
+    """rebuild_aggregate_feed must not crash when some metadata.json files have a
+    legacy float processed_at and others have a new ISO 8601 string."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    # Channel A — legacy float processed_at
+    dir_a = _make_meeting(tmp_path / "chan_a", "2026-01-01", "VID_A", "Meeting A")
+    (dir_a / "metadata.json").write_text(json.dumps({
+        "video_id": "VID_A", "video_title": "Meeting A",
+        "status": "processed", "processed_at": 1712534400.0,  # Unix float
+    }))
+    _write_story(dir_a, "01_Story_A.md", "Story A", "CITY — Jan 1, 2026", "Body A.", 10)
+
+    # Channel B — ISO 8601 string processed_at
+    dir_b = _make_meeting(tmp_path / "chan_b", "2026-02-01", "VID_B", "Meeting B")
+    _write_story(dir_b, "01_Story_B.md", "Story B", "CITY — Feb 1, 2026", "Body B.", 20)
+
+    rebuild_aggregate_feed()  # must not raise TypeError
+    rss = (tmp_path / "rss.xml").read_text()
+    assert "Story A" in rss
+    assert "Story B" in rss
+
+
+def test_rebuild_feed_mixed_processed_at_types(tmp_path):
+    """rebuild_feed must not crash when meetings in the same channel have mixed
+    processed_at types (float vs ISO 8601 string)."""
+    feed_dir = tmp_path / "Test_Channel"
+
+    # Meeting with legacy float processed_at
+    dir_old = feed_dir / "2026-01-01_VID_OLD"
+    dir_old.mkdir(parents=True)
+    (dir_old / "metadata.json").write_text(json.dumps({
+        "video_id": "VID_OLD", "video_title": "Old Meeting",
+        "status": "processed", "processed_at": 1712534400.0,
+    }))
+    _write_story(dir_old, "01_Old.md", "Old Story", "CITY — Jan 1, 2026", "Body.", 10)
+
+    # Meeting with ISO 8601 string processed_at
+    dir_new = _make_meeting(feed_dir, "2026-02-01", "VID_NEW", "New Meeting")
+    _write_story(dir_new, "01_New.md", "New Story", "CITY — Feb 1, 2026", "Body.", 20)
+
+    feed_cfg = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": ""}
+    rebuild_feed(feed_dir, feed_cfg)  # must not raise TypeError
+
+    rss = (feed_dir / "rss.xml").read_text()
+    assert "Old Story" in rss
+    assert "New Story" in rss
+
+
 def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
     """build_user_feed_xml must skip channels whose channel.json is unreadable."""
     import TubeNews
