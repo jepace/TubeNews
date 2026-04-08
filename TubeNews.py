@@ -2367,6 +2367,7 @@ def _write_no_transcript_metadata(
     video_date: str,
     video_title: str,
     skip_reason: str = "no_captions",
+    channel_name: str = "",
 ) -> None:
     """Write a permanent ``no_transcript_available`` metadata.json for a video.
 
@@ -2381,6 +2382,7 @@ def _write_no_transcript_metadata(
         video_title: Video title (stored in metadata for human reference).
         skip_reason: Reason code — ``"no_captions"``, ``"members_only_or_restricted"``,
             or ``"video_not_found"``.
+        channel_name: Channel name for log prefix.
     """
     meeting_dir = feed_dir / f"{video_date}_{video_id}"
     meeting_dir.mkdir(parents=True, exist_ok=True)
@@ -2392,8 +2394,14 @@ def _write_no_transcript_metadata(
         "processed_at": now_utc_iso(),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
+    # Standardized log format: "channel: video_title (video_id):"
+    prefix_parts = [p for p in [channel_name, video_title] if p]
+    if prefix_parts:
+        prefix = ": ".join(prefix_parts) + f" ({video_id}):"
+    else:
+        prefix = f"[{video_id}]:"
     logger.info(
-        f"[{video_id}] {video_title}: No transcript available — "
+        f"{prefix} No transcript available — "
         f"marked permanent (reason: {skip_reason})"
     )
 
@@ -2895,7 +2903,8 @@ def _wsb_processor_thread(config: dict) -> None:
                     # Supadata confirmed no transcript — mark permanently.
                     video_date = date_str[:10]
                     _write_no_transcript_metadata(
-                        vid, feed_dir, video_date, entry.get("title", "")
+                        vid, feed_dir, video_date, entry.get("title", ""),
+                        channel_name=feed_cfg.get("channel_name", "")
                     )
                     resolved_ids.add(vid)
 
@@ -2910,7 +2919,8 @@ def _wsb_processor_thread(config: dict) -> None:
                         )
                         video_date = date_str[:10]
                         _write_no_transcript_metadata(
-                            vid, feed_dir, video_date, entry.get("title", "")
+                            vid, feed_dir, video_date, entry.get("title", ""),
+                            channel_name=feed_cfg.get("channel_name", "")
                         )
                         resolved_ids.add(vid)
                     else:
