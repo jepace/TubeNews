@@ -46,8 +46,6 @@
       </form>
       {% endif %}
     {% endif %}
-  </div>
-  <div class="hs-right">
     {% if current_user.is_authenticated and not channel_id %}
     <form method="get" action="{% if is_archive %}{{ url_for('serve_read') }}{% elif is_starred %}{{ url_for('serve_starred') }}{% else %}{{ url_for('serve_all') }}{% endif %}" class="hs-search">
       {% if active_channel_id is defined and active_channel_id %}
@@ -60,6 +58,8 @@
              title="Search stories">
     </form>
     {% endif %}
+  </div>
+  <div class="hs-right">
     {% if channel_id %}
     <a class="hs-ext" href="https://www.youtube.com/channel/{{ channel_id }}" target="_blank" rel="noopener">&#9654; YouTube</a>
     {% endif %}
