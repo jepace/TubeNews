@@ -1729,9 +1729,11 @@ def test_process_feed_gemini_transient_error_no_metadata(tmp_path, monkeypatch):
     )
 
     assert stories_written == 0
-    # Verify NO metadata.json was written (no directory created at all)
+    # Verify NO metadata.json was written (directory may exist with cached transcript)
     video_dirs = list((tmp_path / "Test_Channel").glob("*"))
-    assert len(video_dirs) == 0, "Transient Gemini error should not create metadata"
+    if video_dirs:
+        video_dir = video_dirs[0]
+        assert not (video_dir / "metadata.json").exists(), "Transient Gemini error should not create metadata.json"
 
 
 # ---------------------------------------------------------------------------
@@ -3108,7 +3110,7 @@ def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
 
     def fake_fetch(*a, livestream_error=None, **kw):
         if livestream_error is not None:
-            livestream_error[0] = True
+            livestream_error.set()
         return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)

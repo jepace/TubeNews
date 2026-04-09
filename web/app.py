@@ -2209,15 +2209,22 @@ def admin_feed_edit(channel_id: str):
                 if old_dir is not None and old_dir.name != new_slug:
                     new_dir = STORAGE_ROOT / new_slug
                     if old_dir.exists():
-                        try:
-                            old_dir.rename(new_dir)
-                        except FileExistsError:
+                        # Check if target already exists (rename() may not fail on some systems)
+                        if new_dir.exists():
                             rename_error = (
                                 f"Archive directory '{new_slug}' already exists — "
                                 "rename the existing directory manually before saving."
                             )
-                        except OSError as exc:
-                            rename_error = f"Could not rename archive directory: {exc}"
+                        else:
+                            try:
+                                old_dir.rename(new_dir)
+                            except FileExistsError:
+                                rename_error = (
+                                    f"Archive directory '{new_slug}' already exists — "
+                                    "rename the existing directory manually before saving."
+                                )
+                            except OSError as exc:
+                                rename_error = f"Could not rename archive directory: {exc}"
                 elif old_dir is None:
                     # Channel has no channel.json yet; check whether new_slug collides
                     # with an existing directory that belongs to a different channel.
