@@ -555,11 +555,11 @@ def format_datetime(ts: int | str | None) -> str:
 def _sanitize_focus(text: str) -> str:
     """Sanitize a user-supplied focus line against prompt injection.
 
-    Allows only the characters needed for keyword phrases: letters, digits,
-    spaces, commas, and hyphens.  Strips everything else, collapses runs of
-    whitespace to a single space, and truncates to 100 characters.
+    Allows only ASCII letters, digits, spaces, commas, and hyphens.
+    Strips everything else (prevents URLs and Unicode homographs),
+    collapses runs of whitespace to a single space, and truncates to 100 characters.
     """
-    cleaned = re.sub(r"[^\w\s,\-]", "", text, flags=re.UNICODE)
+    cleaned = re.sub(r"[^a-zA-Z0-9\s,\-]", "", text)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:100]
 
@@ -1344,6 +1344,9 @@ def account_password():
     """Change the logged-in user's own password."""
     current_pw = request.form.get("current_password", "")
     new_pw = request.form.get("new_password", "")
+    if not current_pw or not new_pw:
+        flash("Both current and new passwords are required.", "error")
+        return redirect(url_for("account"))
     if not check_password_hash(current_user._data["password_hash"], current_pw):
         flash("Current password is incorrect.", "error")
         return redirect(url_for("account"))
@@ -2159,8 +2162,8 @@ def admin_feed_add():
         channel_id = request.form.get("channel_id", "").strip()
         channel_name = request.form.get("channel_name", "").strip()
         focus = _sanitize_focus(request.form.get("focus", ""))
-        if not channel_id or not channel_name or not focus:
-            flash("All fields are required.", "error")
+        if not channel_id or not channel_name:
+            flash("Channel ID and name are required.", "error")
         elif not channel_id.startswith("UC"):
             flash("Channel ID must start with 'UC'.", "error")
         else:
@@ -2192,8 +2195,8 @@ def admin_feed_edit(channel_id: str):
         new_channel_id = request.form.get("channel_id", "").strip()
         channel_name = request.form.get("channel_name", "").strip()
         focus = _sanitize_focus(request.form.get("focus", ""))
-        if not new_channel_id or not channel_name or not focus:
-            flash("All fields are required.", "error")
+        if not new_channel_id or not channel_name:
+            flash("Channel ID and name are required.", "error")
         elif not new_channel_id.startswith("UC"):
             flash("Channel ID must start with 'UC'.", "error")
         else:
@@ -2206,6 +2209,7 @@ def admin_feed_edit(channel_id: str):
                 if old_dir is not None and old_dir.name != new_slug:
                     new_dir = STORAGE_ROOT / new_slug
                     if old_dir.exists():
+                        # Check if target already exists (rename() may not fail on some systems)
                         if new_dir.exists():
                             rename_error = (
                                 f"Archive directory '{new_slug}' already exists — "
@@ -2214,6 +2218,11 @@ def admin_feed_edit(channel_id: str):
                         else:
                             try:
                                 old_dir.rename(new_dir)
+                            except FileExistsError:
+                                rename_error = (
+                                    f"Archive directory '{new_slug}' already exists — "
+                                    "rename the existing directory manually before saving."
+                                )
                             except OSError as exc:
                                 rename_error = f"Could not rename archive directory: {exc}"
                 elif old_dir is None:
@@ -2258,6 +2267,11 @@ def admin_feed_edit(channel_id: str):
                             pass  # non-fatal; next rebuild_feed will overwrite it
                     channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
                     _save_channels(channels)
+                    # If channel_id changed, update WebSub subscription
+                    if new_channel_id != channel_id:
+                        config = _load_config()
+                        _wsb_unsubscribe(channel_id, config)  # unsubscribe from old channel
+                        _wsb_subscribe(new_channel_id, config)  # subscribe to new channel
                     flash(f"Feed '{channel_name}' updated.", "success")
                     return redirect(url_for("admin_feeds"))
         feed = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}

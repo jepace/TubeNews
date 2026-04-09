@@ -150,6 +150,46 @@ def test_json_extraction_no_match():
 
 
 # ---------------------------------------------------------------------------
+# Gemini response parsing (multi-part support)
+# ---------------------------------------------------------------------------
+
+def test_call_gemini_api_multipart_response(monkeypatch):
+    """call_gemini_api must extract text from multi-part responses (text + inline data)."""
+    import TubeNews
+    from unittest.mock import MagicMock
+
+    # Mock requests.post to return multi-part response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inlineData": {"data": "base64encodedimage"}},  # first part is data, not text
+                        {"text": '[{"title": "Story", "dateline": "City", "content": "Body", "start_time_seconds": 0, "topics": ["test"]}]'},  # text in second part
+                    ]
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr("requests.post", lambda *a, **kw: mock_response)
+
+    result = TubeNews.call_gemini_api(
+        transcript_text="Test transcript",
+        focus="test",
+        video_title="Test Video",
+        video_date="2026-04-09",
+        gemini_api_key="test_key",
+        model_name="gemini-test",
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["title"] == "Story"
+
+
+# ---------------------------------------------------------------------------
 # parse_story_file
 # ---------------------------------------------------------------------------
 
@@ -1689,9 +1729,11 @@ def test_process_feed_gemini_transient_error_no_metadata(tmp_path, monkeypatch):
     )
 
     assert stories_written == 0
-    # Verify NO metadata.json was written (no directory created at all)
+    # Verify NO metadata.json was written (directory may exist with cached transcript)
     video_dirs = list((tmp_path / "Test_Channel").glob("*"))
-    assert len(video_dirs) == 0, "Transient Gemini error should not create metadata"
+    if video_dirs:
+        video_dir = video_dirs[0]
+        assert not (video_dir / "metadata.json").exists(), "Transient Gemini error should not create metadata.json"
 
 
 # ---------------------------------------------------------------------------
@@ -3068,7 +3110,7 @@ def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
 
     def fake_fetch(*a, livestream_error=None, **kw):
         if livestream_error is not None:
-            livestream_error[0] = True
+            livestream_error.set()
         return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)

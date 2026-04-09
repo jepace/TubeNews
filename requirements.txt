@@ -1,5 +1,5 @@
 requests
-feedgen==0.4.0
+feedgen>=1.0.0
 supadata
 flask
 werkzeug
