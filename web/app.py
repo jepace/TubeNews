@@ -2206,16 +2206,15 @@ def admin_feed_edit(channel_id: str):
                 if old_dir is not None and old_dir.name != new_slug:
                     new_dir = STORAGE_ROOT / new_slug
                     if old_dir.exists():
-                        if new_dir.exists():
+                        try:
+                            old_dir.rename(new_dir)
+                        except FileExistsError:
                             rename_error = (
                                 f"Archive directory '{new_slug}' already exists — "
                                 "rename the existing directory manually before saving."
                             )
-                        else:
-                            try:
-                                old_dir.rename(new_dir)
-                            except OSError as exc:
-                                rename_error = f"Could not rename archive directory: {exc}"
+                        except OSError as exc:
+                            rename_error = f"Could not rename archive directory: {exc}"
                 elif old_dir is None:
                     # Channel has no channel.json yet; check whether new_slug collides
                     # with an existing directory that belongs to a different channel.
@@ -2258,6 +2257,11 @@ def admin_feed_edit(channel_id: str):
                             pass  # non-fatal; next rebuild_feed will overwrite it
                     channels[idx] = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
                     _save_channels(channels)
+                    # If channel_id changed, update WebSub subscription
+                    if new_channel_id != channel_id:
+                        config = _load_config()
+                        _wsb_unsubscribe(channel_id, config)  # unsubscribe from old channel
+                        _wsb_subscribe(new_channel_id, config)  # subscribe to new channel
                     flash(f"Feed '{channel_name}' updated.", "success")
                     return redirect(url_for("admin_feeds"))
         feed = {"channel_id": new_channel_id, "channel_name": channel_name, "focus": focus}
