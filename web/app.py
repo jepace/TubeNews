@@ -459,7 +459,7 @@ def _reformat_published_timestamp(published_str: str, user_timezone: str, server
         formatted_time = _fmt_no_leading_zeros(user_dt, "%I:%M %p")
         tz_abbr = user_dt.strftime("%Z")
 
-        return f"{formatted_date} at {formatted_time} {tz_abbr} ({user_timezone})"
+        return f"{formatted_date} at {formatted_time} {tz_abbr}"
     except Exception:
         return published_str
 
