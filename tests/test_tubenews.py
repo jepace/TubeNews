@@ -3119,12 +3119,11 @@ def test_wsb_try_fetch_transcript_returns_quota_exhausted(tmp_path, monkeypatch)
 def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
     """Returns 'livestream' when the livestream_error flag is set."""
     import TubeNews
-    import threading
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
     def fake_fetch(*a, livestream_error=None, **kw):
         if livestream_error is not None:
-            livestream_error.set()
+            livestream_error[0] = True
         return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
@@ -3132,7 +3131,7 @@ def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
     entry = {"video_id": "vidLS", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
     feed_cfg = {"channel_name": "Chan"}
 
-    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, threading.Event())
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
     assert result == "livestream"
 
 

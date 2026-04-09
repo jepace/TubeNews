@@ -959,14 +959,17 @@ def call_gemini_api(
                     logger.error(f"{prefix}Gemini: Invalid response: 'parts' missing or empty")
                     return None
 
-                first_part = parts[0]
-                if not isinstance(first_part, dict):
-                    logger.error(f"{prefix}Gemini: Invalid response: part is not a dict")
-                    return None
+                # Find the part with "text" (may not be first in multi-part responses)
+                raw_text = None
+                for part in parts:
+                    if not isinstance(part, dict):
+                        continue
+                    if "text" in part and isinstance(part.get("text"), str):
+                        raw_text = part.get("text")
+                        break
 
-                raw_text = first_part.get("text")
-                if not isinstance(raw_text, str):
-                    logger.error(f"{prefix}Gemini: Invalid response: 'text' missing or not a string")
+                if raw_text is None:
+                    logger.error(f"{prefix}Gemini: Invalid response: 'text' missing or not a string in any part")
                     return None
 
             except (KeyError, TypeError, AttributeError) as exc:
@@ -1784,6 +1787,7 @@ def process_video(
     # via _gemini_rate_lock — no per-loop delay needed here.
     seen_titles: dict[str, int] = {}
     all_stories: list = []
+    gemini_transient_error = False
     for focus, user_ids in focuses:
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
@@ -1800,6 +1804,8 @@ def process_video(
         )
         if result is False:
             return "ai_rate_limited", 0
+        if result is None:
+            gemini_transient_error = True
         for story in (result or []):
             title = story.get("title", "")
             if title in seen_titles:
@@ -1814,6 +1820,11 @@ def process_video(
                 story["_user_ids"] = list(user_ids)
                 seen_titles[title] = len(all_stories)
                 all_stories.append(story)
+
+    # If Gemini hit a transient error, skip metadata write to allow retry.
+    if gemini_transient_error:
+        logger.info(f"{log_prefix} Gemini: Transient error — will retry later")
+        return "skipped", 0
 
     if all_stories:
         write_story_files(all_stories, meeting_dir, video_id)
