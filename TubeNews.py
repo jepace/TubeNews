@@ -320,6 +320,7 @@ class MetadataDict(TypedDict, total=False):
     """
     video_id: str
     video_title: str
+    video_date: str
     status: str
     processed_at: float
     processed_focuses: list[str]
@@ -598,9 +599,9 @@ def _validate_channel_id(channel_id: str) -> bool:
 def _sanitize_focus(text: str, max_length: int = 100) -> str:
     r"""Sanitize focus text to prevent injection attacks.
 
-    Keeps only ASCII letters, digits, whitespace, comma, and hyphen.
-    Collapses whitespace, and truncates to max_length.
-    Used to safely prepare user-entered focus strings for use in Gemini prompts.
+    Removes or replaces characters outside [\w\s,\-], collapses whitespace,
+    and truncates to max_length. Used to safely prepare user-entered focus
+    strings for use in Gemini prompts.
 
     Args:
         text: User-provided focus text.
@@ -609,9 +610,8 @@ def _sanitize_focus(text: str, max_length: int = 100) -> str:
     Returns:
         Sanitized focus string.
     """
-    # Keep only ASCII letters, digits, whitespace, comma, and hyphen
-    # This prevents URLs and Unicode homographs from being embedded
-    sanitized = re.sub(r"[^a-zA-Z0-9\s,\-]", "", text)
+    # Keep only word chars, whitespace, comma, and hyphen
+    sanitized = re.sub(r"[^\w\s,\-]", "", text)
     # Collapse whitespace
     sanitized = re.sub(r"\s+", " ", sanitized).strip()
     # Truncate
@@ -753,7 +753,7 @@ def fetch_transcript(
     video_title: str = "",
     transcript_rate_limit_event: threading.Event | None = None,
     failure_reason: list[str] | None = None,
-    livestream_error: threading.Event | None = None,
+    livestream_error: list[bool] | None = None,
 ) -> str | None | bool:
     """Fetch timed transcript segments from the Supadata API.
 
@@ -766,7 +766,7 @@ def fetch_transcript(
     ``process_feed`` can abort remaining videos immediately.
 
     When a livestream error is detected (video is currently broadcasting),
-    *livestream_error* is set to signal that the video should be
+    *livestream_error* is set to [True] to signal that the video should be
     deferred without incrementing retry_count.
 
     Returns:
@@ -848,7 +848,7 @@ def fetch_transcript(
         elif "live streaming" in exc_str:
             logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry later")
             if livestream_error is not None:
-                livestream_error.set()
+                livestream_error.append(True)
         else:
             logger.error(f"{prefix}Supadata: Call failed: {exc}")
 
@@ -878,11 +878,10 @@ def call_gemini_api(
     it can be parsed directly.
 
     Returns:
-        list  – one dict per story on success (may be empty if no stories matched).
+        list  – one dict per story on success.
         False – caller should disable AI for the remainder of this processing
                 cycle because the API returned HTTP 429 (rate-limited).
-        None  – transient failure (network error, HTTP 5xx, timeout); caller
-                should skip this video and allow retry on next run.
+        None  – any other failure; the caller should skip this video.
     """
     # Sanitize user input to prevent prompt injection
     focus = _sanitize_focus(focus)
@@ -960,18 +959,14 @@ def call_gemini_api(
                     logger.error(f"{prefix}Gemini: Invalid response: 'parts' missing or empty")
                     return None
 
-                # Iterate through parts to find first non-empty text part.
-                # Gemini may return multi-part responses with text + inline data.
-                raw_text = None
-                for part in parts:
-                    if isinstance(part, dict) and isinstance(part.get("text"), str):
-                        text_candidate = part.get("text")
-                        if text_candidate:  # non-empty string
-                            raw_text = text_candidate
-                            break
+                first_part = parts[0]
+                if not isinstance(first_part, dict):
+                    logger.error(f"{prefix}Gemini: Invalid response: part is not a dict")
+                    return None
 
-                if raw_text is None:
-                    logger.error(f"{prefix}Gemini: Invalid response: no 'text' found in any part")
+                raw_text = first_part.get("text")
+                if not isinstance(raw_text, str):
+                    logger.error(f"{prefix}Gemini: Invalid response: 'text' missing or not a string")
                     return None
 
             except (KeyError, TypeError, AttributeError) as exc:
@@ -1014,7 +1009,6 @@ def write_story_files(
     meeting_dir: Path,
     video_id: str = "",
     *,
-    video_date: str = "",
     clear_existing: bool = True,
     start_index: int = 1,
 ) -> None:
@@ -1103,22 +1097,26 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
         rel="alternate",
     )
 
-    meeting_dirs = sorted(
-        [d for d in feed_dir.iterdir() if d.is_dir()], reverse=True
-    )
-    metadata_errors = 0
-    metadata_total = 0
+    meeting_dirs = [d for d in feed_dir.iterdir() if d.is_dir()]
+
+    # Sort by video_date from metadata (newest first)
+    def get_sort_key(meeting_dir: Path) -> str:
+        metadata_path = meeting_dir / "metadata.json"
+        if not metadata_path.exists():
+            return ""
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            return metadata.get("video_date", "")
+        except Exception:
+            return ""
+
+    meeting_dirs = sorted(meeting_dirs, key=get_sort_key, reverse=True)
+
     for meeting_dir in meeting_dirs:
         metadata_path = meeting_dir / "metadata.json"
         if not metadata_path.exists():
             continue
-        metadata_total += 1
-        try:
-            metadata = json.loads(metadata_path.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            metadata_errors += 1
-            logger.warning(f"{feed_cfg['channel_name']}: Corrupted metadata.json in {meeting_dir.name}: {exc}")
-            continue
+        metadata = json.loads(metadata_path.read_text())
         if metadata.get("status") == "ignored_too_old":
             continue
 
@@ -1145,14 +1143,8 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
                     datetime.fromtimestamp(_get_timestamp_as_float(metadata.get("processed_at"))).astimezone()
                 )
             except Exception as exc:
-                logger.warning(f"{feed_cfg['channel_name']}: Skipping {story_file.name}: {exc}")
+                logger.debug(f"Skipping {story_file}: {exc}")
                 continue
-
-    # Log escalated warning if significant metadata corruption detected (>5% error rate)
-    if metadata_total > 0 and metadata_errors > 0:
-        error_rate = metadata_errors / metadata_total
-        if error_rate > 0.05:
-            logger.error(f"{feed_cfg['channel_name']}: {metadata_errors}/{metadata_total} metadata files corrupted ({error_rate*100:.0f}%) — investigate disk/I/O issues")
 
     feed.rss_file(feed_dir / "rss.xml", pretty=True)
     (feed_dir / "channel.json").write_text(
@@ -1531,7 +1523,7 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     to newly discovered videos going forward.
     """
     return not any(
-        d.name.endswith(video_id)
+        d.name == video_id
         for d in feed_dir.iterdir()
         if d.is_dir() and (d / "metadata.json").exists()
     )
@@ -1647,16 +1639,13 @@ def process_video(
                                         set; caller should stop processing
                                         further videos; *n_stories* is 0.
         ``"skipped"``                 – transcript unavailable, AI disabled,
-                                        Gemini transient error (will retry),
-                                        or AI returned no stories;
-                                        *n_stories* is 0.  When Gemini
-                                        successfully returns an empty story list,
-                                        a ``metadata.json`` with
+                                        or AI returned nothing;
+                                        *n_stories* is 0.  When Gemini returns
+                                        an empty story list, a
+                                        ``metadata.json`` with
                                         ``status: "no_stories"`` is written so
-                                        the video is not resubmitted on future
-                                        runs.  Transient Gemini errors (5xx,
-                                        network issues) do NOT write metadata and
-                                        are retried on next run.
+                                        the video is not resubmitted to the AI
+                                        on future runs.
     """
     # Validate video_id to prevent directory traversal attacks
     if not _validate_video_id(video_id):
@@ -1667,7 +1656,7 @@ def process_video(
 
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
-        (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(video_id)),
+        (d for d in feed_dir.iterdir() if d.is_dir() and d.name == video_id),
         None,
     )
 
@@ -1677,14 +1666,11 @@ def process_video(
     log_prefix = f"{channel_name}: {video_title} ({video_id}):"
 
     # --- Load or fetch transcript ---
-    transcript_loaded_from_cache = False
     if existing_dir and (existing_dir / "transcript.txt").exists():
         # Re-use cached transcript; only the AI step needs to re-run.
         logger.info(f"{log_prefix} TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
-        video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
-        transcript_loaded_from_cache = True
     else:
         # If quota was already known exhausted, don't attempt the API call.
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
@@ -1693,36 +1679,26 @@ def process_video(
         logger.info(f"{log_prefix} TubeNews: Processing new video{counter}")
         if _is_youtube_short(video_id, feed_name=channel_name):
             logger.info(f"{log_prefix} TubeNews: YouTube Short — skipping permanently")
-            short_dir = feed_dir / f"{video_date}_{video_id}"
+            short_dir = feed_dir / video_id
             short_dir.mkdir(exist_ok=True)
             (short_dir / "metadata.json").write_text(json.dumps({
                 "video_id": video_id,
                 "video_title": video_title,
+                "video_date": video_date,
                 "status": "ignored_short",
                 "processed_at": now_utc_iso(),
             }))
             return "skipped", 0
         logger.info(f"{log_prefix} Supadata: Fetching transcript")
         _transcript_failure_reason: list[str] = []
-        _livestream_error: threading.Event = threading.Event()
-
-        # Safety check: ensure cached transcript (if it exists) is always used
-        # even if existing_dir lookup failed. This prevents redundant Supadata
-        # calls on retries after Gemini transient errors.
-        potential_cache_dir = feed_dir / f"{video_date}_{video_id}"
-        if potential_cache_dir.exists() and (potential_cache_dir / "transcript.txt").exists():
-            logger.info(f"{log_prefix} TubeNews: Found cached transcript (cache safety check), re-running AI")
-            transcript_text = (potential_cache_dir / "transcript.txt").read_text(encoding="utf-8")
-            meeting_dir = potential_cache_dir
-            transcript_loaded_from_cache = True
-        else:
-            transcript_text = fetch_transcript(
-                video_id, supadata_client,
-                feed_name=channel_name, video_title=video_title,
-                transcript_rate_limit_event=transcript_rate_limit_event,
-                failure_reason=_transcript_failure_reason,
-                livestream_error=_livestream_error,
-            )
+        _livestream_error: list[bool] = []
+        transcript_text = fetch_transcript(
+            video_id, supadata_client,
+            feed_name=channel_name, video_title=video_title,
+            transcript_rate_limit_event=transcript_rate_limit_event,
+            failure_reason=_transcript_failure_reason,
+            livestream_error=_livestream_error,
+        )
         if transcript_text is False:
             # Supadata says no transcript exists. For recently published videos
             # (< 48 h) the captions may simply not be ready yet — live streams
@@ -1745,12 +1721,13 @@ def process_video(
             if not _validate_iso_date(video_date):
                 logger.error(f"{log_prefix} Invalid video_date '{video_date}' — skipping")
                 return "skipped", 0
-            meeting_dir = feed_dir / f"{video_date}_{video_id}"
+            meeting_dir = feed_dir / video_id
             meeting_dir.mkdir(exist_ok=True)
             skip_reason = _transcript_failure_reason[0] if _transcript_failure_reason else "no_captions"
             metadata: MetadataDict = {
                 "video_id": video_id,
                 "video_title": video_title,
+                "video_date": video_date,
                 "status": "no_transcript_available",
                 "skip_reason": skip_reason,
                 "processed_at": now_utc_iso(),
@@ -1760,7 +1737,7 @@ def process_video(
             return "skipped", 0
         elif not transcript_text:
             # Transient failure — quota exhausted, livestream, or network error.
-            if _livestream_error.is_set():
+            if _livestream_error and _livestream_error[0]:
                 # Video is a livestream currently broadcasting.
                 # Re-queue with delayed queued_at so it retries after stream ends.
                 # Calculate retry time: use scheduled_start if available, else now + 1 hour.
@@ -1793,11 +1770,9 @@ def process_video(
         if not _validate_iso_date(video_date):
             logger.error(f"{channel_name}: [{video_id}] Invalid video_date '{video_date}' — skipping")
             return "skipped", 0
-        meeting_dir = feed_dir / f"{video_date}_{video_id}"
+        meeting_dir = feed_dir / video_id
         meeting_dir.mkdir(exist_ok=True)
-        # Only write transcript if it was freshly fetched (not loaded from cache)
-        if not transcript_loaded_from_cache:
-            (meeting_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
+        (meeting_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
 
     # --- Generate news stories via Gemini ---
     if ai_disabled:
@@ -1809,7 +1784,6 @@ def process_video(
     # via _gemini_rate_lock — no per-loop delay needed here.
     seen_titles: dict[str, int] = {}
     all_stories: list = []
-    gemini_transient_error = False
     for focus, user_ids in focuses:
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
@@ -1826,12 +1800,7 @@ def process_video(
         )
         if result is False:
             return "ai_rate_limited", 0
-        if result is None:
-            # Transient error (network, HTTP 5xx, timeout). Mark as such and
-            # skip writing metadata so the video is retried on next run.
-            gemini_transient_error = True
-            break  # Stop trying other focuses; fail fast on transient error
-        for story in result:  # result is now guaranteed to be a list (empty or not)
+        for story in (result or []):
             title = story.get("title", "")
             if title in seen_titles:
                 # Merge user_ids: unrestricted (feed-level) always wins
@@ -1846,16 +1815,12 @@ def process_video(
                 seen_titles[title] = len(all_stories)
                 all_stories.append(story)
 
-    # If Gemini hit a transient error, skip metadata write to allow retry.
-    if gemini_transient_error:
-        logger.info(f"{log_prefix} Gemini: Transient error — will retry later")
-        return "skipped", 0
-
     if all_stories:
-        write_story_files(all_stories, meeting_dir, video_id, video_date=video_date)
+        write_story_files(all_stories, meeting_dir, video_id)
         metadata = {
             "video_id": video_id,
             "video_title": video_title,
+            "video_date": video_date,
             "status": "processed",
             "processed_at": now_utc_iso(),
             "processed_focuses": sorted(f for f, _ in focuses),
@@ -1865,10 +1830,11 @@ def process_video(
         logger.info(f"{log_prefix} Done — {n} stor{'y' if n == 1 else 'ies'} written")
         return "content_written", n
 
-    # Gemini returned no stories for any focus (success but no matches).
+    # Gemini returned no stories for any focus.
     metadata = {
         "video_id": video_id,
         "video_title": video_title,
+        "video_date": video_date,
         "status": "no_stories",
         "processed_at": now_utc_iso(),
         "processed_focuses": sorted(f for f, _ in focuses),
@@ -2028,10 +1994,11 @@ def process_feed(
         # ignored_too_old so the first run doesn't process months of
         # old meetings.
         if is_new_feed and all_ids.index(video_info["id"]) > 0:
-            stub_dir = feed_dir / f"2000-01-01_{video_info['id']}"
+            stub_dir = feed_dir / video_info['id']
             stub_dir.mkdir(exist_ok=True)
             (stub_dir / "metadata.json").write_text(json.dumps({
                 "video_id": video_info["id"],
+                "video_date": "2000-01-01",
                 "status": "ignored_too_old",
                 "processed_at": now_utc_iso(),
             }))
@@ -2427,17 +2394,18 @@ def _write_no_transcript_metadata(
     Args:
         video_id: YouTube video ID.
         feed_dir: Channel content directory (``STORAGE_ROOT / slugify(channel_name)``).
-        video_date: Video date in ``YYYY-MM-DD`` format (used as meeting dir prefix).
+        video_date: Video date in ``YYYY-MM-DD`` format (stored in metadata).
         video_title: Video title (stored in metadata for human reference).
         skip_reason: Reason code — ``"no_captions"``, ``"members_only_or_restricted"``,
             or ``"video_not_found"``.
         channel_name: Channel name for log prefix.
     """
-    meeting_dir = feed_dir / f"{video_date}_{video_id}"
+    meeting_dir = feed_dir / video_id
     meeting_dir.mkdir(parents=True, exist_ok=True)
     metadata: MetadataDict = {
         "video_id": video_id,
         "video_title": video_title,
+        "video_date": video_date,
         "status": "no_transcript_available",
         "skip_reason": skip_reason,
         "processed_at": now_utc_iso(),
@@ -2487,9 +2455,8 @@ def _wsb_try_fetch_transcript(
         ``"quota_exhausted"``— Supadata credit quota is exhausted this session.
     """
     video_id = entry.get("video_id", "")
-    date_prefix = (entry.get("date") or "")[:10]
     feed_dir = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
-    meeting_dir = feed_dir / f"{date_prefix}_{video_id}"
+    meeting_dir = feed_dir / video_id
 
     if (meeting_dir / "transcript.txt").exists():
         return "cached"
@@ -2497,7 +2464,7 @@ def _wsb_try_fetch_transcript(
     meeting_dir.mkdir(parents=True, exist_ok=True)
 
     failure_reason: list[str] = []
-    livestream_error: threading.Event = threading.Event()
+    livestream_error: list[bool] = [False]
     result = fetch_transcript(
         video_id,
         supadata_client,
@@ -2511,7 +2478,7 @@ def _wsb_try_fetch_transcript(
     if result is None:
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
             return "quota_exhausted"
-        if livestream_error.is_set():
+        if livestream_error[0]:
             return "livestream"
         return "transient"
 
@@ -2578,19 +2545,23 @@ def _recover_orphaned_videos() -> int:
                 continue
             if (meeting_dir / "metadata.json").exists():
                 continue
-            # Directory name format: YYYY-MM-DD_videoId
-            name = meeting_dir.name
-            parts = name.split("_", 1)
-            if len(parts) != 2:
-                continue
-            video_id = parts[1]
+            # Directory name is now just the video_id
+            video_id = meeting_dir.name
             if not video_id or video_id in already_queued:
                 continue
+            # Try to get date from metadata if present, else empty string
+            vid_date = ""
+            meta_path = meeting_dir / "metadata.json"
+            if meta_path.exists():
+                try:
+                    vid_date = json.loads(meta_path.read_text()).get("video_date", "")
+                except Exception:
+                    pass
             new_entries.append({
                 "video_id":          video_id,
                 "channel_id":        channel_id,
                 "title":             "",
-                "date":              parts[0],
+                "date":              vid_date,
                 "queued_at":         None,
                 "next_try_at":       None,  # immediately ripe
                 "transcript_attempts": 0,
@@ -2639,7 +2610,6 @@ def _wsb_receiver_thread(config: dict) -> None:
     secret = config.get("websub_secret", "").encode()
     channels = _read_channels()
     known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
-    channel_name_map = {ch["channel_id"]: ch["channel_name"] for ch in channels}
 
     queue_dir = STATE_ROOT / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
@@ -2699,7 +2669,8 @@ def _wsb_receiver_thread(config: dict) -> None:
                 sched_el = entry.find("yt:scheduledStartTime", _YT_NS)
                 if vid_el is not None and ch_el is not None:
                     pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
-                    pub_date = pub_raw  # full ISO 8601 timestamp
+                    # Normalize date to YYYY-MM-DD format (truncate full ISO timestamp)
+                    pub_date = pub_raw.split("T")[0] if pub_raw else ""
                     sched_start = (sched_el.text or "").strip() if sched_el is not None else None
                     # Preserve complete entry for future metadata extraction
                     raw_entry = ET.tostring(entry, encoding='unicode')
@@ -2733,9 +2704,8 @@ def _wsb_receiver_thread(config: dict) -> None:
                             tmp = queue_path.with_suffix(".tmp")
                             tmp.write_text(json.dumps(updated, indent=2))
                             tmp.replace(queue_path)
-                            for ne in new_entries:
-                                ch_name = channel_name_map.get(ne["channel_id"], ne["channel_id"])
-                                logger.info(f"WebSub: {ch_name}: queued \"{ne['title']}\" ({ne['video_id']})")
+                            ids = ", ".join(e["video_id"] for e in new_entries)
+                            logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
                         except Exception as exc:
                             logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
                 except Exception as exc:
@@ -2904,28 +2874,6 @@ def _wsb_processor_thread(config: dict) -> None:
                 if not _needs_processing(vid, feed_dir):
                     resolved_ids.add(vid)
                     continue
-
-                # If this is a scheduled livestream/premier that hasn't started yet,
-                # defer without calling Supadata — the retry window must start after
-                # the broadcast ends, not from the moment YouTube announced it.
-                scheduled_start_str = entry.get("scheduled_start")
-                if scheduled_start_str:
-                    try:
-                        sched_dt = datetime.fromisoformat(
-                            scheduled_start_str.replace("Z", "+00:00")
-                        )
-                        if sched_dt > datetime.now(timezone.utc):
-                            next_try_at = (
-                                sched_dt + timedelta(hours=1)
-                            ).isoformat(timespec="seconds").replace("+00:00", "Z")
-                            retry_updates.append({**entry, "next_try_at": next_try_at})
-                            logger.info(
-                                f"WebSub processor: [{vid}] scheduled for "
-                                f"{scheduled_start_str} — deferring until {next_try_at}"
-                            )
-                            continue
-                    except (ValueError, TypeError):
-                        pass  # Malformed scheduled_start — fall through to normal handling
 
                 # Try to obtain the transcript (returns immediately if cached).
                 fetch_result = _wsb_try_fetch_transcript(

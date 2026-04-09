@@ -120,17 +120,16 @@ def catchup() -> None:
         new_count = 0
         for v_id in found_ids:
             # Skip if any directory for this video already exists.
-            if any(d.name.endswith(v_id) for d in feed_dir.iterdir() if d.is_dir()):
+            if any(d.name == v_id for d in feed_dir.iterdir() if d.is_dir()):
                 continue
 
-            # Write a stub with a year-2000 date prefix so these directories
-            # sort visually apart from real meetings (real ones use the actual
-            # publication date, e.g. 2026-03-14_...).
-            stub_dir = feed_dir / f"2000-01-01_{v_id}"
+            # Write a stub marking this video as ignored from the catchup period.
+            stub_dir = feed_dir / v_id
             stub_dir.mkdir(exist_ok=True)
             meta = {
                 "video_id": v_id,
                 "video_title": "Backlog Catchup",
+                "video_date": "2000-01-01",
                 "status": "ignored_too_old",
                 "processed_at": 0,
             }
