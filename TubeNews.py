@@ -320,6 +320,7 @@ class MetadataDict(TypedDict, total=False):
     """
     video_id: str
     video_title: str
+    video_date: str
     status: str
     processed_at: float
     processed_focuses: list[str]
@@ -1008,7 +1009,6 @@ def write_story_files(
     meeting_dir: Path,
     video_id: str = "",
     *,
-    video_date: str = "",
     clear_existing: bool = True,
     start_index: int = 1,
 ) -> None:
@@ -1097,9 +1097,21 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
         rel="alternate",
     )
 
-    meeting_dirs = sorted(
-        [d for d in feed_dir.iterdir() if d.is_dir()], reverse=True
-    )
+    meeting_dirs = [d for d in feed_dir.iterdir() if d.is_dir()]
+
+    # Sort by video_date from metadata (newest first)
+    def get_sort_key(meeting_dir: Path) -> str:
+        metadata_path = meeting_dir / "metadata.json"
+        if not metadata_path.exists():
+            return ""
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            return metadata.get("video_date", "")
+        except Exception:
+            return ""
+
+    meeting_dirs = sorted(meeting_dirs, key=get_sort_key, reverse=True)
+
     for meeting_dir in meeting_dirs:
         metadata_path = meeting_dir / "metadata.json"
         if not metadata_path.exists():
@@ -1511,7 +1523,7 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     to newly discovered videos going forward.
     """
     return not any(
-        d.name.endswith(video_id)
+        d.name == video_id
         for d in feed_dir.iterdir()
         if d.is_dir() and (d / "metadata.json").exists()
     )
@@ -1644,7 +1656,7 @@ def process_video(
 
     # Locate any pre-existing archive folder for this video ID.
     existing_dir = next(
-        (d for d in feed_dir.iterdir() if d.is_dir() and d.name.endswith(video_id)),
+        (d for d in feed_dir.iterdir() if d.is_dir() and d.name == video_id),
         None,
     )
 
@@ -1658,7 +1670,6 @@ def process_video(
         # Re-use cached transcript; only the AI step needs to re-run.
         logger.info(f"{log_prefix} TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
-        video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
     else:
         # If quota was already known exhausted, don't attempt the API call.
@@ -1668,11 +1679,12 @@ def process_video(
         logger.info(f"{log_prefix} TubeNews: Processing new video{counter}")
         if _is_youtube_short(video_id, feed_name=channel_name):
             logger.info(f"{log_prefix} TubeNews: YouTube Short — skipping permanently")
-            short_dir = feed_dir / f"{video_date}_{video_id}"
+            short_dir = feed_dir / video_id
             short_dir.mkdir(exist_ok=True)
             (short_dir / "metadata.json").write_text(json.dumps({
                 "video_id": video_id,
                 "video_title": video_title,
+                "video_date": video_date,
                 "status": "ignored_short",
                 "processed_at": now_utc_iso(),
             }))
@@ -1709,12 +1721,13 @@ def process_video(
             if not _validate_iso_date(video_date):
                 logger.error(f"{log_prefix} Invalid video_date '{video_date}' — skipping")
                 return "skipped", 0
-            meeting_dir = feed_dir / f"{video_date}_{video_id}"
+            meeting_dir = feed_dir / video_id
             meeting_dir.mkdir(exist_ok=True)
             skip_reason = _transcript_failure_reason[0] if _transcript_failure_reason else "no_captions"
             metadata: MetadataDict = {
                 "video_id": video_id,
                 "video_title": video_title,
+                "video_date": video_date,
                 "status": "no_transcript_available",
                 "skip_reason": skip_reason,
                 "processed_at": now_utc_iso(),
@@ -1757,7 +1770,7 @@ def process_video(
         if not _validate_iso_date(video_date):
             logger.error(f"{channel_name}: [{video_id}] Invalid video_date '{video_date}' — skipping")
             return "skipped", 0
-        meeting_dir = feed_dir / f"{video_date}_{video_id}"
+        meeting_dir = feed_dir / video_id
         meeting_dir.mkdir(exist_ok=True)
         (meeting_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
 
@@ -1803,10 +1816,11 @@ def process_video(
                 all_stories.append(story)
 
     if all_stories:
-        write_story_files(all_stories, meeting_dir, video_id, video_date=video_date)
+        write_story_files(all_stories, meeting_dir, video_id)
         metadata = {
             "video_id": video_id,
             "video_title": video_title,
+            "video_date": video_date,
             "status": "processed",
             "processed_at": now_utc_iso(),
             "processed_focuses": sorted(f for f, _ in focuses),
@@ -1820,6 +1834,7 @@ def process_video(
     metadata = {
         "video_id": video_id,
         "video_title": video_title,
+        "video_date": video_date,
         "status": "no_stories",
         "processed_at": now_utc_iso(),
         "processed_focuses": sorted(f for f, _ in focuses),
@@ -1979,10 +1994,11 @@ def process_feed(
         # ignored_too_old so the first run doesn't process months of
         # old meetings.
         if is_new_feed and all_ids.index(video_info["id"]) > 0:
-            stub_dir = feed_dir / f"2000-01-01_{video_info['id']}"
+            stub_dir = feed_dir / video_info['id']
             stub_dir.mkdir(exist_ok=True)
             (stub_dir / "metadata.json").write_text(json.dumps({
                 "video_id": video_info["id"],
+                "video_date": "2000-01-01",
                 "status": "ignored_too_old",
                 "processed_at": now_utc_iso(),
             }))
@@ -2378,17 +2394,18 @@ def _write_no_transcript_metadata(
     Args:
         video_id: YouTube video ID.
         feed_dir: Channel content directory (``STORAGE_ROOT / slugify(channel_name)``).
-        video_date: Video date in ``YYYY-MM-DD`` format (used as meeting dir prefix).
+        video_date: Video date in ``YYYY-MM-DD`` format (stored in metadata).
         video_title: Video title (stored in metadata for human reference).
         skip_reason: Reason code — ``"no_captions"``, ``"members_only_or_restricted"``,
             or ``"video_not_found"``.
         channel_name: Channel name for log prefix.
     """
-    meeting_dir = feed_dir / f"{video_date}_{video_id}"
+    meeting_dir = feed_dir / video_id
     meeting_dir.mkdir(parents=True, exist_ok=True)
     metadata: MetadataDict = {
         "video_id": video_id,
         "video_title": video_title,
+        "video_date": video_date,
         "status": "no_transcript_available",
         "skip_reason": skip_reason,
         "processed_at": now_utc_iso(),
@@ -2438,9 +2455,8 @@ def _wsb_try_fetch_transcript(
         ``"quota_exhausted"``— Supadata credit quota is exhausted this session.
     """
     video_id = entry.get("video_id", "")
-    date_prefix = (entry.get("date") or "")[:10]
     feed_dir = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
-    meeting_dir = feed_dir / f"{date_prefix}_{video_id}"
+    meeting_dir = feed_dir / video_id
 
     if (meeting_dir / "transcript.txt").exists():
         return "cached"
@@ -2529,19 +2545,23 @@ def _recover_orphaned_videos() -> int:
                 continue
             if (meeting_dir / "metadata.json").exists():
                 continue
-            # Directory name format: YYYY-MM-DD_videoId
-            name = meeting_dir.name
-            parts = name.split("_", 1)
-            if len(parts) != 2:
-                continue
-            video_id = parts[1]
+            # Directory name is now just the video_id
+            video_id = meeting_dir.name
             if not video_id or video_id in already_queued:
                 continue
+            # Try to get date from metadata if present, else empty string
+            vid_date = ""
+            meta_path = meeting_dir / "metadata.json"
+            if meta_path.exists():
+                try:
+                    vid_date = json.loads(meta_path.read_text()).get("video_date", "")
+                except Exception:
+                    pass
             new_entries.append({
                 "video_id":          video_id,
                 "channel_id":        channel_id,
                 "title":             "",
-                "date":              parts[0],
+                "date":              vid_date,
                 "queued_at":         None,
                 "next_try_at":       None,  # immediately ripe
                 "transcript_attempts": 0,
@@ -2649,7 +2669,8 @@ def _wsb_receiver_thread(config: dict) -> None:
                 sched_el = entry.find("yt:scheduledStartTime", _YT_NS)
                 if vid_el is not None and ch_el is not None:
                     pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
-                    pub_date = pub_raw  # full ISO 8601 timestamp
+                    # Normalize date to YYYY-MM-DD format (truncate full ISO timestamp)
+                    pub_date = pub_raw.split("T")[0] if pub_raw else ""
                     sched_start = (sched_el.text or "").strip() if sched_el is not None else None
                     # Preserve complete entry for future metadata extraction
                     raw_entry = ET.tostring(entry, encoding='unicode')

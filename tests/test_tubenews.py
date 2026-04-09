@@ -205,13 +205,14 @@ def _write_story(meeting_dir: Path, filename: str, title: str, dateline: str,
     return path
 
 
-def _make_meeting(feed_dir: Path, date_prefix: str, video_id: str,
-                  title: str, status: str = "processed") -> Path:
-    meeting_dir = feed_dir / f"{date_prefix}_{video_id}"
+def _make_meeting(feed_dir: Path, video_id: str, title: str,
+                  video_date: str = "2026-01-01", status: str = "processed") -> Path:
+    meeting_dir = feed_dir / video_id
     meeting_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "video_id": video_id,
         "video_title": title,
+        "video_date": video_date,
         "status": status,
         "processed_at": now_utc_iso(),
     }
@@ -226,15 +227,15 @@ def channel_feed(tmp_path):
     feed_dir.mkdir()
 
     # Processed meeting with two stories.
-    m1 = _make_meeting(feed_dir, "2026-01-15", "VALID1234567", "Channel Meeting Jan 15")
+    m1 = _make_meeting(feed_dir, "VALID1234567", "Channel Meeting Jan 15", video_date="2026-01-15")
     _write_story(m1, "01_Housing.md", "New Housing Plan Approved",
                  "TESTVILLE, Calif. — January 15, 2026", "Approved 50 units.", 120)
     _write_story(m1, "02_Budget.md", "Budget Amendment Passes",
                  "TESTVILLE, Calif. — January 15, 2026", "A $500k amendment passed.", 300)
 
     # Ignored (too old) meeting — stories must NOT appear in the feed.
-    m2 = _make_meeting(feed_dir, "2000-01-01", "OLD01234567", "Old Meeting",
-                       status="ignored_too_old")
+    m2 = _make_meeting(feed_dir, "OLD01234567", "Old Meeting",
+                       video_date="2000-01-01", status="ignored_too_old")
     _write_story(m2, "01_Old.md", "Should Not Appear",
                  "TESTVILLE, Calif. — January 1, 2000", "Old content.", 0)
 
@@ -297,7 +298,7 @@ def multi_channel_archive(tmp_path, monkeypatch):
         ("beta_channel",  "BETA2345678", "2026-01-20"),
     ]:
         feed_dir = tmp_path / channel_slug
-        m = _make_meeting(feed_dir, date, vid, f"{channel_slug} meeting")
+        m = _make_meeting(feed_dir, vid, f"{channel_slug} meeting", video_date=date)
         _write_story(m, "01_Story.md", f"Story from {channel_slug}",
                      "CITY, Calif. — February 1, 2026", "Content here.", 90)
 
@@ -518,14 +519,14 @@ def test_new_feed_marks_older_videos_ignored_too_old(tmp_path, monkeypatch):
     channel_dir = tmp_path / "Test_Channel"
     # All videos except index 0 must have ignored_too_old stubs.
     for vid_id in ("VID_OLDER_2", "VID_OLDEST_3"):
-        stub_dir = channel_dir / f"2000-01-01_{vid_id}"
+        stub_dir = channel_dir / vid_id
         assert stub_dir.is_dir(), f"Expected ignored_too_old stub for {vid_id}"
         meta = json.loads((stub_dir / "metadata.json").read_text())
         assert meta["status"] == "ignored_too_old"
         assert meta["video_id"] == vid_id
 
     # The most-recent video must NOT receive a too-old stub.
-    assert not (channel_dir / "2000-01-01_VID_NEWEST_1").exists()
+    assert not (channel_dir / "VID_NEWEST_1").exists()
 
 
 def test_new_feed_ignored_stubs_are_idempotent(tmp_path, monkeypatch):
@@ -546,7 +547,7 @@ def test_new_feed_ignored_stubs_are_idempotent(tmp_path, monkeypatch):
     process_feed(feed, None, {}, None)
     process_feed(feed, None, {}, None)  # must not raise
 
-    assert (tmp_path / "Test_Channel" / "2000-01-01_VID_OLDER_2").is_dir()
+    assert (tmp_path / "Test_Channel" / "VID_OLDER_2").is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +558,7 @@ def _setup_channel(archive_root: Path, channel_slug: str, channel_id: str,
                    channel_name: str, story_count: int = 1) -> Path:
     """Create a channel directory with channel.json, a meeting, and stories."""
     channel_dir = archive_root / channel_slug
-    meeting_dir = _make_meeting(channel_dir, "2026-02-01", f"VID{channel_slug[:8].upper()}", f"{channel_name} Meeting")
+    meeting_dir = _make_meeting(channel_dir, f"VID{channel_slug[:8].upper()}", f"{channel_name} Meeting", video_date="2026-02-01")
     for i in range(story_count):
         _write_story(
             meeting_dir, f"0{i+1}_Story.md",
@@ -641,10 +642,11 @@ def test_rebuild_user_feed_page_includes_old_stories(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "old_channel"
-    meeting_dir = _make_meeting(channel_dir, "2020-01-01", "VIDold12345", "Old Meeting")
+    meeting_dir = _make_meeting(channel_dir, "VIDold12345", "Old Meeting", video_date="2020-01-01")
     old_meta = {
         "video_id": "VIDold12345",
         "video_title": "Old Meeting",
+        "video_date": "2020-01-01",
         "status": "processed",
         "processed_at": unix_to_iso8601(time.time() - (200 * 86400)),  # 200 days ago
     }
@@ -761,10 +763,10 @@ def test_build_user_feed_xml_skips_ignored_too_old(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "test_ch"
-    m_ignored = _make_meeting(channel_dir, "2000-01-01", "OLDVID12345", "Old Meeting",
-                              status="ignored_too_old")
+    m_ignored = _make_meeting(channel_dir, "OLDVID12345", "Old Meeting",
+                              video_date="2000-01-01", status="ignored_too_old")
     _write_story(m_ignored, "01_Old.md", "Ghost Story", "CITY — Jan 1, 2000", "Old.", 0)
-    m_recent = _make_meeting(channel_dir, "2026-01-01", "NEWVID12345", "Recent Meeting")
+    m_recent = _make_meeting(channel_dir, "NEWVID12345", "Recent Meeting", video_date="2026-01-01")
     _write_story(m_recent, "01_New.md", "New Story", "CITY — Jan 1, 2026", "New.", 60)
     (channel_dir / "channel.json").write_text(
         json.dumps({"channel_id": "UC_TEST_ID", "channel_name": "Test Channel"})
@@ -1418,21 +1420,21 @@ def test_needs_processing_no_dir(tmp_path):
 
 def test_needs_processing_no_metadata(tmp_path):
     """Dir exists with transcript but no metadata → recovery path."""
-    d = tmp_path / "2026-01-01_VID123"
+    d = tmp_path / "VID123"
     d.mkdir()
     (d / "transcript.txt").write_text("transcript")
     assert _needs_processing("VID123", tmp_path) is True
 
 def test_needs_processing_ignored_too_old(tmp_path):
     """ignored_too_old status → never reprocess."""
-    d = tmp_path / "2000-01-01_VID123"
+    d = tmp_path / "VID123"
     d.mkdir()
     (d / "metadata.json").write_text(json.dumps({"status": "ignored_too_old"}))
     assert _needs_processing("VID123", tmp_path) is False
 
 def test_needs_processing_metadata_exists(tmp_path):
     """Any metadata.json present → skip (the past is past)."""
-    d = tmp_path / "2026-01-01_VID123"
+    d = tmp_path / "VID123"
     d.mkdir()
     (d / "metadata.json").write_text(json.dumps({"status": "processed", "video_id": "VID123"}))
     assert _needs_processing("VID123", tmp_path) is False
@@ -1675,11 +1677,11 @@ def test_process_feed_gemini_no_stories_writes_no_stories_metadata(tmp_path, mon
 def test_rebuild_feed_skips_corrupt_story_file(tmp_path):
     """rebuild_feed must produce a valid feed even when a story .md file is corrupt."""
     feed_dir = tmp_path / "Test_Channel"
-    meeting_dir = _make_meeting(feed_dir, "2026-03-01", "VID_GOOD_001", "Good Meeting")
+    meeting_dir = _make_meeting(feed_dir, "VID_GOOD_001", "Good Meeting", video_date="2026-03-01")
     _write_story(meeting_dir, "01_Good_Story.md", "Good Story", "CITY — Mar 1, 2026", "Body.", 60)
 
     # Second meeting with a corrupt story file (binary garbage)
-    meeting_dir2 = _make_meeting(feed_dir, "2026-03-02", "VID_CORRUPT_002", "Bad Meeting")
+    meeting_dir2 = _make_meeting(feed_dir, "VID_CORRUPT_002", "Bad Meeting", video_date="2026-03-02")
     (meeting_dir2 / "01_Corrupt.md").write_bytes(b"\xff\xfe corrupt \x00\x01")
 
     feed_cfg = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
@@ -1696,11 +1698,11 @@ def test_rebuild_aggregate_feed_skips_corrupt_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     # Good channel
-    good_dir = _make_meeting(tmp_path / "good_channel", "2026-03-01", "VID_GOOD", "Good Meeting")
+    good_dir = _make_meeting(tmp_path / "good_channel", "VID_GOOD", "Good Meeting", video_date="2026-03-01")
     _write_story(good_dir, "01_Story.md", "Good Story", "CITY — Mar 1, 2026", "Body.", 60)
 
     # Channel with corrupt metadata.json
-    bad_meeting = tmp_path / "bad_channel" / "2026-03-01_VID_BAD"
+    bad_meeting = tmp_path / "bad_channel" / "VID_BAD"
     bad_meeting.mkdir(parents=True)
     (bad_meeting / "metadata.json").write_bytes(b"}{not valid json}")
 
@@ -1717,15 +1719,15 @@ def test_rebuild_aggregate_feed_mixed_processed_at_types(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     # Channel A — legacy float processed_at
-    dir_a = _make_meeting(tmp_path / "chan_a", "2026-01-01", "VID_A", "Meeting A")
+    dir_a = _make_meeting(tmp_path / "chan_a", "VID_A", "Meeting A", video_date="2026-01-01")
     (dir_a / "metadata.json").write_text(json.dumps({
-        "video_id": "VID_A", "video_title": "Meeting A",
+        "video_id": "VID_A", "video_title": "Meeting A", "video_date": "2026-01-01",
         "status": "processed", "processed_at": 1712534400.0,  # Unix float
     }))
     _write_story(dir_a, "01_Story_A.md", "Story A", "CITY — Jan 1, 2026", "Body A.", 10)
 
     # Channel B — ISO 8601 string processed_at
-    dir_b = _make_meeting(tmp_path / "chan_b", "2026-02-01", "VID_B", "Meeting B")
+    dir_b = _make_meeting(tmp_path / "chan_b", "VID_B", "Meeting B", video_date="2026-02-01")
     _write_story(dir_b, "01_Story_B.md", "Story B", "CITY — Feb 1, 2026", "Body B.", 20)
 
     rebuild_aggregate_feed()  # must not raise TypeError
@@ -1740,16 +1742,16 @@ def test_rebuild_feed_mixed_processed_at_types(tmp_path):
     feed_dir = tmp_path / "Test_Channel"
 
     # Meeting with legacy float processed_at
-    dir_old = feed_dir / "2026-01-01_VID_OLD"
+    dir_old = feed_dir / "VID_OLD"
     dir_old.mkdir(parents=True)
     (dir_old / "metadata.json").write_text(json.dumps({
-        "video_id": "VID_OLD", "video_title": "Old Meeting",
+        "video_id": "VID_OLD", "video_title": "Old Meeting", "video_date": "2026-01-01",
         "status": "processed", "processed_at": 1712534400.0,
     }))
     _write_story(dir_old, "01_Old.md", "Old Story", "CITY — Jan 1, 2026", "Body.", 10)
 
     # Meeting with ISO 8601 string processed_at
-    dir_new = _make_meeting(feed_dir, "2026-02-01", "VID_NEW", "New Meeting")
+    dir_new = _make_meeting(feed_dir, "VID_NEW", "New Meeting", video_date="2026-02-01")
     _write_story(dir_new, "01_New.md", "New Story", "CITY — Feb 1, 2026", "Body.", 20)
 
     feed_cfg = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": ""}
@@ -1773,10 +1775,10 @@ def test_build_user_feed_xml_skips_corrupt_channel_json(tmp_path, monkeypatch):
     bad_dir = tmp_path / "bad_channel"
     bad_dir.mkdir()
     (bad_dir / "channel.json").write_bytes(b"}{not valid json}")
-    meeting = bad_dir / "2026-03-01_VID_BAD"
+    meeting = bad_dir / "VID_BAD"
     meeting.mkdir()
     (meeting / "metadata.json").write_text(json.dumps({
-        "video_id": "VID_BAD", "video_title": "Bad", "status": "processed",
+        "video_id": "VID_BAD", "video_title": "Bad", "video_date": "2026-03-01", "status": "processed",
         "processed_at": now_utc_iso(),
     }))
     _write_story(meeting, "01_Bad.md", "Bad Story", "CITY — Mar 1, 2026", "Body.", 60)
@@ -2083,7 +2085,7 @@ def test_process_video_short_check_not_called_for_cached_transcript(tmp_path, mo
     feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
     feed_dir = tmp_path / "test_channel"
     # Pre-create a meeting dir with a transcript (simulates partial previous run).
-    meeting_dir = feed_dir / "2026-03-01_VID_CACHED"
+    meeting_dir = feed_dir / "VID_CACHED"
     meeting_dir.mkdir(parents=True)
     (meeting_dir / "transcript.txt").write_text("0s --> Some content")
 
@@ -2744,8 +2746,11 @@ def test_recover_orphaned_videos_queues_dirs_without_metadata(tmp_path, monkeypa
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = _make_channel_dir(tmp_path, "MyChannel", "UC123")
-    orphan = channel_dir / "2026-01-15_abcDEFGhijk"
+    orphan = channel_dir / "abcDEFGhijk"
     orphan.mkdir()
+    # Don't write metadata.json - that's what makes it orphaned
+    # Also write a transcript.txt to simulate a partially completed run
+    (orphan / "transcript.txt").write_text("0s --> Some content")
 
     count = _recover_orphaned_videos()
     assert count == 1
@@ -2754,7 +2759,7 @@ def test_recover_orphaned_videos_queues_dirs_without_metadata(tmp_path, monkeypa
     assert len(queue) == 1
     assert queue[0]["video_id"] == "abcDEFGhijk"
     assert queue[0]["channel_id"] == "UC123"
-    assert queue[0]["date"] == "2026-01-15"
+    assert queue[0]["date"] == ""  # no metadata, so date is empty
     assert queue[0]["queued_at"] is None      # immediately ripe
     assert queue[0]["next_try_at"] is None    # immediately ripe (new field)
     assert queue[0]["transcript_attempts"] == 0  # fresh retry counter
@@ -2767,7 +2772,7 @@ def test_recover_orphaned_videos_skips_dirs_with_metadata(tmp_path, monkeypatch)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = _make_channel_dir(tmp_path, "MyChannel", "UC123")
-    done = channel_dir / "2026-01-14_videoXYZ"
+    done = channel_dir / "videoXYZ"
     done.mkdir()
     (done / "metadata.json").write_text(json.dumps({"status": "processed"}))
 
@@ -2783,8 +2788,10 @@ def test_recover_orphaned_videos_skips_already_queued(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
 
     channel_dir = _make_channel_dir(tmp_path, "MyChannel", "UC123")
-    orphan = channel_dir / "2026-01-15_alreadyQueued"
+    orphan = channel_dir / "alreadyQueued"
     orphan.mkdir()
+    # Write minimal metadata with video_date
+    (orphan / "metadata.json").write_text(json.dumps({"video_date": "2026-01-15"}))
 
     # Pre-populate queue with the same video
     queue_dir = tmp_path / "queue"
@@ -2810,8 +2817,10 @@ def test_recover_orphaned_videos_skips_no_channel_json(tmp_path, monkeypatch):
 
     channel_dir = tmp_path / "NoChannelJson"
     channel_dir.mkdir()
-    orphan = channel_dir / "2026-01-15_someVideoId"
+    orphan = channel_dir / "someVideoId"
     orphan.mkdir()
+    # Write minimal metadata with video_date
+    (orphan / "metadata.json").write_text(json.dumps({"video_date": "2026-01-15"}))
 
     count = _recover_orphaned_videos()
     assert count == 0
@@ -2825,16 +2834,19 @@ def test_recover_orphaned_videos_returns_count(tmp_path, monkeypatch):
 
     ch1 = _make_channel_dir(tmp_path, "ChanA", "UCA")
     ch2 = _make_channel_dir(tmp_path, "ChanB", "UCB")
-    (ch1 / "2026-01-15_vid1").mkdir()
-    (ch1 / "2026-01-16_vid2").mkdir()
-    (ch2 / "2026-01-17_vid3").mkdir()
+    (ch1 / "vid1").mkdir()
+    # vid1 has no metadata.json — orphaned
+    (ch1 / "vid2").mkdir()
+    (ch1 / "vid2" / "metadata.json").write_text(json.dumps({"video_date": "2026-01-16"}))
+    (ch2 / "vid3").mkdir()
+    # vid3 has no metadata.json — orphaned
     # One with metadata — should not count
-    done = ch2 / "2026-01-18_vid4"
+    done = ch2 / "vid4"
     done.mkdir()
     (done / "metadata.json").write_text("{}")
 
     count = _recover_orphaned_videos()
-    assert count == 3
+    assert count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -2925,11 +2937,12 @@ def test_write_no_transcript_metadata_creates_metadata_json(tmp_path):
     feed_dir = tmp_path / "MyChannel"
     feed_dir.mkdir()
     _write_no_transcript_metadata("vidABC", feed_dir, "2026-04-08", "My Video")
-    meta_path = feed_dir / "2026-04-08_vidABC" / "metadata.json"
+    meta_path = feed_dir / "vidABC" / "metadata.json"
     assert meta_path.exists()
     meta = json.loads(meta_path.read_text())
     assert meta["status"] == "no_transcript_available"
     assert meta["video_id"] == "vidABC"
+    assert meta["video_date"] == "2026-04-08"
     assert meta["skip_reason"] == "no_captions"
 
 
@@ -2938,8 +2951,9 @@ def test_write_no_transcript_metadata_custom_skip_reason(tmp_path):
     feed_dir = tmp_path / "Chan"
     feed_dir.mkdir()
     _write_no_transcript_metadata("vidXYZ", feed_dir, "2026-01-01", "Title", "members_only_or_restricted")
-    meta = json.loads((feed_dir / "2026-01-01_vidXYZ" / "metadata.json").read_text())
+    meta = json.loads((feed_dir / "vidXYZ" / "metadata.json").read_text())
     assert meta["skip_reason"] == "members_only_or_restricted"
+    assert meta["video_date"] == "2026-01-01"
 
 
 # ---------------------------------------------------------------------------
@@ -2952,7 +2966,7 @@ def test_wsb_try_fetch_transcript_returns_cached_when_transcript_exists(tmp_path
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
     channel_dir = tmp_path / "MyChan"
-    meeting_dir = channel_dir / "2026-04-08_vid123"
+    meeting_dir = channel_dir / "vid123"
     meeting_dir.mkdir(parents=True)
     (meeting_dir / "transcript.txt").write_text("transcript content")
 
@@ -2977,7 +2991,7 @@ def test_wsb_try_fetch_transcript_returns_success_and_writes_file(tmp_path, monk
 
     result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
     assert result == "success"
-    transcript_path = channel_dir / "2026-04-08_vid456" / "transcript.txt"
+    transcript_path = channel_dir / "vid456" / "transcript.txt"
     assert transcript_path.exists()
     assert transcript_path.read_text() == "0:00 --> Hello world"
 

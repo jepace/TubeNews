@@ -916,9 +916,9 @@ def serve_transcript(channel_slug, meeting_id):
             video_id = meta.get("video_id") or None
         except Exception:
             pass
-    # Fall back to extracting video_id from the directory name
-    if not video_id and "_" in meeting_id:
-        video_id = meeting_id.split("_", 1)[1]
+    # Fall back to using meeting_id as video_id (the directory name IS the video_id now)
+    if not video_id:
+        video_id = meeting_id
 
     # Read channel name from channel.json written by rebuild_feed
     channel_name = None
