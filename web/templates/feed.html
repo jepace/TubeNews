@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}{{ feed_name }}{% endblock %}
 {% block header_title %}{{ feed_name }}{% endblock %}
+{% block head_extra %}
+{% if channel_counts is defined and channel_counts and not channel_id %}
+<script>
+  /* Apply sidebar hidden state before first paint to avoid flash */
+  if (localStorage.getItem('tn_sidebar') === 'closed') {
+    document.documentElement.classList.add('sidebar-hidden');
+  }
+</script>
+{% endif %}
+{% endblock %}
 {% block header_left %}
 {% if channel_counts is defined and channel_counts and not channel_id %}
 <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle channel list" aria-expanded="false">&#9776;</button>
@@ -899,29 +909,42 @@
   var sb = document.getElementById('channel-sidebar');
   if (!btn || !sb) return;
 
-  function closeSidebar() {
-    sb.classList.remove('sidebar-open');
-    document.body.classList.remove('sidebar-backdrop');
-    btn.setAttribute('aria-expanded', 'false');
-  }
+  var STORAGE_KEY = 'tn_sidebar';
+  function isMobile() { return window.innerWidth <= 700; }
+
+  // Sync aria-expanded with actual state on load.
+  var initialHidden = document.documentElement.classList.contains('sidebar-hidden');
+  btn.setAttribute('aria-expanded', initialHidden ? 'false' : 'true');
 
   btn.addEventListener('click', function () {
-    var open = sb.classList.toggle('sidebar-open');
-    document.body.classList.toggle('sidebar-backdrop', open);
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
-
-  // Close sidebar when clicking a channel
-  sb.addEventListener('click', function (e) {
-    if (e.target.closest('.sidebar-channel')) {
-      closeSidebar();
+    if (isMobile()) {
+      // Mobile: ephemeral overlay toggle.
+      var open = sb.classList.toggle('sidebar-open');
+      document.body.classList.toggle('sidebar-backdrop', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    } else {
+      // Desktop: persistent inline toggle — save state to localStorage.
+      var hidden = document.documentElement.classList.toggle('sidebar-hidden');
+      localStorage.setItem(STORAGE_KEY, hidden ? 'closed' : 'open');
+      btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
     }
   });
 
-  // Close sidebar when clicking the backdrop (on body element)
+  // Mobile only: close overlay when clicking a channel or the backdrop.
+  sb.addEventListener('click', function (e) {
+    if (isMobile() && e.target.closest('.sidebar-channel')) {
+      sb.classList.remove('sidebar-open');
+      document.body.classList.remove('sidebar-backdrop');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
   document.body.addEventListener('click', function (e) {
-    if (sb.classList.contains('sidebar-open') && !sb.contains(e.target) && !btn.contains(e.target)) {
-      closeSidebar();
+    if (isMobile() && sb.classList.contains('sidebar-open') &&
+        !sb.contains(e.target) && !btn.contains(e.target)) {
+      sb.classList.remove('sidebar-open');
+      document.body.classList.remove('sidebar-backdrop');
+      btn.setAttribute('aria-expanded', 'false');
     }
   });
 })();

@@ -111,9 +111,10 @@ header {
   color: var(--accent);
 }
 
-/* Shared styling for header toggle buttons — display is handled separately */
+/* Shared styling for header toggle buttons */
 .header-left .sidebar-toggle,
 .header-right .nav-toggle {
+  display: inline-flex;
   align-items: center;
   background: none;
   border: none;
@@ -190,13 +191,6 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
     border-bottom: none;
     padding-right: 0;
     margin-right: 0;
-  }
-
-  .sidebar-toggle {
-    min-height: 2.75rem;
-    display: inline-flex;
-    align-items: center;
-    padding: 0.5rem 0.4rem;
   }
 
   .hs-tab {
@@ -300,9 +294,8 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
   }
 }
 
-/* Hamburger toggle — hidden on desktop */
+/* Admin nav toggle button */
 .nav-toggle {
-  display: none;
   background: none;
   border: none;
   font-size: 1.5rem;
@@ -313,10 +306,30 @@ mark { background: #ffe066; color: #222; border-radius: 2px; padding: 0 1px; }
   margin: 0;
 }
 
-nav {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
+/* Admin nav: always a dropdown, right-aligned */
+#main-nav {
+  display: none;
+  position: absolute;
+  top: 52px;
+  right: 0;
+  left: auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  padding: 0.75rem 1.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.9rem;
+  z-index: 199;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+  min-width: 140px;
+}
+
+#main-nav.nav-open { display: flex; }
+
+/* On mobile, nav spans full width */
+@media (max-width: 600px) {
+  #main-nav { left: 0; border-left: none; }
 }
 
 nav a {
@@ -326,30 +339,6 @@ nav a {
 }
 
 nav a:hover { text-decoration: underline; }
-
-/* Mobile nav: hamburger visible, nav hidden until toggled */
-@media (max-width: 600px) {
-  .nav-toggle { display: block; }
-
-  #main-nav {
-    display: none;
-    position: absolute;
-    top: 52px;
-    left: 0;
-    right: 0;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 0.75rem 1.5rem;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.9rem;
-    z-index: 199;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.08);
-  }
-
-  #main-nav.nav-open { display: flex; }
-
-}
 
 
 .nav-profile { display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -928,7 +917,11 @@ main:has(.feed-layout) {
   flex-shrink: 0;
 }
 
-.sidebar-toggle { display: none; }
+/* Persistent sidebar: hidden state (desktop only — mobile uses overlay) */
+@media (min-width: 701px) {
+  html.sidebar-hidden .channel-sidebar { display: none; }
+  html.sidebar-hidden .feed-page { margin-left: 0; }
+}
 
 @media (max-width: 700px) {
   .feed-layout { display: block; padding: 0 1rem; }
@@ -953,16 +946,7 @@ main:has(.feed-layout) {
 
   .channel-sidebar.sidebar-open { display: block; }
 
-  .sidebar-toggle {
-    display: inline-flex;
-    align-items: center;
-    background: none;
-    border: none;
-    font-size: 1rem;
-    cursor: pointer;
-    color: var(--text);
-    padding: 0 0.4rem;
-  }
+  /* No extra sidebar-toggle rules needed on mobile — global rule handles it */
 
   /* Backdrop for sidebar popover */
   body.sidebar-backdrop::before {
