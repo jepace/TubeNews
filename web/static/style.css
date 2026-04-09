@@ -124,6 +124,10 @@ header {
   padding: 0 0.4rem;
 }
 
+/* Panel icon flips to indicate collapsed state */
+.panel-icon { transition: transform 0.15s; }
+html.sidebar-hidden .panel-icon { transform: scaleX(-1); }
+
 /* Optional sticky sub-header row (populated per-page via Jinja block) */
 .header-sub {
   position: sticky;
