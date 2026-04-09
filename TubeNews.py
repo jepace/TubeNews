@@ -2621,6 +2621,7 @@ def _wsb_receiver_thread(config: dict) -> None:
     secret = config.get("websub_secret", "").encode()
     channels = _read_channels()
     known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
+    channel_by_id = {ch["channel_id"]: ch["channel_name"] for ch in channels}
 
     queue_dir = STATE_ROOT / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
@@ -2648,7 +2649,9 @@ def _wsb_receiver_thread(config: dict) -> None:
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(challenge.encode())
-            logger.info(f"WebSub: verified subscription for channel {known_topics[topic]}")
+            channel_id = known_topics[topic]
+            channel_name = channel_by_id.get(channel_id, "?")
+            logger.info(f"WebSub: verified subscription for {channel_name} ({channel_id})")
 
         def do_POST(self):
             length = int(self.headers.get("Content-Length", 0))
@@ -2715,8 +2718,14 @@ def _wsb_receiver_thread(config: dict) -> None:
                             tmp = queue_path.with_suffix(".tmp")
                             tmp.write_text(json.dumps(updated, indent=2))
                             tmp.replace(queue_path)
-                            ids = ", ".join(e["video_id"] for e in new_entries)
-                            logger.info(f"WebSub: queued {len(new_entries)} video(s): {ids}")
+                            # Log with channel name and video titles for clarity
+                            video_strs = [
+                                f"{e.get('title', '?')} ({e['video_id']})"
+                                for e in new_entries
+                            ]
+                            ch_id = new_entries[0].get("channel_id", "?")
+                            ch_name = channel_by_id.get(ch_id, "?")
+                            logger.info(f"WebSub: {ch_name}: queued {len(new_entries)} video(s): {', '.join(video_strs)}")
                         except Exception as exc:
                             logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
                 except Exception as exc:
@@ -2800,12 +2809,15 @@ def _wsb_processor_thread(config: dict) -> None:
             except Exception as exc:
                 logger.warning(f"WebSub: subscriptions.json is corrupted, resetting: {exc}")
                 subs = {}
+            channels = _read_channels()
+            channel_by_id = {ch["channel_id"]: ch["channel_name"] for ch in channels}
             renew_before = time.time() + _SECONDS_PER_DAY  # within next 24 h
             for cid, info in subs.items():
                 subscribed_at = _get_timestamp_as_float(info.get("subscribed_at", 0))
                 expires = subscribed_at + info.get("lease_seconds", _WSB_LEASE)
                 if expires <= renew_before:
-                    logger.info(f"WebSub: renewing subscription for channel {cid}")
+                    ch_name = channel_by_id.get(cid, "?")
+                    logger.info(f"WebSub: renewing subscription for {ch_name} ({cid})")
                     _wsb_subscribe(cid, current_config)
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
@@ -2926,9 +2938,11 @@ def _wsb_processor_thread(config: dict) -> None:
                         raw_entry_xml=entry.get("raw_entry_xml", ""),
                     )
                     resolved_ids.add(vid)
+                    title = entry.get("title", "?")
+                    ch_name = feed_cfg.get("channel_name", "?")
                     logger.info(
-                        f"WebSub processor: [{vid}] livestream detected — "
-                        f"re-queued for {next_try_at}"
+                        f"WebSub processor: {ch_name}: {title} ({vid}) — "
+                        f"livestream detected, re-queued for {next_try_at}"
                     )
 
                 elif fetch_result == "permanent":
@@ -2945,9 +2959,11 @@ def _wsb_processor_thread(config: dict) -> None:
                     attempts = entry.get("transcript_attempts", 0) + 1
                     queued_at_str = entry.get("queued_at")
                     if attempts >= _TRANSCRIPT_MAX_ATTEMPTS or not queued_at_str:
+                        title = entry.get("title", "?")
+                        ch_name = feed_cfg.get("channel_name", "?")
                         logger.warning(
-                            f"WebSub processor: [{vid}] no transcript after "
-                            f"{_TRANSCRIPT_MAX_ATTEMPTS} attempts — marking permanent"
+                            f"WebSub processor: {ch_name}: {title} ({vid}) — "
+                            f"no transcript after {_TRANSCRIPT_MAX_ATTEMPTS} attempts, marking permanent"
                         )
                         video_date = date_str[:10]
                         _write_no_transcript_metadata(
@@ -2962,9 +2978,11 @@ def _wsb_processor_thread(config: dict) -> None:
                             "transcript_attempts": attempts,
                             "next_try_at": next_nta,
                         })
+                        title = entry.get("title", "?")
+                        ch_name = feed_cfg.get("channel_name", "?")
                         logger.debug(
-                            f"WebSub processor: [{vid}] transcript not ready "
-                            f"(attempt {attempts}/{_TRANSCRIPT_MAX_ATTEMPTS}) — "
+                            f"WebSub processor: {ch_name}: {title} ({vid}) — "
+                            f"transcript not ready (attempt {attempts}/{_TRANSCRIPT_MAX_ATTEMPTS}), "
                             f"next try at {next_nta}"
                         )
 
