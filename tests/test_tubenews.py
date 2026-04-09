@@ -3117,13 +3117,20 @@ def test_wsb_try_fetch_transcript_returns_quota_exhausted(tmp_path, monkeypatch)
 
 
 def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
-    """Returns 'livestream' when the livestream_error flag is set."""
+    """Returns 'livestream' when fetch_transcript appends True to the livestream_error list.
+
+    Regression test: the real fetch_transcript uses livestream_error.append(True), not
+    livestream_error[0] = True.  The initial list must be [] (not [False]) so that
+    append produces [True] and the check ``if livestream_error and livestream_error[0]``
+    evaluates correctly.
+    """
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
 
     def fake_fetch(*a, livestream_error=None, **kw):
+        # Mirrors the real fetch_transcript behaviour: append, not index-assign.
         if livestream_error is not None:
-            livestream_error[0] = True
+            livestream_error.append(True)
         return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
