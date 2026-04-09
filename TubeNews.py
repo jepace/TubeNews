@@ -598,9 +598,9 @@ def _validate_channel_id(channel_id: str) -> bool:
 def _sanitize_focus(text: str, max_length: int = 100) -> str:
     r"""Sanitize focus text to prevent injection attacks.
 
-    Removes or replaces characters outside [\w\s,\-], collapses whitespace,
-    and truncates to max_length. Used to safely prepare user-entered focus
-    strings for use in Gemini prompts.
+    Keeps only ASCII letters, digits, whitespace, comma, and hyphen.
+    Collapses whitespace, and truncates to max_length.
+    Used to safely prepare user-entered focus strings for use in Gemini prompts.
 
     Args:
         text: User-provided focus text.
@@ -609,8 +609,9 @@ def _sanitize_focus(text: str, max_length: int = 100) -> str:
     Returns:
         Sanitized focus string.
     """
-    # Keep only word chars, whitespace, comma, and hyphen
-    sanitized = re.sub(r"[^\w\s,\-]", "", text)
+    # Keep only ASCII letters, digits, whitespace, comma, and hyphen
+    # This prevents URLs and Unicode homographs from being embedded
+    sanitized = re.sub(r"[^a-zA-Z0-9\s,\-]", "", text)
     # Collapse whitespace
     sanitized = re.sub(r"\s+", " ", sanitized).strip()
     # Truncate
@@ -752,7 +753,7 @@ def fetch_transcript(
     video_title: str = "",
     transcript_rate_limit_event: threading.Event | None = None,
     failure_reason: list[str] | None = None,
-    livestream_error: list[bool] | None = None,
+    livestream_error: threading.Event | None = None,
 ) -> str | None | bool:
     """Fetch timed transcript segments from the Supadata API.
 
@@ -765,7 +766,7 @@ def fetch_transcript(
     ``process_feed`` can abort remaining videos immediately.
 
     When a livestream error is detected (video is currently broadcasting),
-    *livestream_error* is set to [True] to signal that the video should be
+    *livestream_error* is set to signal that the video should be
     deferred without incrementing retry_count.
 
     Returns:
@@ -847,7 +848,7 @@ def fetch_transcript(
         elif "live streaming" in exc_str:
             logger.warning(f"{prefix}Supadata: Live stream — transcript unavailable, will retry later")
             if livestream_error is not None:
-                livestream_error.append(True)
+                livestream_error.set()
         else:
             logger.error(f"{prefix}Supadata: Call failed: {exc}")
 
@@ -1703,7 +1704,7 @@ def process_video(
             return "skipped", 0
         logger.info(f"{log_prefix} Supadata: Fetching transcript")
         _transcript_failure_reason: list[str] = []
-        _livestream_error: list[bool] = []
+        _livestream_error: threading.Event = threading.Event()
 
         # Safety check: ensure cached transcript (if it exists) is always used
         # even if existing_dir lookup failed. This prevents redundant Supadata
@@ -1759,7 +1760,7 @@ def process_video(
             return "skipped", 0
         elif not transcript_text:
             # Transient failure — quota exhausted, livestream, or network error.
-            if _livestream_error and _livestream_error[0]:
+            if _livestream_error.is_set():
                 # Video is a livestream currently broadcasting.
                 # Re-queue with delayed queued_at so it retries after stream ends.
                 # Calculate retry time: use scheduled_start if available, else now + 1 hour.
@@ -2496,7 +2497,7 @@ def _wsb_try_fetch_transcript(
     meeting_dir.mkdir(parents=True, exist_ok=True)
 
     failure_reason: list[str] = []
-    livestream_error: list[bool] = [False]
+    livestream_error: threading.Event = threading.Event()
     result = fetch_transcript(
         video_id,
         supadata_client,
@@ -2510,7 +2511,7 @@ def _wsb_try_fetch_transcript(
     if result is None:
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
             return "quota_exhausted"
-        if livestream_error[0]:
+        if livestream_error.is_set():
             return "livestream"
         return "transient"
 
