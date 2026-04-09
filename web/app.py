@@ -515,10 +515,12 @@ def inject_body_classes():
             if now - last_accessed_ts > 300:
                 current_user._data["last_accessed"] = now_utc_iso()
                 current_user._save()
+        feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     else:
         classes = ""
         unseen_count = 0
-    return {"body_classes": classes, "unseen_channel_count": unseen_count}
+        feed_name = "TubeNews"
+    return {"body_classes": classes, "unseen_channel_count": unseen_count, "feed_name": feed_name}
 
 
 @app.template_filter("format_ts")
