@@ -1658,12 +1658,14 @@ def process_video(
     log_prefix = f"{channel_name}: {video_title} ({video_id}):"
 
     # --- Load or fetch transcript ---
+    transcript_loaded_from_cache = False
     if existing_dir and (existing_dir / "transcript.txt").exists():
         # Re-use cached transcript; only the AI step needs to re-run.
         logger.info(f"{log_prefix} TubeNews: Found cached transcript, re-running AI")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         video_date = existing_dir.name.split("_")[0]
         meeting_dir = existing_dir
+        transcript_loaded_from_cache = True
     else:
         # If quota was already known exhausted, don't attempt the API call.
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
@@ -1684,13 +1686,24 @@ def process_video(
         logger.info(f"{log_prefix} Supadata: Fetching transcript")
         _transcript_failure_reason: list[str] = []
         _livestream_error: list[bool] = []
-        transcript_text = fetch_transcript(
-            video_id, supadata_client,
-            feed_name=channel_name, video_title=video_title,
-            transcript_rate_limit_event=transcript_rate_limit_event,
-            failure_reason=_transcript_failure_reason,
-            livestream_error=_livestream_error,
-        )
+
+        # Safety check: ensure cached transcript (if it exists) is always used
+        # even if existing_dir lookup failed. This prevents redundant Supadata
+        # calls on retries after Gemini transient errors.
+        potential_cache_dir = feed_dir / f"{video_date}_{video_id}"
+        if potential_cache_dir.exists() and (potential_cache_dir / "transcript.txt").exists():
+            logger.info(f"{log_prefix} TubeNews: Found cached transcript (cache safety check), re-running AI")
+            transcript_text = (potential_cache_dir / "transcript.txt").read_text(encoding="utf-8")
+            meeting_dir = potential_cache_dir
+            transcript_loaded_from_cache = True
+        else:
+            transcript_text = fetch_transcript(
+                video_id, supadata_client,
+                feed_name=channel_name, video_title=video_title,
+                transcript_rate_limit_event=transcript_rate_limit_event,
+                failure_reason=_transcript_failure_reason,
+                livestream_error=_livestream_error,
+            )
         if transcript_text is False:
             # Supadata says no transcript exists. For recently published videos
             # (< 48 h) the captions may simply not be ready yet — live streams
@@ -1763,7 +1776,9 @@ def process_video(
             return "skipped", 0
         meeting_dir = feed_dir / f"{video_date}_{video_id}"
         meeting_dir.mkdir(exist_ok=True)
-        (meeting_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
+        # Only write transcript if it was freshly fetched (not loaded from cache)
+        if not transcript_loaded_from_cache:
+            (meeting_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
 
     # --- Generate news stories via Gemini ---
     if ai_disabled:
