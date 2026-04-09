@@ -297,10 +297,10 @@ def test_channel_blog_includes_youtube_channel_link(logged_in_client):
     assert b"youtube.com/channel/UC_ALPHA_ID" in r.data
 
 
-def test_channel_blog_includes_rss_feed_link(logged_in_client):
-    """The channel browse page must include an RSS feed link to the per-channel rss.xml."""
+def test_channel_blog_no_rss_in_subheader(logged_in_client):
+    """RSS link must NOT appear in the sub-header on channel pages (it lives on the account page)."""
     r = logged_in_client.get("/channel/UC_ALPHA_ID")
-    assert b"rss.xml" in r.data
+    assert b'class="hs-rss"' not in r.data
 
 
 # ---------------------------------------------------------------------------
@@ -330,10 +330,10 @@ def test_admin_blog_shows_all_channel_stories(admin_client, archive):
     assert b"Beta Council Discusses Zoning" in r.data
 
 
-def test_admin_blog_links_to_aggregate_feed(admin_client, archive):
-    """All-stories view must link to the aggregate RSS feed."""
+def test_admin_blog_no_rss_in_subheader(admin_client, archive):
+    """RSS link must NOT appear in the sub-header on the admin all-stories page."""
     r = admin_client.get("/admin/feed")
-    assert b"/content/rss.xml" in r.data
+    assert b'class="hs-rss"' not in r.data
 
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@
           {{ u._data.get('last_accessed', 0) | format_datetime }}
         </td>
         <td style="white-space:nowrap">
+          <a href="/feed/{{ u.feed_token }}.html" class="btn-sm" target="_blank" rel="noopener">Browse</a>
           <a href="{{ url_for('admin_user', uid=u.get_id()) }}" class="btn-sm">Edit</a>
           {% if u.email != current_user.email %}
           <form method="post" action="{{ url_for('admin_user_delete', uid=u.get_id()) }}"
