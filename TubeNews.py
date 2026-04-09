@@ -959,14 +959,18 @@ def call_gemini_api(
                     logger.error(f"{prefix}Gemini: Invalid response: 'parts' missing or empty")
                     return None
 
-                first_part = parts[0]
-                if not isinstance(first_part, dict):
-                    logger.error(f"{prefix}Gemini: Invalid response: part is not a dict")
-                    return None
+                # Iterate through parts to find first non-empty text part.
+                # Gemini may return multi-part responses with text + inline data.
+                raw_text = None
+                for part in parts:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        text_candidate = part.get("text")
+                        if text_candidate:  # non-empty string
+                            raw_text = text_candidate
+                            break
 
-                raw_text = first_part.get("text")
-                if not isinstance(raw_text, str):
-                    logger.error(f"{prefix}Gemini: Invalid response: 'text' missing or not a string")
+                if raw_text is None:
+                    logger.error(f"{prefix}Gemini: Invalid response: no 'text' found in any part")
                     return None
 
             except (KeyError, TypeError, AttributeError) as exc:
@@ -1101,11 +1105,19 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
     meeting_dirs = sorted(
         [d for d in feed_dir.iterdir() if d.is_dir()], reverse=True
     )
+    metadata_errors = 0
+    metadata_total = 0
     for meeting_dir in meeting_dirs:
         metadata_path = meeting_dir / "metadata.json"
         if not metadata_path.exists():
             continue
-        metadata = json.loads(metadata_path.read_text())
+        metadata_total += 1
+        try:
+            metadata = json.loads(metadata_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            metadata_errors += 1
+            logger.warning(f"{feed_cfg['channel_name']}: Corrupted metadata.json in {meeting_dir.name}: {exc}")
+            continue
         if metadata.get("status") == "ignored_too_old":
             continue
 
@@ -1132,8 +1144,14 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
                     datetime.fromtimestamp(_get_timestamp_as_float(metadata.get("processed_at"))).astimezone()
                 )
             except Exception as exc:
-                logger.debug(f"Skipping {story_file}: {exc}")
+                logger.warning(f"{feed_cfg['channel_name']}: Skipping {story_file.name}: {exc}")
                 continue
+
+    # Log escalated warning if significant metadata corruption detected (>5% error rate)
+    if metadata_total > 0 and metadata_errors > 0:
+        error_rate = metadata_errors / metadata_total
+        if error_rate > 0.05:
+            logger.error(f"{feed_cfg['channel_name']}: {metadata_errors}/{metadata_total} metadata files corrupted ({error_rate*100:.0f}%) — investigate disk/I/O issues")
 
     feed.rss_file(feed_dir / "rss.xml", pretty=True)
     (feed_dir / "channel.json").write_text(

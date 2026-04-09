@@ -150,6 +150,46 @@ def test_json_extraction_no_match():
 
 
 # ---------------------------------------------------------------------------
+# Gemini response parsing (multi-part support)
+# ---------------------------------------------------------------------------
+
+def test_call_gemini_api_multipart_response(monkeypatch):
+    """call_gemini_api must extract text from multi-part responses (text + inline data)."""
+    import TubeNews
+    from unittest.mock import MagicMock
+
+    # Mock requests.post to return multi-part response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inlineData": {"data": "base64encodedimage"}},  # first part is data, not text
+                        {"text": '[{"title": "Story", "dateline": "City", "content": "Body", "start_time_seconds": 0, "topics": ["test"]}]'},  # text in second part
+                    ]
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr("requests.post", lambda *a, **kw: mock_response)
+
+    result = TubeNews.call_gemini_api(
+        transcript_text="Test transcript",
+        focus="test",
+        video_title="Test Video",
+        video_date="2026-04-09",
+        gemini_api_key="test_key",
+        model_name="gemini-test",
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["title"] == "Story"
+
+
+# ---------------------------------------------------------------------------
 # parse_story_file
 # ---------------------------------------------------------------------------
 
