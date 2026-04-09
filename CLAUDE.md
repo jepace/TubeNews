@@ -81,7 +81,7 @@ YouTube channel Atom RSS feed
 - **Incremental processing:** A video with an existing `metadata.json` is always skipped.
 - **Auto-catchup for new feeds:** When a channel is added for the first time, only the most recent video is processed; the rest are marked `ignored_too_old`.
 - **Transcript caching:** If `transcript.txt` already exists in a video directory, Supadata is not called again — AI runs on the cached transcript instead. This allows re-running AI analysis without consuming API quota.
-- **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), the session flag `ai_disabled` is set and all remaining videos skip the AI step.
+- **Graceful AI degradation:** If Gemini returns HTTP 429 (rate limit), the session flag `ai_disabled` is set and all remaining videos skip the AI step. Transient Gemini errors (HTTP 5xx, network timeouts) do NOT write `metadata.json` so videos are retried on the next run.
 - **Shared story parser:** `parse_story_file()` is used by both `rebuild_feed()` and `rebuild_aggregate_feed()` to read the Markdown story format into a structured dict. Edit this function if the story file format changes.
 - **Per-user story attribution:** Each story is tagged at write time with the UUIDs of the users whose focus produced it (written as a `**Users:**` line in the `.md` file). At serve time `_get_user_stories()` and `build_user_feed_xml()` show a story only to users whose UUID is in that list. Stories with no `**Users:**` line (feed-level focus or legacy stories) are shown to everyone.
 - **Multiple focuses per user:** Users may enter up to 3 focus lines per channel subscription in the dashboard. At processing time, `_collect_channel_focuses()` reads all subscribers' `user.json` files and returns a list of `(focus, user_ids)` pairs (capped at `MAX_FOCUSES_PER_CHANNEL = 10`). Gemini is called once per unique focus. Stories from all focus passes are merged into the same meeting directory, deduplicated by title; user_ids are merged when the same story title appears in multiple focus passes (unrestricted feed-level focus always wins). `metadata.json` records `processed_focuses` so subsequent runs only call Gemini for newly added focuses.
@@ -141,7 +141,7 @@ Defined in `web/app.py`:
 
 | Function | Description |
 |---|---|
-| `call_gemini_api(...)` | Posts to Gemini REST API; returns `list[GeminiStory]`, `False` on rate-limit, `None` on failure |
+| `call_gemini_api(...)` | Posts to Gemini REST API; returns `list[GeminiStory]` (may be empty on success with no matches), `False` on HTTP 429 rate-limit (disable AI for session), `None` on transient failure (5xx, network error; will retry) |
 | `write_story_files(stories, meeting_dir, video_id="", *, clear_existing=True, start_index=1)` | Writes each `GeminiStory` as a numbered `.md` file; includes `**Topics:**` when topics are present and `**Users:**` when the story dict has a non-empty `_user_ids` key (set by `process_video` before calling this function). Use `clear_existing=False, start_index=N` to append new stories from additional focus passes without removing existing files. |
 
 ### RSS feed builders

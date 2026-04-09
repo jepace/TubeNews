@@ -877,10 +877,11 @@ def call_gemini_api(
     it can be parsed directly.
 
     Returns:
-        list  – one dict per story on success.
+        list  – one dict per story on success (may be empty if no stories matched).
         False – caller should disable AI for the remainder of this processing
                 cycle because the API returned HTTP 429 (rate-limited).
-        None  – any other failure; the caller should skip this video.
+        None  – transient failure (network error, HTTP 5xx, timeout); caller
+                should skip this video and allow retry on next run.
     """
     # Sanitize user input to prevent prompt injection
     focus = _sanitize_focus(focus)
@@ -1627,13 +1628,16 @@ def process_video(
                                         set; caller should stop processing
                                         further videos; *n_stories* is 0.
         ``"skipped"``                 – transcript unavailable, AI disabled,
-                                        or AI returned nothing;
-                                        *n_stories* is 0.  When Gemini returns
-                                        an empty story list, a
-                                        ``metadata.json`` with
+                                        Gemini transient error (will retry),
+                                        or AI returned no stories;
+                                        *n_stories* is 0.  When Gemini
+                                        successfully returns an empty story list,
+                                        a ``metadata.json`` with
                                         ``status: "no_stories"`` is written so
-                                        the video is not resubmitted to the AI
-                                        on future runs.
+                                        the video is not resubmitted on future
+                                        runs.  Transient Gemini errors (5xx,
+                                        network issues) do NOT write metadata and
+                                        are retried on next run.
     """
     # Validate video_id to prevent directory traversal attacks
     if not _validate_video_id(video_id):
@@ -1771,6 +1775,7 @@ def process_video(
     # via _gemini_rate_lock — no per-loop delay needed here.
     seen_titles: dict[str, int] = {}
     all_stories: list = []
+    gemini_transient_error = False
     for focus, user_ids in focuses:
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
         logger.info(f"{channel_name}: {video_title}: Gemini: Generating stories{label}")
@@ -1787,7 +1792,12 @@ def process_video(
         )
         if result is False:
             return "ai_rate_limited", 0
-        for story in (result or []):
+        if result is None:
+            # Transient error (network, HTTP 5xx, timeout). Mark as such and
+            # skip writing metadata so the video is retried on next run.
+            gemini_transient_error = True
+            break  # Stop trying other focuses; fail fast on transient error
+        for story in result:  # result is now guaranteed to be a list (empty or not)
             title = story.get("title", "")
             if title in seen_titles:
                 # Merge user_ids: unrestricted (feed-level) always wins
@@ -1801,6 +1811,11 @@ def process_video(
                 story["_user_ids"] = list(user_ids)
                 seen_titles[title] = len(all_stories)
                 all_stories.append(story)
+
+    # If Gemini hit a transient error, skip metadata write to allow retry.
+    if gemini_transient_error:
+        logger.info(f"{log_prefix} Gemini: Transient error — will retry later")
+        return "skipped", 0
 
     if all_stories:
         write_story_files(all_stories, meeting_dir, video_id, video_date=video_date)
@@ -1816,7 +1831,7 @@ def process_video(
         logger.info(f"{log_prefix} Done — {n} stor{'y' if n == 1 else 'ies'} written")
         return "content_written", n
 
-    # Gemini returned no stories for any focus.
+    # Gemini returned no stories for any focus (success but no matches).
     metadata = {
         "video_id": video_id,
         "video_title": video_title,

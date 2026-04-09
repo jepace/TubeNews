@@ -1668,6 +1668,32 @@ def test_process_feed_gemini_no_stories_writes_no_stories_metadata(tmp_path, mon
     assert json.loads(meta_files[0].read_text())["status"] == "no_stories"
 
 
+def test_process_feed_gemini_transient_error_no_metadata(tmp_path, monkeypatch):
+    """When Gemini returns None (transient error), metadata must NOT be written so video can retry."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
+        {"id": "VID_TRANSIENT", "title": "Council Meeting", "date": yesterday},
+    ])
+    monkeypatch.setattr(TubeNews, "fetch_transcript",
+                        lambda *a, **kw: "0:00 --> Transcript text.")
+    monkeypatch.setattr(TubeNews, "call_gemini_api", lambda *a, **kw: None)  # transient error
+
+    from unittest.mock import MagicMock
+    feed = {"channel_id": "UCtest1234567890", "channel_name": "Test Channel", "focus": "test"}
+    _, _, stories_written = process_feed(
+        feed, MagicMock(), {"gemini_api_key": "k", "gemini_model": "m"}, None
+    )
+
+    assert stories_written == 0
+    # Verify NO metadata.json was written (no directory created at all)
+    video_dirs = list((tmp_path / "Test_Channel").glob("*"))
+    assert len(video_dirs) == 0, "Transient Gemini error should not create metadata"
+
+
 # ---------------------------------------------------------------------------
 # Corrupt-file resilience
 # ---------------------------------------------------------------------------
