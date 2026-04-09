@@ -2967,7 +2967,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     {
                         "id":    e["video_id"],
                         "title": e.get("title", "") or "[title unknown]",
-                        "date":  e.get("date", "") or today_str,
+                        "date":  (e.get("date", "") or today_str)[:10],
                         "_queue_entry": e,
                     }
                     for e in entries
