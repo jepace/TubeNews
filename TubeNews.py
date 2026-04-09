@@ -2475,7 +2475,7 @@ def _wsb_try_fetch_transcript(
     meeting_dir.mkdir(parents=True, exist_ok=True)
 
     failure_reason: list[str] = []
-    livestream_error: list[bool] = [False]
+    livestream_error: list[bool] = []
     result = fetch_transcript(
         video_id,
         supadata_client,
@@ -2489,7 +2489,7 @@ def _wsb_try_fetch_transcript(
     if result is None:
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
             return "quota_exhausted"
-        if livestream_error[0]:
+        if livestream_error and livestream_error[0]:
             return "livestream"
         return "transient"
 
