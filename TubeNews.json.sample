@@ -20,6 +20,10 @@
 
   "ntfy_topic": "TubeNewsAdmin",
 
+  "resend_api_key": "",
+  "resend_from_email": "TubeNews <digest@yourdomain.com>",
+  "email_digest_send_hour": 7,
+
   "websub_callback_url": "https://yourdomain.com/youtube/push",
   "websub_secret": "generate with: python3 -c 'import secrets; print(secrets.token_hex(32))'",
   "websub_daemon_port": 8675,

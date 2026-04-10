@@ -32,7 +32,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import TypedDict
+from typing import Iterator, TypedDict
 
 # ---------------------------------------------------------------------------
 # Third-party imports
@@ -2779,6 +2779,7 @@ def _wsb_processor_thread(config: dict) -> None:
     except Exception as exc:
         logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
     _last_orphan_recovery: float = time.time()
+    _last_digest_check: float = 0.0
 
     while True:
         # -- Config reload ----------------------------------------------------
@@ -2827,6 +2828,16 @@ def _wsb_processor_thread(config: dict) -> None:
             except Exception as exc:
                 logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
             _last_orphan_recovery = time.time()
+
+        # -- Daily email digest -----------------------------------------------
+        digest_send_hour = int(current_config.get("email_digest_send_hour", 7))
+        if (datetime.utcnow().hour == digest_send_hour
+                and time.time() - _last_digest_check >= _SECONDS_PER_DAY):
+            try:
+                _send_daily_digests(current_config)
+            except Exception as exc:
+                logger.warning(f"Daily digest: unexpected error: {exc}")
+            _last_digest_check = time.time()
 
         # -- Queue processing -------------------------------------------------
         ripe = _read_push_queue()
@@ -3265,6 +3276,212 @@ def _run_daemon(config: dict) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _iter_all_users() -> Iterator[dict]:
+    """Yield each user's raw data dict (from state/users/*/user.json).
+
+    Yields dicts with an extra ``_uid`` key containing the UUID directory name.
+    Skips unreadable or malformed files silently.
+    """
+    users_dir = STATE_ROOT / "users"
+    if not users_dir.is_dir():
+        return
+    for user_dir in users_dir.iterdir():
+        if not user_dir.is_dir():
+            continue
+        user_json = user_dir / "user.json"
+        if not user_json.exists():
+            continue
+        try:
+            data = json.loads(user_json.read_text(encoding="utf-8"))
+            data["_uid"] = user_dir.name
+            data["_user_dir"] = user_dir
+            yield data
+        except Exception:
+            continue
+
+
+def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list[dict]:
+    """Return story dicts (title, channel_name, video_id, start_seconds) for
+    stories that are newer than *cutoff_ts* and visible to *user_id*.
+
+    Only scans subscribed channels.  Respects ``**Users:**`` attribution.
+    Results are sorted newest-first.
+    """
+    subscribed = set(user_data.get("channels", {}).keys())
+    raw: list[dict] = []
+    for channel_dir in STORAGE_ROOT.iterdir():
+        if not channel_dir.is_dir() or channel_dir.name.startswith("_"):
+            continue
+        channel_json = channel_dir / "channel.json"
+        if not channel_json.exists():
+            continue
+        try:
+            ch = json.loads(channel_json.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if ch.get("channel_id") not in subscribed:
+            continue
+        channel_name = ch.get("channel_name", channel_dir.name.replace("_", " "))
+        for meeting_dir in channel_dir.iterdir():
+            if not meeting_dir.is_dir():
+                continue
+            meta_path = meeting_dir / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta.get("status") == "ignored_too_old":
+                    continue
+                proc_at = _get_timestamp_as_float(meta.get("processed_at"))
+                if proc_at <= cutoff_ts:
+                    continue
+                for story_file in sorted(meeting_dir.glob("[0-9]*.md")):
+                    raw.append({"file": story_file, "meta": meta,
+                                "channel_name": channel_name,
+                                "processed_at": proc_at})
+            except Exception:
+                continue
+    raw.sort(key=lambda e: e["processed_at"], reverse=True)
+
+    stories = []
+    for entry in raw:
+        try:
+            s = parse_story_file(entry["file"])
+            story_user_ids = s.get("user_ids", [])
+            if story_user_ids and user_id not in story_user_ids:
+                continue
+            stories.append({
+                "title": s["title"],
+                "channel_name": entry["channel_name"],
+                "video_id": entry["meta"]["video_id"],
+                "start_seconds": s["start_seconds"],
+            })
+        except Exception:
+            continue
+    return stories
+
+
+def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str, base_url: str) -> str:
+    """Build the HTML body for a daily digest email.
+
+    *feed_url* must be an absolute URL (``base_url`` + ``/feed/<token>.html``).
+    Each story links to ``feed_url#s<video_id>-<start_seconds>``.
+    """
+    import html as _html
+    account_url = base_url.rstrip("/") + "/account" if base_url else ""
+    story_items = []
+    for s in stories:
+        anchor = f"s{s['video_id']}-{s['start_seconds']}"
+        href = f"{feed_url}#{anchor}"
+        title_escaped = _html.escape(s["title"])
+        channel_escaped = _html.escape(s["channel_name"])
+        story_items.append(
+            f'<li style="margin-bottom:0.5em">'
+            f'<a href="{href}" style="color:#1a73e8;text-decoration:none">{title_escaped}</a>'
+            f' <span style="color:#666;font-size:0.9em">— {channel_escaped}</span>'
+            f"</li>"
+        )
+    items_html = "\n".join(story_items)
+    story_count = len(stories)
+    story_word = "story" if story_count == 1 else "stories"
+    footer = (
+        f'<p style="color:#888;font-size:0.85em;margin-top:2em">'
+        f"You're receiving this because you enabled daily email digests in TubeNews."
+    )
+    if account_url:
+        footer += (
+            f' <a href="{account_url}" style="color:#888">Manage preferences</a>.'
+        )
+    footer += "</p>"
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Georgia,serif;max-width:600px;margin:0 auto;padding:1.5em;color:#111">
+  <p>Hi {_html.escape(name)}, here are your {story_count} new {story_word} from TubeNews:</p>
+  <ul style="padding-left:1.2em;line-height:1.7">
+{items_html}
+  </ul>
+  <p><a href="{feed_url}" style="color:#1a73e8">Open your full feed</a></p>
+  <hr style="border:none;border-top:1px solid #ddd;margin:2em 0">
+  {footer}
+</body>
+</html>"""
+
+
+def _send_daily_digests(config: dict) -> None:
+    """Send morning digest emails to opted-in users via Resend.
+
+    Skips silently if ``resend_api_key`` is absent or ``base_url`` is not
+    configured (relative URLs are unusable in email clients).
+    """
+    api_key = config.get("resend_api_key", "").strip()
+    if not api_key:
+        return
+    base_url = config.get("base_url", "").rstrip("/")
+    if not base_url:
+        logger.warning("Daily digest: base_url is not set in TubeNews.json — digest skipped (email links require an absolute URL)")
+        return
+    from_email = config.get("resend_from_email", "TubeNews <noreply@example.com>")
+
+    try:
+        import resend as _resend
+    except ImportError:
+        logger.warning("Daily digest: 'resend' package not installed — run: pip install resend")
+        return
+
+    _resend.api_key = api_key
+
+    sent = 0
+    for user_data in _iter_all_users():
+        if not user_data.get("preferences", {}).get("digest_email_enabled"):
+            continue
+        email = user_data.get("email", "")
+        name = user_data.get("name", email)
+        feed_token = user_data.get("feed_token", "")
+        user_id = user_data.get("_uid", "")
+        if not email or not feed_token:
+            continue
+
+        last_sent_iso = user_data.get("last_digest_sent")
+        cutoff_ts: float
+        if last_sent_iso:
+            parsed = iso8601_to_unix(last_sent_iso)
+            cutoff_ts = parsed if parsed is not None else time.time() - _SECONDS_PER_DAY
+        else:
+            cutoff_ts = time.time() - _SECONDS_PER_DAY
+
+        stories = _scan_stories_since(user_data, user_id, cutoff_ts)
+        if not stories:
+            continue
+
+        feed_url = f"{base_url}/feed/{feed_token}.html"
+        html_body = _build_digest_html(name, email, stories, feed_url, base_url)
+        story_count = len(stories)
+        story_word = "story" if story_count == 1 else "stories"
+        try:
+            _resend.Emails.send({
+                "from": from_email,
+                "to": [email],
+                "subject": f"Your TubeNews digest \u2014 {story_count} new {story_word}",
+                "html": html_body,
+            })
+            # Update last_digest_sent in user.json
+            user_dir: Path = user_data["_user_dir"]
+            user_json_path = user_dir / "user.json"
+            raw = json.loads(user_json_path.read_text(encoding="utf-8"))
+            raw["last_digest_sent"] = now_utc_iso()
+            tmp = user_json_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+            tmp.rename(user_json_path)
+            logger.info(f"Daily digest sent to {email} ({story_count} {story_word})")
+            sent += 1
+        except Exception as exc:
+            logger.warning(f"Daily digest: failed to send to {email}: {exc}")
+
+    if sent:
+        logger.info(f"Daily digest: sent to {sent} user{'s' if sent != 1 else ''}")
 
 
 def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], started_at: float) -> None:

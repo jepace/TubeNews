@@ -199,6 +199,14 @@
         </select>
       </div>
 
+      <div class="form-row" style="margin-top:1rem;">
+        <label class="checkbox-label">
+          <input type="checkbox" name="digest_email_enabled"
+                 {% if prefs.get('digest_email_enabled') %}checked{% endif %}>
+          Send me a daily email digest of new stories
+        </label>
+      </div>
+
       <button type="submit" class="btn-save">Save display preferences</button>
     </form>
   </section>

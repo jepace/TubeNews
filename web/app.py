@@ -1250,7 +1250,9 @@ def account():
             if timezone and timezone not in pytz.all_timezones:
                 flash("Invalid timezone.", "error")
                 return redirect(url_for("account"))
-            current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+            digest_email_enabled = "digest_email_enabled" in request.form
+            current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode,
+                                                  "digest_email_enabled": digest_email_enabled}
             if timezone:
                 current_user._data["preferences"]["timezone"] = timezone
             current_user._save()
