@@ -3105,7 +3105,6 @@ def test_wsb_try_fetch_transcript_returns_quota_exhausted(tmp_path, monkeypatch)
     def fake_fetch(*a, transcript_rate_limit_event=None, **kw):
         if transcript_rate_limit_event is not None:
             transcript_rate_limit_event.set()
-        return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
     (tmp_path / "Chan").mkdir()
@@ -3131,7 +3130,6 @@ def test_wsb_try_fetch_transcript_returns_livestream(tmp_path, monkeypatch):
         # Mirrors the real fetch_transcript behaviour: append, not index-assign.
         if livestream_error is not None:
             livestream_error.append(True)
-        return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
     (tmp_path / "Chan").mkdir()
@@ -3195,7 +3193,7 @@ def test_processor_defers_future_scheduled_start(tmp_path, monkeypatch):
 
     def fake_fetch(video_id, *a, **kw):
         supadata_calls.append(video_id)
-        return None  # transient
+        # returns None → transient failure
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
     monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
