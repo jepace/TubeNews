@@ -408,9 +408,8 @@ def is_ripe(queued_at_iso: str | None, min_age_minutes: int) -> bool:
         if isinstance(queued_at_iso, (int, float)):
             # Legacy Unix timestamp
             return datetime.fromtimestamp(queued_at_iso, tz=timezone.utc) <= cutoff
-        else:
-            # ISO 8601 string
-            return datetime.fromisoformat(queued_at_iso.replace('Z', '+00:00')) <= cutoff
+        # ISO 8601 string
+        return datetime.fromisoformat(queued_at_iso.replace('Z', '+00:00')) <= cutoff
     except (ValueError, TypeError, AttributeError):
         return True  # Invalid timestamp = process immediately
 
@@ -1525,6 +1524,8 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     considered done and will not be reprocessed.  New focus strings only apply
     to newly discovered videos going forward.
     """
+    if not feed_dir.is_dir():
+        return True
     return not any(
         d.name == video_id
         for d in feed_dir.iterdir()
@@ -3387,8 +3388,8 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
     story_count = len(stories)
     story_word = "story" if story_count == 1 else "stories"
     footer = (
-        f'<p style="color:#888;font-size:0.85em;margin-top:2em">'
-        f"You're receiving this because you enabled daily email digests in TubeNews."
+        '<p style="color:#888;font-size:0.85em;margin-top:2em">'
+        "You're receiving this because you enabled daily email digests in TubeNews."
     )
     if account_url:
         footer += (
@@ -3558,7 +3559,7 @@ def main() -> None:
     # Default is daemon mode; --single-run for one-time processing
     if not args.single_run:
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 config = json.load(f)
         except Exception as exc:
             logger.error(f"TubeNews daemon: could not load config: {exc}")
@@ -3582,7 +3583,7 @@ def main() -> None:
 def _main_body(args) -> None:
     """Core run logic, called from main() after the lock is acquired."""
     try:
-        with open(CONFIG_FILE, "r") as config_file:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as config_file:
             config = json.load(config_file)
     except FileNotFoundError:
         logger.error(
