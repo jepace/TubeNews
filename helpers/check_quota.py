@@ -66,9 +66,8 @@ def test_models(api_key: str) -> str | None:
                 )
                 print(f"    [✓] Working — model replied: {reply!r}")
                 return model
-            else:
-                msg = res.json().get("error", {}).get("message", "unknown error")
-                print(f"    [✗] HTTP {res.status_code}: {msg}")
+            msg = res.json().get("error", {}).get("message", "unknown error")
+            print(f"    [✗] HTTP {res.status_code}: {msg}")
         except Exception as exc:
             print(f"    [!] Request failed: {exc}")
 

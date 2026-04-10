@@ -1,0 +1,111 @@
+[MESSAGES CONTROL]
+# Disabled checks — grouped by reason:
+#
+# Architecture decisions (not changing):
+#   C0103 invalid-name         — Module is named "TubeNews" by design; some constants intentionally lowercase
+#   C0302 too-many-lines       — TubeNews.py is a deliberate single-file design (CLAUDE.md)
+#   R0801 duplicate-code       — Test helpers mirror production helpers; some config-loading is intentionally similar
+#
+# Resilience patterns (intentional throughout):
+#   W0718 broad-exception-caught — Catch-all for external API calls (Gemini, Supadata, WebSub) is deliberate
+#
+# Logging style preference (f-strings are readable and the lazy-% form has no benefit here):
+#   W1203 logging-fstring-interpolation
+#   W1201 logging-not-lazy
+#
+# Conditional / deferred imports (by design — avoid loading heavy modules at startup):
+#   C0413 wrong-import-position
+#   C0415 import-outside-toplevel
+#
+# Global state (daemon thread uses module-level mutable flags):
+#   W0603 global-statement
+#
+# False positives:
+#   E1101 no-member — Supadata SupadataError.error attribute is not in stubs pylint can see
+#
+# Test-file-specific (pytest patterns that look like problems but aren't):
+#   W0621 redefined-outer-name  — Fixture names match parameter names by design in pytest
+#   W0611 unused-import         — Fixtures may be used only for their side effects
+#   W0613 unused-argument       — Fixtures are injected even when not directly referenced
+#   W0404 reimported            — Tests re-import modules inside functions so monkeypatching sticks
+#   W0612 unused-variable       — pytest.raises blocks assign to _ which pylint sees as unused
+#   C0116 missing-function-docstring — Test function names are their own documentation
+#   C0115 missing-class-docstring — one-off mock/stub classes defined inside test functions
+#   W0212 protected-access      — Tests intentionally access _data, _save, _wsb_try_fetch_transcript, etc.
+#   C1803 use-implicit-booleaness-not-comparison — `sent == []` is more explicit than `not sent` in assertions
+#   R0903 too-few-public-methods — stub/mock classes with a single method are normal in tests
+#   C0411 wrong-import-order    — sys.path manipulation before TubeNews/app imports forces unusual ordering
+#   R1737 use-yield-from        — complex conditional generators in test helpers resist yield-from refactoring
+#
+# Subprocess / file-handle patterns:
+#   R1732 consider-using-with   — admin_run_now uses Popen with start_new_session=True (fire-and-forget;
+#                                  using 'with' would block waiting for completion, which is wrong)
+#
+# Complex route handlers (Flask routes that dispatch on 'action' parameter are inherently long):
+#   R0912 too-many-branches
+#   R0915 too-many-statements
+#   R0911 too-many-return-statements
+#   R1702 too-many-nested-blocks
+#
+disable =
+    C0103,
+    C0302,
+    R0801,
+    W0718,
+    W1203,
+    W1201,
+    C0413,
+    C0415,
+    W0603,
+    E1101,
+    W0621,
+    W0611,
+    W0613,
+    W0404,
+    C0116,
+    C0115,
+    W0212,
+    W0612,
+    C1803,
+    R0903,
+    C0411,
+    R1737,
+    R1732,
+    R0912,
+    R0915,
+    R0911,
+    R1702
+
+
+[FORMAT]
+# 120 is a practical limit for a codebase with long log messages and URL strings.
+max-line-length = 120
+
+
+[DESIGN]
+# TubeNews.py has functions that orchestrate many steps; 10 args / 25 locals is realistic.
+max-args = 10
+max-positional-arguments = 10
+max-locals = 35
+# Some route handlers have many branches; 15 is reasonable.
+max-branches = 15
+
+
+[BASIC]
+# Allow single-letter loop variables and short names like 'ok', 'ts', 'fn'.
+good-names = i,j,k,v,e,f,ok,ts,fn,cid,uid,kw
+
+
+[SIMILARITIES]
+# Suppress duplicate-code across files smaller than 10 lines.
+min-similarity-lines = 10
+
+
+[TYPECHECK]
+# Ignore missing-member checks on third-party exception classes whose stubs
+# are incomplete (Supadata's SupadataError).
+ignored-classes = SupadataError
+
+
+[tool:pytest]
+# (not used by pylint — kept here as documentation)

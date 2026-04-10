@@ -117,7 +117,7 @@ def main() -> None:
     )
     if not m:
         raw_out = Path("/tmp/yt_raw.html")
-        raw_out.write_text(r.text)
+        raw_out.write_text(r.text, encoding="utf-8")
         print(
             "ytInitialData NOT FOUND in page.\n"
             "YouTube may be serving a bot-detection interstitial.\n"
@@ -131,7 +131,7 @@ def main() -> None:
         sys.exit(f"Found ytInitialData but could not parse it as JSON: {exc}")
 
     out = Path(f"/tmp/yt_data_{tab}.json")
-    out.write_text(json.dumps(data, indent=2))
+    out.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"ytInitialData written to {out}  ({out.stat().st_size:,} bytes)")
 
     # Print a quick preview of the first video renderer so you can see which

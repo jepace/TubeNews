@@ -22,10 +22,11 @@ import time
 import uuid
 
 from datetime import datetime, timezone
-import pytz
 from functools import wraps
 from pathlib import Path
 from typing import TypedDict
+
+import pytz
 
 from flask import (
     Flask,
@@ -426,7 +427,7 @@ def _reformat_published_timestamp(published_str: str, user_timezone: str, server
         if not match:
             return published_str
 
-        month_str, day_str, year_str, hour_str, min_str, ampm_str, orig_tz_abbr = match.groups()
+        month_str, day_str, year_str, hour_str, min_str, ampm_str, _ = match.groups()
 
         # Use provided server timezone or fall back to configured timezone
         orig_tz_name = server_timezone or "UTC"
@@ -793,7 +794,8 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     """
     subscribed = set(user_data.get("channels", {}).keys())
     raw: list[dict] = []
-    for channel_dir in [d for d in STORAGE_ROOT.iterdir() if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir()
+                        if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
         channel_info = _channel_info_for_dir(channel_dir)
         if not channel_info or channel_info.get("channel_id") not in subscribed:
             continue
@@ -1436,7 +1438,9 @@ def account_mark_all_read():
     channel_id = request.form.get("channel_id", "").strip()
     all_stories = _get_user_stories(current_user._data, current_user.get_id())
     if bundle_slug:
-        bundle_cids = next((set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set())
+        bundle_cids = next(
+            (set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set()
+        )
         all_stories = [s for s in all_stories if s.get("channel_id") in bundle_cids]
     elif channel_id:
         all_stories = [s for s in all_stories if s.get("channel_id") == channel_id]
@@ -1466,7 +1470,9 @@ def account_mark_all_unread():
     bundle_slug = request.form.get("bundle_slug", "").strip()
     channel_id = request.form.get("channel_id", "").strip()
     if bundle_slug:
-        bundle_cids = next((set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set())
+        bundle_cids = next(
+            (set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set()
+        )
         bundle_hashes = {
             s["content_hash"]
             for s in _get_user_stories(current_user._data, current_user.get_id())
@@ -1975,7 +1981,7 @@ def admin_run_now():
         cmd.append("--debug")
     # TubeNews.py writes its own run-<pid>.log via a FileHandler added after
     # lock acquisition, so no stdout/stderr redirect is needed here.
-    proc = subprocess.Popen(cmd, start_new_session=True)
+    subprocess.Popen(cmd, start_new_session=True)  # fire-and-forget; start_new_session detaches the process
     _web_ntfy("TubeNews: run started", f"Manual run triggered by {current_user.email}.")
     flash("TubeNews run started.", "success")
     return redirect(url_for("admin_runs") + "?starting=1")
@@ -2175,7 +2181,10 @@ def admin_feed_add():
             if any(ch["channel_id"] == channel_id for ch in channels):
                 flash("A feed with that channel ID already exists.", "error")
             else:
-                channels.append({"channel_id": channel_id, "channel_name": channel_name, "focus": focus, "added_at": now_utc_iso()})
+                channels.append({
+                    "channel_id": channel_id, "channel_name": channel_name,
+                    "focus": focus, "added_at": now_utc_iso(),
+                })
                 _save_channels(channels)
                 config = _load_config()
                 if _wsb_subscribe(channel_id, config):

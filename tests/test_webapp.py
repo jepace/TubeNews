@@ -65,7 +65,7 @@ def _make_channel(archive_root: Path, slug: str, channel_id: str,
     meeting_dir = _make_meeting(channel_dir, "2026-01-15", "VID12345678", f"{channel_name} Meeting")
     _write_story(meeting_dir, "01_Story.md",
                  story_title or f"Story from {channel_name}",
-                 f"TESTVILLE — Jan 15, 2026", "Story body.", 120)
+                 "TESTVILLE — Jan 15, 2026", "Story body.", 120)
     (channel_dir / "channel.json").write_text(
         json.dumps({"channel_id": channel_id, "channel_name": channel_name})
     )
@@ -1289,7 +1289,7 @@ def test_serve_transcript_blocks_dotdot_in_meeting(client, archive):
     sentinel = archive.parent / "transcript.txt"
     sentinel.write_text("0s --> secret content\n")
     try:
-        r = client.get(f"/transcript/alpha_city/..%2F..")
+        r = client.get("/transcript/alpha_city/..%2F..")
         assert r.status_code in (400, 404)
     finally:
         sentinel.unlink(missing_ok=True)
@@ -1747,7 +1747,7 @@ def test_admin_email_change_updates_index(archive, monkeypatch, admin_client):
 # /account — self-service account settings
 # ---------------------------------------------------------------------------
 
-def test_account_requires_login(client, archive):
+def test_account_self_service_requires_login(client, archive):
     """GET /account must redirect to login when not authenticated."""
     r = client.get("/account", follow_redirects=False)
     assert r.status_code == 302

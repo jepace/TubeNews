@@ -145,15 +145,15 @@ def migrate(apply: bool = False) -> None:
             renamed += 1
 
     # Summary
-    print(f"\n[Summary]")
+    print("\n[Summary]")
     print(f"  Scanned: {scanned} directories")
     print(f"  Would rename / Renamed: {renamed}")
     print(f"  Skipped (conflicts): {skipped_conflicts}")
     print(f"  Already clean: {already_clean}")
 
     if not apply:
-        print(f"\n[Info] Dry-run mode. Pass --apply to perform the renames.")
-        print(f"       python3 helpers/rename_dirs.py --apply")
+        print("\n[Info] Dry-run mode. Pass --apply to perform the renames.")
+        print("       python3 helpers/rename_dirs.py --apply")
 
 
 if __name__ == "__main__":
@@ -169,4 +169,4 @@ if __name__ == "__main__":
 
     migrate(apply=args.apply)
     if args.apply:
-        print(f"\n[✓] Migration complete.")
+        print("\n[✓] Migration complete.")

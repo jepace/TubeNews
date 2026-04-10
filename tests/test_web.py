@@ -436,8 +436,8 @@ def test_admin_edit_user_feed_url_uses_configured_base_url(flask_env, tmp_path):
     assert "https://news.example.com/feed/target-feed-token-abc.xml" in html
 
 
-def test_admin_edit_user_feed_url_uses_configured_base_url(flask_env, tmp_path):
-    """When base_url IS set, the feed URL must be absolute using that base."""
+def test_admin_edit_user_feed_page_url_uses_configured_base_url(flask_env, tmp_path):
+    """When base_url IS set, the feed page URL must be absolute using that base."""
     client, _, target_id = flask_env
     import app as wa
     config_file = tmp_path / "TubeNews.json"
