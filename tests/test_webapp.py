@@ -3121,3 +3121,39 @@ def test_post_comment_path_traversal_rejected(logged_in_client, archive, monkeyp
         "body":         "Hello",
     })
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# digest_email_enabled preference — saved via action==prefs
+# ---------------------------------------------------------------------------
+
+def test_account_prefs_saves_digest_email_enabled(logged_in_client, archive):
+    """Submitting the prefs form with digest_email_enabled checked stores True."""
+    r = logged_in_client.post("/account", data={
+        "action": "prefs",
+        "font_size": "normal",
+        "digest_email_enabled": "on",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    users_root = archive / "state" / "users"
+    user_jsons = list(users_root.glob("*/user.json"))
+    assert user_jsons
+    data = json.loads(user_jsons[0].read_text())
+    assert data.get("preferences", {}).get("digest_email_enabled") is True
+
+
+def test_account_prefs_digest_unchecked_saves_false(logged_in_client, archive):
+    """Submitting the prefs form without digest_email_enabled stores False."""
+    r = logged_in_client.post("/account", data={
+        "action": "prefs",
+        "font_size": "normal",
+        # digest_email_enabled intentionally omitted (unchecked checkbox)
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    users_root = archive / "state" / "users"
+    user_jsons = list(users_root.glob("*/user.json"))
+    assert user_jsons
+    data = json.loads(user_jsons[0].read_text())
+    assert data.get("preferences", {}).get("digest_email_enabled") is False

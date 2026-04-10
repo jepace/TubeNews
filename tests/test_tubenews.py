@@ -3278,3 +3278,298 @@ def test_processor_does_not_defer_past_scheduled_start(tmp_path, monkeypatch):
     result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
     assert result == "success"
     assert fetch_called == ["past_sched_vid"]
+
+
+# ---------------------------------------------------------------------------
+# Daily digest helpers: _iter_all_users, _scan_stories_since,
+#                       _build_digest_html, _send_daily_digests
+# ---------------------------------------------------------------------------
+
+import TubeNews as _tn_digest
+
+
+def _make_digest_user(users_root: Path, uid: str, email: str, channels: dict,
+                      token: str = "tok123", digest_enabled: bool = True,
+                      last_digest_sent: str | None = None) -> Path:
+    """Write a minimal user.json under users_root/<uid>/."""
+    from werkzeug.security import generate_password_hash
+    user_dir = users_root / uid
+    user_dir.mkdir(parents=True, exist_ok=True)
+    data: dict = {
+        "name": "Test User",
+        "email": email,
+        "password_hash": generate_password_hash("testpassword123"),
+        "channels": channels,
+        "feed_token": token,
+        "preferences": {"digest_email_enabled": digest_enabled},
+    }
+    if last_digest_sent is not None:
+        data["last_digest_sent"] = last_digest_sent
+    (user_dir / "user.json").write_text(json.dumps(data), encoding="utf-8")
+    return user_dir
+
+
+def _make_digest_channel(storage_root: Path, slug: str, channel_id: str,
+                         channel_name: str, video_id: str = "VID000001",
+                         processed_at_offset: float = 0.0) -> Path:
+    """Create a channel dir with one story, processed_at = time.time() + offset."""
+    import time as _time
+    channel_dir = storage_root / slug
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    (channel_dir / "channel.json").write_text(
+        json.dumps({"channel_id": channel_id, "channel_name": channel_name})
+    )
+    meeting_dir = channel_dir / f"2026-01-15_{video_id}"
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+    processed_at = now_utc_iso() if processed_at_offset == 0.0 else unix_to_iso8601(
+        _time.time() + processed_at_offset
+    )
+    (meeting_dir / "metadata.json").write_text(json.dumps({
+        "video_id": video_id,
+        "video_title": "Test Meeting",
+        "status": "processed",
+        "processed_at": processed_at,
+    }))
+    (meeting_dir / "01_Story.md").write_text(
+        f"# Story About {channel_name}\n*TESTVILLE — Jan 15, 2026*\n\nBody text.\n\n"
+        f"---\n**Segment Start:** 120s\n**Topics:** housing\n"
+    )
+    return channel_dir
+
+
+# -- _iter_all_users --
+
+def test_iter_all_users_yields_user_data(tmp_path, monkeypatch):
+    """_iter_all_users yields dicts for each valid user.json."""
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    _make_digest_user(users_root, "uid-abc", "alice@example.com", {})
+    _make_digest_user(users_root, "uid-def", "bob@example.com", {})
+
+    result = list(_tn_digest._iter_all_users())
+    emails = {u["email"] for u in result}
+    assert emails == {"alice@example.com", "bob@example.com"}
+    for u in result:
+        assert "_uid" in u
+        assert "_user_dir" in u
+
+
+def test_iter_all_users_skips_malformed(tmp_path, monkeypatch):
+    """_iter_all_users silently skips unreadable JSON files."""
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    _make_digest_user(users_root, "uid-good", "good@example.com", {})
+    bad_dir = users_root / "uid-bad"
+    bad_dir.mkdir()
+    (bad_dir / "user.json").write_text("not valid json")
+
+    result = list(_tn_digest._iter_all_users())
+    assert len(result) == 1
+    assert result[0]["email"] == "good@example.com"
+
+
+# -- _scan_stories_since --
+
+def test_scan_stories_since_returns_recent_stories(tmp_path, monkeypatch):
+    """Returns stories whose processed_at is newer than the cutoff."""
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    _make_digest_channel(tmp_path, "alpha_city", "UC_ALPHA", "Alpha City Council")
+    user_data = {"channels": {"UC_ALPHA": []}}
+    cutoff = time.time() - 3600  # 1 hour ago — story should pass
+    stories = _tn_digest._scan_stories_since(user_data, "", cutoff)
+    assert len(stories) == 1
+    assert stories[0]["title"] == "Story About Alpha City Council"
+    assert stories[0]["channel_name"] == "Alpha City Council"
+    assert stories[0]["video_id"] == "VID000001"
+    assert stories[0]["start_seconds"] == 120
+
+
+def test_scan_stories_since_excludes_old_stories(tmp_path, monkeypatch):
+    """Stories older than the cutoff are filtered out."""
+    import time as _time
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    _make_digest_channel(tmp_path, "alpha_city", "UC_ALPHA", "Alpha City Council",
+                         processed_at_offset=-7200.0)  # processed 2 hours ago
+    user_data = {"channels": {"UC_ALPHA": []}}
+    cutoff = _time.time() - 3600  # only within last hour
+    stories = _tn_digest._scan_stories_since(user_data, "", cutoff)
+    assert stories == []
+
+
+def test_scan_stories_since_excludes_unsubscribed_channels(tmp_path, monkeypatch):
+    """Stories from channels the user is not subscribed to are excluded."""
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    _make_digest_channel(tmp_path, "alpha_city", "UC_ALPHA", "Alpha City Council")
+    _make_digest_channel(tmp_path, "beta_city", "UC_BETA", "Beta City Council",
+                         video_id="VID000002")
+    user_data = {"channels": {"UC_ALPHA": []}}  # not subscribed to BETA
+    cutoff = time.time() - 3600
+    stories = _tn_digest._scan_stories_since(user_data, "", cutoff)
+    channels = {s["channel_name"] for s in stories}
+    assert channels == {"Alpha City Council"}
+
+
+# -- _build_digest_html --
+
+def test_build_digest_html_contains_anchor_links():
+    """Each story headline links to the feed page anchor #s<video_id>-<start>."""
+    stories = [
+        {"title": "Council Approves Budget", "channel_name": "Alpha City",
+         "video_id": "AbCdEf12345", "start_seconds": 120},
+        {"title": "Zoning Vote Delayed", "channel_name": "Beta City",
+         "video_id": "XyZ9876543w", "start_seconds": 0},
+    ]
+    feed_url = "https://example.com/feed/mytoken.html"
+    html = _tn_digest._build_digest_html("Alice", "alice@example.com", stories, feed_url, "https://example.com")
+    assert "#sAbCdEf12345-120" in html
+    assert "#sXyZ9876543w-0" in html
+    assert "Council Approves Budget" in html
+    assert "Zoning Vote Delayed" in html
+    assert feed_url in html
+
+
+def test_build_digest_html_escapes_html_in_title():
+    """Story titles with HTML special characters are escaped."""
+    stories = [{"title": "<script>alert(1)</script>", "channel_name": "Chan",
+                "video_id": "VID1", "start_seconds": 0}]
+    html = _tn_digest._build_digest_html("Alice", "alice@example.com", stories,
+                                         "https://example.com/feed/tok.html",
+                                         "https://example.com")
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+# -- _send_daily_digests --
+
+def test_send_daily_digests_skips_when_no_api_key(tmp_path, monkeypatch):
+    """If resend_api_key is absent, _send_daily_digests returns immediately."""
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    sent = []
+    monkeypatch.setattr(_tn_digest, "_iter_all_users", lambda: iter([]))
+    # Should not raise and should not call any email API
+    _tn_digest._send_daily_digests({})  # no resend_api_key key
+    assert sent == []
+
+
+def test_send_daily_digests_skips_opted_out_users(tmp_path, monkeypatch):
+    """Users with digest_email_enabled=False are skipped."""
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    _make_digest_user(users_root, "uid-opt-out", "optout@example.com", {},
+                      digest_enabled=False)
+
+    send_calls = []
+
+    def fake_iter():
+        for u in _tn_digest._iter_all_users.__wrapped__() if hasattr(
+                _tn_digest._iter_all_users, "__wrapped__") else _tn_digest._iter_all_users():
+            yield u
+
+    # Patch resend import to detect any attempted send
+    import types
+    fake_resend = types.ModuleType("resend")
+    class FakeEmails:
+        @staticmethod
+        def send(params):
+            send_calls.append(params)
+    fake_resend.Emails = FakeEmails
+    monkeypatch.setitem(sys.modules, "resend", fake_resend)
+
+    _tn_digest._send_daily_digests({
+        "resend_api_key": "re_test_key",
+        "resend_from_email": "TubeNews <noreply@example.com>",
+        "base_url": "https://example.com",
+    })
+    assert send_calls == []
+
+
+def test_send_daily_digests_skips_when_no_base_url(tmp_path, monkeypatch, capsys):
+    """If base_url is not configured, no digest is sent."""
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    send_calls = []
+    import types
+    fake_resend = types.ModuleType("resend")
+    class FakeEmails:
+        @staticmethod
+        def send(params):
+            send_calls.append(params)
+    fake_resend.Emails = FakeEmails
+    monkeypatch.setitem(sys.modules, "resend", fake_resend)
+
+    _tn_digest._send_daily_digests({
+        "resend_api_key": "re_test_key",
+        # base_url intentionally omitted
+    })
+    assert send_calls == []
+
+
+def test_send_daily_digests_sends_to_opted_in_user(tmp_path, monkeypatch):
+    """An opted-in user with new stories receives a digest email."""
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    _make_digest_user(users_root, "uid-alice", "alice@example.com",
+                      {"UC_ALPHA": []}, token="alicetoken", digest_enabled=True)
+    _make_digest_channel(tmp_path, "alpha_city", "UC_ALPHA", "Alpha City Council")
+
+    send_calls = []
+    import types
+    fake_resend = types.ModuleType("resend")
+    class FakeEmails:
+        @staticmethod
+        def send(params):
+            send_calls.append(params)
+    fake_resend.Emails = FakeEmails
+    fake_resend.api_key = ""
+    monkeypatch.setitem(sys.modules, "resend", fake_resend)
+
+    _tn_digest._send_daily_digests({
+        "resend_api_key": "re_test_key",
+        "resend_from_email": "TubeNews <noreply@example.com>",
+        "base_url": "https://example.com",
+    })
+    assert len(send_calls) == 1
+    assert send_calls[0]["to"] == ["alice@example.com"]
+    assert "alicetoken" in send_calls[0]["html"]
+    # last_digest_sent should be written to user.json
+    uid_dir = users_root / "uid-alice"
+    saved = json.loads((uid_dir / "user.json").read_text())
+    assert "last_digest_sent" in saved
+
+
+def test_send_daily_digests_filters_stories_by_cutoff(tmp_path, monkeypatch):
+    """Stories older than last_digest_sent are not included in the email."""
+    import time as _time
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    # last_digest_sent = now → cutoff = now → no new stories
+    _make_digest_user(users_root, "uid-alice", "alice@example.com",
+                      {"UC_ALPHA": []}, token="alicetoken", digest_enabled=True,
+                      last_digest_sent=now_utc_iso())
+    _make_digest_channel(tmp_path, "alpha_city", "UC_ALPHA", "Alpha City Council",
+                         processed_at_offset=-3600.0)  # processed 1 hour ago
+
+    send_calls = []
+    import types
+    fake_resend = types.ModuleType("resend")
+    class FakeEmails:
+        @staticmethod
+        def send(params):
+            send_calls.append(params)
+    fake_resend.Emails = FakeEmails
+    fake_resend.api_key = ""
+    monkeypatch.setitem(sys.modules, "resend", fake_resend)
+
+    _tn_digest._send_daily_digests({
+        "resend_api_key": "re_test_key",
+        "resend_from_email": "TubeNews <noreply@example.com>",
+        "base_url": "https://example.com",
+    })
+    assert send_calls == []  # no new stories → no email sent

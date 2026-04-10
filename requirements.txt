@@ -9,3 +9,4 @@ flask-limiter
 gunicorn
 pytz
 limits
+resend

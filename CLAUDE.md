@@ -128,6 +128,10 @@ Defined in `web/app.py`:
 | `_next_transcript_try(queued_at_iso, attempt)` | Returns the ISO 8601 UTC timestamp for the next transcript fetch attempt, computed as `queued_at + _TRANSCRIPT_RETRY_OFFSETS[attempt]`. Clamps `attempt` to the last table entry. Falls back to `now()` if `queued_at_iso` is malformed. |
 | `_write_no_transcript_metadata(video_id, feed_dir, video_date, video_title, skip_reason)` | Creates the meeting directory if needed and writes `metadata.json` with `status = "no_transcript_available"`. Called from `process_video` (48h age path) and from the WebSub processor (12-attempt exhaustion path). |
 | `_wsb_try_fetch_transcript(entry, feed_cfg, supadata_client, transcript_rate_limit_event)` | Phase-1 helper for the WebSub processor. Checks for a cached `transcript.txt`; if absent, calls `fetch_transcript()` and caches the result. Returns one of `"cached"`, `"success"`, `"transient"`, `"permanent"`, `"livestream"`, or `"quota_exhausted"`. Never runs Gemini. |
+| `_iter_all_users()` | Generator; yields each user's raw data dict from `state/users/*/user.json`. Adds `_uid` (UUID dir name) and `_user_dir` (`Path`) keys. Silently skips unreadable or malformed files. Used by `_send_daily_digests`. |
+| `_scan_stories_since(user_data, user_id, cutoff_ts)` | Scans `content/` for stories from channels in `user_data["channels"]` whose `processed_at > cutoff_ts`. Respects `**Users:**` attribution (same logic as `_get_user_stories`). Returns a list of lightweight dicts: `title`, `channel_name`, `video_id`, `start_seconds`. Sorted newest-first. |
+| `_build_digest_html(name, email, stories, feed_url, base_url)` | Builds the HTML email body for a daily digest. *feed_url* must be an absolute URL; each story links to `feed_url#s<video_id>-<start_seconds>`. Returns an HTML string safe for use as the Resend `html` parameter. |
+| `_send_daily_digests(config)` | Sends morning digest emails to opted-in users via Resend. Skips silently when `resend_api_key` or `base_url` is absent. For each user with `digest_email_enabled=true`, calls `_scan_stories_since` using `last_digest_sent` as the cutoff (or `now - 24h` if absent), sends via `resend.Emails.send()`, and atomically writes `last_digest_sent` to `user.json`. |
 
 ### YouTube data-gathering
 
@@ -365,6 +369,9 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `gemini_call_delay` | No | Minimum seconds between any two Gemini API calls, enforced globally via a lock (default: `8`). Applies across focus passes and across different videos so the free-tier 15 RPM limit is never exceeded regardless of backlog size. At 8 s the effective rate is ~7.5 RPM. Set to `0` to disable (not recommended). |
 | `base_url` | No | Public URL of `content/rss.xml`, used as the aggregate feed self-link |
 | `ntfy_topic` | No | ntfy.sh topic for run-summary push notifications (e.g. `"TubeNewsAdmin"`); omit to disable |
+| `resend_api_key` | No | Resend API key for daily email digests; omit to disable digest sending |
+| `resend_from_email` | No | "From" address for digest emails (must be a verified Resend sender, e.g. `"TubeNews <digest@yourdomain.com>"`); defaults to `"TubeNews <noreply@example.com>"` |
+| `email_digest_send_hour` | No | UTC hour (0–23) at which the daemon sends daily digests (default: `7`). The daemon fires at the first processor cycle within that hour. Requires `base_url` to be set. |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `1`; capped at number of feeds). Keep at `1` unless you have a paid Gemini tier with higher RPM limits. |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
 | `tubenews_key` | Web UI only | Flask session secret key — generate with `python -c 'import secrets; print(secrets.token_hex(32))'`; also readable from `TUBENEWS_SECRET_KEY` env var |
@@ -384,6 +391,7 @@ When running in daemon mode (the default, `python3 TubeNews.py`), the following 
 - `gemini_api_key`, `supadata_api_key` — next API call uses new key
 - `request_timeout` — applied immediately via `socket.setdefaulttimeout()`
 - `gemini_call_delay`, `gemini_model` — picked up by next processing cycle
+- `resend_api_key`, `resend_from_email`, `email_digest_send_hour` — picked up by next processor cycle
 - `base_url`, `ntfy_topic` — used at next web request
 - `websub_check_interval_minutes`, `websub_max_videos_per_cycle` — applied next cycle
 - `websub_min_age_minutes` — deprecated (logs warning if present; has no effect)
@@ -416,9 +424,9 @@ pytest tests/ -v
 
 | File | Covers |
 |---|---|
-| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution, `_recover_orphaned_videos` (queues dirs without metadata, skips dirs with metadata, skips already-queued, skips missing channel.json, returns count) |
+| `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution, `_recover_orphaned_videos` (queues dirs without metadata, skips dirs with metadata, skips already-queued, skips missing channel.json, returns count), `_iter_all_users` (yields user data, skips malformed), `_scan_stories_since` (returns recent stories, excludes old/unsubscribed), `_build_digest_html` (anchor links, HTML escaping), `_send_daily_digests` (skips no api key, skips no base_url, skips opted-out, sends to opted-in, filters old stories) |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_rss_url`, `_feed_url`), user preferences |
-| `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links |
+| `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links, `digest_email_enabled` preference save (checked and unchecked) |
 
 All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
 
@@ -486,7 +494,8 @@ state/users/
   "last_accessed": "2026-04-07T00:14:36Z",
   "locked": false,
   "feed_name": "Alice's Local News",
-  "preferences": {"dark_mode": false, "font_size": "normal", "timezone": "America/Los_Angeles"},
+  "preferences": {"dark_mode": false, "font_size": "normal", "timezone": "America/Los_Angeles", "digest_email_enabled": true},
+  "last_digest_sent": "2026-04-09T07:00:00Z",
   "seen_channel_ids": ["UCxxxxxxx", "UCyyyyyyy"],
   "read_articles": ["abc123hash", "def456hash"],
   "starred_articles": ["abc123hash"],
@@ -500,7 +509,8 @@ state/users/
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
 - `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
-- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), and `timezone` (IANA timezone string, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` controls display of timestamps in the web UI (admin pages, story published times). Defaults to UTC if not set (since all stored data is in UTC). Key absent means all defaults (light mode, normal font, UTC display).
+- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), `timezone` (IANA timezone string, optional), and `digest_email_enabled` (bool, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` controls display of timestamps in the web UI (admin pages, story published times). Defaults to UTC if not set (since all stored data is in UTC). `digest_email_enabled` opts the user into daily email digests via Resend (requires `resend_api_key` and `base_url` in `TubeNews.json`). Key absent means all defaults (light mode, normal font, UTC display, no digest).
+- `last_digest_sent` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format of the most recent successful digest email send. Written atomically by `_send_daily_digests` immediately after `resend.Emails.send()` succeeds. Key absent means no digest has been sent yet (first send uses `now - 24h` as the cutoff).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/feed` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
 - `starred_articles` — sorted list of `content_hash` strings for articles the user has starred. `/starred` shows only these stories. Key absent means no starred articles. Written by the `account_mark_starred` and `account_mark_unstarred` routes. Independent of read/unread state.
