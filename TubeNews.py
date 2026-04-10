@@ -1432,7 +1432,10 @@ def rebuild_user_feed_page(user: dict[str, object], base_url: str = "", user_id:
         transcript_link = ""
         if entry.get("channel_slug") and entry.get("meeting_id"):
             t_url = f"/transcript/{entry['channel_slug']}/{entry['meeting_id']}#t{story['start_seconds']}"
-            transcript_link = f" &mdash; <a class='watch' href='{t_url}' target='_blank' rel='noopener'>&#128221; Read transcript</a>"
+            transcript_link = (
+                f" &mdash; <a class='watch' href='{t_url}' target='_blank' rel='noopener'>"
+                "&#128221; Read transcript</a>"
+            )
         story_blocks.append(
             f"<article>\n"
             f"  <h2>{story['title']}</h2>\n"
