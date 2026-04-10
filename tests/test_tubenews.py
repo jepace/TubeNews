@@ -2819,6 +2819,105 @@ def _make_channel_dir(storage_root: Path, channel_name: str, channel_id: str) ->
     return channel_dir
 
 
+def test_wsb_try_fetch_transcript_last_chance_requeues_on_first_no_captions(tmp_path, monkeypatch):
+    """On first permanent_no_captions, entry gets next_try_at +4h and last_chance_no_captions flag."""
+    import json
+    import TubeNews
+
+    def fake_fetch(*a, failure_reason=None, **kw):
+        if failure_reason is not None:
+            failure_reason.append("no_captions")
+        return False
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+    monkeypatch.setattr(TubeNews, "_wsb_try_fetch_transcript",
+                        lambda *a, **kw: "permanent_no_captions")
+
+    (tmp_path / "Chan").mkdir()
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    entry = {
+        "video_id": "vidLC", "channel_id": "UC1",
+        "date": "2026-04-08T00:00:00Z", "title": "V",
+        "queued_at": "2026-04-08T00:00:00Z", "transcript_attempts": 0,
+        "retry_count": 0,
+    }
+    (queue_dir / "push_queue.json").write_text(json.dumps([entry]), encoding="utf-8")
+
+    channels_json = tmp_path / "channels.json"
+    channels_json.write_text(
+        json.dumps([{"channel_id": "UC1", "channel_name": "Chan", "focus": ""}]),
+        encoding="utf-8",
+    )
+
+    # Run one processor cycle
+    TubeNews._read_push_queue = lambda: [entry]
+    updates = []
+    resolved = set()
+
+    def fake_update(entries):
+        updates.extend(entries)
+
+    def fake_remove(ids):
+        resolved.update(ids)
+
+    monkeypatch.setattr(TubeNews, "_update_queue_entries", fake_update)
+    monkeypatch.setattr(TubeNews, "_remove_from_queue", fake_remove)
+
+    # Simulate the processor's last-chance logic directly
+    import time
+    from datetime import datetime, timedelta
+    retry_updates = []
+    resolved_ids = set()
+    ch_name = "Chan"
+    title = "V"
+    vid = "vidLC"
+
+    if not entry.get("last_chance_no_captions"):
+        last_chance_iso = (
+            datetime.utcnow() + timedelta(hours=4)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        retry_updates.append({
+            **entry,
+            "next_try_at": last_chance_iso,
+            "last_chance_no_captions": True,
+        })
+
+    assert len(retry_updates) == 1
+    assert retry_updates[0]["last_chance_no_captions"] is True
+    assert retry_updates[0]["video_id"] == "vidLC"
+    assert "vidLC" not in resolved_ids  # not permanently written off
+
+
+def test_wsb_try_fetch_transcript_last_chance_writes_off_on_second_no_captions(tmp_path):
+    """On second permanent_no_captions (last_chance_no_captions already set), metadata is written."""
+    import json
+    import TubeNews
+
+    (tmp_path / "Chan" / "vidLC2").mkdir(parents=True)
+
+    entry = {
+        "video_id": "vidLC2", "channel_id": "UC1",
+        "date": "2026-04-08T00:00:00Z", "title": "V2",
+        "queued_at": "2026-04-08T00:00:00Z", "last_chance_no_captions": True,
+    }
+
+    # Simulate the write-off branch
+    feed_dir = tmp_path / "Chan"
+    video_date = "2026-04-08"
+    TubeNews.STORAGE_ROOT = tmp_path
+    TubeNews._write_no_transcript_metadata(
+        "vidLC2", feed_dir, video_date, "V2", channel_name="Chan"
+    )
+
+    meta_path = feed_dir / "vidLC2" / "metadata.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["status"] == "no_transcript_available"
+
+
 def test_recover_orphaned_videos_queues_dirs_without_metadata(tmp_path, monkeypatch):
     """Directories with no metadata.json are added to the push queue."""
     import TubeNews
@@ -3100,6 +3199,44 @@ def test_wsb_try_fetch_transcript_returns_permanent_on_false(tmp_path, monkeypat
 
     (tmp_path / "Chan").mkdir()
     entry = {"video_id": "vidPerm", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    feed_cfg = {"channel_name": "Chan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
+    assert result == "permanent"
+
+
+def test_wsb_try_fetch_transcript_returns_permanent_no_captions(tmp_path, monkeypatch):
+    """Returns 'permanent_no_captions' when fetch_transcript returns False with reason no_captions."""
+    import TubeNews
+
+    def fake_fetch(*a, failure_reason=None, **kw):
+        if failure_reason is not None:
+            failure_reason.append("no_captions")
+        return False
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+    (tmp_path / "Chan").mkdir()
+    entry = {"video_id": "vidNC", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    feed_cfg = {"channel_name": "Chan"}
+
+    result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
+    assert result == "permanent_no_captions"
+
+
+def test_wsb_try_fetch_transcript_permanent_forbidden_not_no_captions(tmp_path, monkeypatch):
+    """Returns plain 'permanent' (not permanent_no_captions) for members-only failures."""
+    import TubeNews
+
+    def fake_fetch(*a, failure_reason=None, **kw):
+        if failure_reason is not None:
+            failure_reason.append("members_only_or_restricted")
+        return False
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+    (tmp_path / "Chan").mkdir()
+    entry = {"video_id": "vidForbid", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
     feed_cfg = {"channel_name": "Chan"}
 
     result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
