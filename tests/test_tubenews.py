@@ -166,8 +166,12 @@ def test_call_gemini_api_multipart_response(monkeypatch):
             {
                 "content": {
                     "parts": [
-                        {"inlineData": {"data": "base64encodedimage"}},  # first part is data, not text
-                        {"text": '[{"title": "Story", "dateline": "City", "content": "Body", "start_time_seconds": 0, "topics": ["test"]}]'},  # text in second part
+                        {"inlineData": {"data": "base64encodedimage"}},  # first part: non-text
+                        # text in second part:
+                        {"text": (
+                            '[{"title": "Story", "dateline": "City", "content": "Body",'
+                            ' "start_time_seconds": 0, "topics": ["test"]}]'
+                        )},
                     ]
                 }
             }
@@ -598,12 +602,15 @@ def _setup_channel(archive_root: Path, channel_slug: str, channel_id: str,
                    channel_name: str, story_count: int = 1) -> Path:
     """Create a channel directory with channel.json, a meeting, and stories."""
     channel_dir = archive_root / channel_slug
-    meeting_dir = _make_meeting(channel_dir, f"VID{channel_slug[:8].upper()}", f"{channel_name} Meeting", video_date="2026-02-01")
+    meeting_dir = _make_meeting(
+        channel_dir, f"VID{channel_slug[:8].upper()}", f"{channel_name} Meeting",
+        video_date="2026-02-01",
+    )
     for i in range(story_count):
         _write_story(
             meeting_dir, f"0{i+1}_Story.md",
             f"Story {i+1} from {channel_name}",
-            f"CITY — Feb 1, 2026", f"Content {i+1}.", 60 * (i + 1),
+            "CITY — Feb 1, 2026", f"Content {i+1}.", 60 * (i + 1),
         )
     (channel_dir / "channel.json").write_text(
         json.dumps({"channel_id": channel_id, "channel_name": channel_name})
@@ -2001,11 +2008,11 @@ def test_fetch_transcript_returns_false_for_transcript_unavailable():
     from supadata import SupadataError
 
     for error_code in ("transcript-unavailable", "video-not-found", "forbidden"):
-        mock_client = type("C", (), {
-            "transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(
-                SupadataError(error=error_code, message="No transcript", details="")
-            ))
-        })()
+        def _make_client(ec=error_code):
+            def _raise(**kw):
+                raise SupadataError(error=ec, message="No transcript", details="")
+            return type("C", (), {"transcript": staticmethod(_raise)})()
+        mock_client = _make_client()
         event = threading.Event()
         result = fetch_transcript("VID123", mock_client, transcript_rate_limit_event=event)
         assert result is False, f"Expected False for error_code={error_code!r}, got {result!r}"
@@ -2075,8 +2082,10 @@ def test_is_youtube_short_returns_true_on_shorts_redirect(monkeypatch):
 
     class _ShortResp:
         url = "https://www.youtube.com/shorts/abc12345678"
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
 
     monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _ShortResp())
     assert TubeNews._is_youtube_short("abc12345678") is True
@@ -2088,8 +2097,10 @@ def test_is_youtube_short_returns_false_for_normal_video(monkeypatch):
 
     class _WatchResp:
         url = "https://www.youtube.com/watch?v=abc12345678"
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
 
     monkeypatch.setattr(TubeNews.requests, "get", lambda *a, **kw: _WatchResp())
     assert TubeNews._is_youtube_short("abc12345678") is False
@@ -2216,7 +2227,6 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
         calls.append(video_id)
         if transcript_rate_limit_event is not None:
             transcript_rate_limit_event.set()
-        return None
 
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
 
@@ -2298,11 +2308,8 @@ class _Seg:
 
 def _mock_supadata_client(segments, lang="en"):
     """Return a mock Supadata client whose transcript() returns the given segments."""
-    class _Resp:
-        pass
-    resp = _Resp()
-    resp.lang = lang
-    resp.content = segments
+    import types
+    resp = types.SimpleNamespace(lang=lang, content=segments)
     return type("C", (), {"transcript": staticmethod(lambda **kw: resp)})()
 
 
@@ -2721,7 +2728,9 @@ def test_update_queue_entries_increments_entry(tmp_path, monkeypatch):
         {"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 1},
         {"video_id": "bbb", "channel_id": "UC2", "queued_at": unix_to_iso8601(2000)},
     ]))
-    _update_queue_entries([{"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 2}])
+    _update_queue_entries([
+        {"video_id": "aaa", "channel_id": "UC1", "queued_at": unix_to_iso8601(1000), "retry_count": 2},
+    ])
     items = json.loads(queue_path.read_text())
     by_vid = {i["video_id"]: i for i in items}
     assert by_vid["aaa"]["retry_count"] == 2
@@ -2753,7 +2762,9 @@ def test_process_video_transient_when_no_transcript_and_recent(tmp_path, monkeyp
     feed_dir.mkdir()
 
     today = datetime.now().strftime("%Y-%m-%d")
-    mock_client = type("C", (), {"transcript": staticmethod(lambda **kw: (_ for _ in ()).throw(Exception("no captions")))})()
+    def _raise_no_captions(**kw):
+        raise ValueError("no captions")
+    mock_client = type("C", (), {"transcript": staticmethod(_raise_no_captions)})()
     monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
 
     result, n = TubeNews.process_video(
@@ -2764,7 +2775,8 @@ def test_process_video_transient_when_no_transcript_and_recent(tmp_path, monkeyp
     assert result == "skipped"
     assert n == 0
     # No metadata.json — video will be retried
-    assert not any((feed_dir / f).exists() for f in (feed_dir.iterdir() if feed_dir.exists() else []) if "metadata" in str(f))
+    existing = list(feed_dir.iterdir()) if feed_dir.exists() else []
+    assert not any((feed_dir / f).exists() for f in existing if "metadata" in str(f))
 
 
 def test_process_video_permanent_when_no_transcript_and_old(tmp_path, monkeypatch):

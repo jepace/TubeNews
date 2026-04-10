@@ -104,7 +104,7 @@ def _validate_config(config: dict) -> None:
         )
 
     # Validate API keys are strings and non-empty
-    for key in required_keys.keys():
+    for key in required_keys:
         if not isinstance(config[key], str) or not config[key].strip():
             raise ValueError(
                 f"TubeNews: {key} must be a non-empty string in {CONFIG_FILE}"
@@ -799,12 +799,11 @@ def fetch_transcript(
             transcript_text = "\n".join(lines)
             logger.info(f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars")
             return transcript_text
-        else:
-            # API returned a response but no transcript content — video has no captions.
-            logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
-            if failure_reason is not None:
-                failure_reason.append("no_captions")
-            return False
+        # API returned a response but no transcript content — video has no captions.
+        logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+        if failure_reason is not None:
+            failure_reason.append("no_captions")
+        return False
     except Exception as exc:
         exc_str = str(exc).lower()
         # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
@@ -1651,6 +1650,7 @@ def process_video(
                                         the video is not resubmitted to the AI
                                         on future runs.
     """
+    # pylint: disable=too-many-locals,too-many-positional-arguments,too-many-arguments  # per-video orchestrator
     # Validate video_id to prevent directory traversal attacks
     if not _validate_video_id(video_id):
         return ("skipped", 0)
@@ -1739,7 +1739,7 @@ def process_video(
             (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
             logger.info(f"{log_prefix} TubeNews: No transcript available — marked permanent, will not retry")
             return "skipped", 0
-        elif not transcript_text:
+        if not transcript_text:
             # Transient failure — quota exhausted, livestream, or network error.
             if _livestream_error and _livestream_error[0]:
                 # Video is a livestream currently broadcasting.
@@ -1991,7 +1991,10 @@ def process_feed(
     if is_new_feed:
         too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
         if too_old_count:
-            logger.info(f"{channel_name}: TubeNews: New feed — marking {too_old_count} existing video(s) as too old to process")
+            logger.info(
+                f"{channel_name}: TubeNews: New feed — marking"
+                f" {too_old_count} existing video(s) as too old to process"
+            )
 
     # Videos that will actually be processed (not too old, not too fresh).
     videos_to_process = [
@@ -2600,7 +2603,6 @@ def _recover_orphaned_videos() -> int:
 # --daemon mode — WebSub receiver + processor threads
 # ---------------------------------------------------------------------------
 
-import hashlib as _hashlib
 import hmac as _hmac
 import http.server as _http_server
 
@@ -2634,8 +2636,8 @@ def _wsb_receiver_thread(config: dict) -> None:
     }
 
     class _Handler(_http_server.BaseHTTPRequestHandler):
-        def log_message(self, fmt, *args):  # silence access log
-            logger.debug("WebSub receiver: " + fmt % args)
+        def log_message(self, format, *args):  # silence access log  # pylint: disable=redefined-builtin
+            logger.debug("WebSub receiver: " + format % args)
 
         def do_GET(self):
             from urllib.parse import urlparse, parse_qs
@@ -2660,7 +2662,7 @@ def _wsb_receiver_thread(config: dict) -> None:
 
             sig_header = self.headers.get("X-Hub-Signature", "")
             if secret and sig_header.startswith("sha1="):
-                expected = _hmac.new(secret, body, _hashlib.sha1).hexdigest()
+                expected = _hmac.new(secret, body, hashlib.sha1).hexdigest()
                 if not _hmac.compare_digest(sig_header[5:], expected):
                     self.send_response(403)
                     self.end_headers()
@@ -2726,7 +2728,10 @@ def _wsb_receiver_thread(config: dict) -> None:
                             ]
                             ch_id = new_entries[0].get("channel_id", "?")
                             ch_name = channel_by_id.get(ch_id, "?")
-                            logger.info(f"WebSub: {ch_name}: queued {len(new_entries)} video(s): {', '.join(video_strs)}")
+                            logger.info(
+                                f"WebSub: {ch_name}: queued {len(new_entries)} video(s):"
+                                f" {', '.join(video_strs)}"
+                            )
                         except Exception as exc:
                             logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
                 except Exception as exc:
@@ -2768,6 +2773,7 @@ def _wsb_processor_thread(config: dict) -> None:
     Sleep interval is ``websub_check_interval_minutes`` (default 1 minute).
     Runs until the process exits (daemon thread).
     """
+    # pylint: disable=too-many-locals  # orchestrator thread; locals are named state, not complexity
     # When Gemini returns 429, back off for this many seconds before retrying
     # AI calls.  Videos stay in the queue; only the AI step is skipped.
     _AI_BACKOFF_SECONDS = 3600  # 1 hour
@@ -3121,7 +3127,7 @@ def _reload_config_from_disk() -> dict:
 
     Returns: The updated _daemon_config dict (same reference).
     """
-    global _daemon_config, _config_mtime
+    global _config_mtime
 
     config_file = Path(__file__).parent / "TubeNews.json"
 
@@ -3422,7 +3428,10 @@ def _send_daily_digests(config: dict) -> None:
         return
     base_url = config.get("base_url", "").rstrip("/")
     if not base_url:
-        logger.warning("Daily digest: base_url is not set in TubeNews.json — digest skipped (email links require an absolute URL)")
+        logger.warning(
+            "Daily digest: base_url is not set in TubeNews.json"
+            " — digest skipped (email links require an absolute URL)"
+        )
         return
     from_email = config.get("resend_from_email", "TubeNews <noreply@example.com>")
 
@@ -3627,7 +3636,10 @@ def _main_body(args) -> None:
         seen_ids[cid] = cname
 
     supadata_client = Supadata(api_key=config["supadata_api_key"])
-    logger.info(f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')} | AI Model: {config.get('gemini_model')}")
+    logger.info(
+        f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')}"
+        f" | AI Model: {config.get('gemini_model')}"
+    )
 
     # Check cached Supadata balance before doing any work.
     quota_ok, cached_balance = _check_supadata_quota(config)
@@ -3771,7 +3783,7 @@ def _check_supadata_quota(config: dict) -> tuple[bool, dict | None]:
     max_credits = balance.get("maxCredits", 0)
     used_credits = balance.get("usedCredits", 0)
     remaining = max_credits - used_credits
-    if max_credits > 0 and remaining <= 0:
+    if remaining <= 0 < max_credits:
         reset_date = balance.get("resetDate", "unknown")
         logger.error(
             f"TubeNews: Supadata quota exhausted (0 of {max_credits} credits remaining). "
