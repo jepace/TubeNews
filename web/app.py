@@ -10,6 +10,7 @@ The secret key is read from the "tubenews_key" field in TubeNews.json.
 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
+import fcntl
 import html
 import json
 import logging
@@ -70,6 +71,7 @@ from TubeNews import (  # noqa: E402
     parse_story_file,
     build_user_feed_xml,
     slugify,
+    sanitize_focus,
     rebuild_feed,
     rebuild_aggregate_feed,
     _wsb_subscribe,
@@ -246,15 +248,23 @@ def _write_email_index(index: dict[str, str]) -> None:
 
 
 def _index_add(email: str, uid: str) -> None:
-    index = _read_email_index()
-    index[email.strip().lower()] = uid
-    _write_email_index(index)
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
+    lock_path = USERS_ROOT / "index.lock"
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        index = _read_email_index()
+        index[email.strip().lower()] = uid
+        _write_email_index(index)
 
 
 def _index_remove(email: str) -> None:
-    index = _read_email_index()
-    index.pop(email.strip().lower(), None)
-    _write_email_index(index)
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
+    lock_path = USERS_ROOT / "index.lock"
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        index = _read_email_index()
+        index.pop(email.strip().lower(), None)
+        _write_email_index(index)
 
 
 def _find_user_by_email(email: str) -> User | None:
@@ -569,16 +579,10 @@ def format_datetime(ts: int | str | None) -> str:
         return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _sanitize_focus(text: str) -> str:
-    """Sanitize a user-supplied focus line against prompt injection.
-
-    Allows only ASCII letters, digits, spaces, commas, and hyphens.
-    Strips everything else (prevents URLs and Unicode homographs),
-    collapses runs of whitespace to a single space, and truncates to 100 characters.
-    """
-    cleaned = re.sub(r"[^a-zA-Z0-9\s,\-]", "", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned[:100]
+# Canonical implementation lives in tubenews_utils.sanitize_focus (imported
+# via TubeNews).  Alias preserves private naming used throughout this file and
+# in existing test imports (from web.app import _sanitize_focus).
+_sanitize_focus = sanitize_focus
 
 
 @app.template_filter("focuses_text")

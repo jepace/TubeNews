@@ -338,7 +338,7 @@ class FeedResult(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-from tubenews_utils import slugify  # noqa: E402  (below module-level constants)
+from tubenews_utils import sanitize_focus, slugify  # noqa: E402  (below module-level constants)
 
 
 def _fmt_no_leading_zeros(dt: datetime, fmt: str) -> str:
@@ -595,26 +595,10 @@ def _validate_channel_id(channel_id: str) -> bool:
     return all(c.isalnum() or c in "-_" for c in channel_id)
 
 
-def _sanitize_focus(text: str, max_length: int = 100) -> str:
-    r"""Sanitize focus text to prevent injection attacks.
-
-    Removes or replaces characters outside [\w\s,\-], collapses whitespace,
-    and truncates to max_length. Used to safely prepare user-entered focus
-    strings for use in Gemini prompts.
-
-    Args:
-        text: User-provided focus text.
-        max_length: Maximum output length in characters.
-
-    Returns:
-        Sanitized focus string.
-    """
-    # Keep only word chars, whitespace, comma, and hyphen
-    sanitized = re.sub(r"[^\w\s,\-]", "", text)
-    # Collapse whitespace
-    sanitized = re.sub(r"\s+", " ", sanitized).strip()
-    # Truncate
-    return sanitized[:max_length]
+# Canonical implementation lives in tubenews_utils.sanitize_focus (ASCII-only
+# regex prevents Unicode homoglyph injection).  Local alias preserves the
+# private naming convention used throughout this file.
+_sanitize_focus = sanitize_focus
 
 
 def _validate_iso_date(date_str: str) -> bool:
@@ -2585,8 +2569,8 @@ def _recover_orphaned_videos() -> int:
             if meta_path.exists():
                 try:
                     vid_date = json.loads(meta_path.read_text()).get("video_date", "")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Could not read video_date from {meta_path}: {exc}")
             new_entries.append({
                 "video_id":          video_id,
                 "channel_id":        channel_id,

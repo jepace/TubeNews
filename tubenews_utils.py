@@ -9,6 +9,24 @@ import re
 from pathlib import Path
 
 
+def sanitize_focus(text: str, max_length: int = 100) -> str:
+    """Sanitize a user-supplied focus line against prompt injection.
+
+    Allows only ASCII letters, digits, spaces, commas, and hyphens.
+    Strips everything else (prevents Unicode homoglyphs, URLs, semicolons,
+    newlines, etc.), collapses runs of whitespace to a single space, and
+    truncates to *max_length* characters.
+
+    This is the single canonical implementation shared by TubeNews.py (Gemini
+    prompt construction) and web/app.py (form input saving).  Using ASCII-only
+    ``[a-zA-Z0-9]`` rather than ``\\w`` (which matches Unicode word characters)
+    closes the Unicode homoglyph injection vector.
+    """
+    cleaned = re.sub(r"[^a-zA-Z0-9\s,\-]", "", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:max_length]
+
+
 def slugify(text: str) -> str:
     """Convert *text* to a filesystem-safe slug.
 
