@@ -797,7 +797,9 @@ def fetch_transcript(
                 for seg in segments
             ]
             transcript_text = "\n".join(lines)
-            logger.info(f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars")
+            logger.info(
+                f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars"
+            )
             return transcript_text
         # API returned a response but no transcript content — video has no captions.
         logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
@@ -934,7 +936,10 @@ def call_gemini_api(
             try:
                 resp_json = response.json()
                 if not isinstance(resp_json, dict):
-                    logger.error(f"{prefix}Gemini: Invalid response format (expected dict, got {type(resp_json).__name__})")
+                    logger.error(
+                        f"{prefix}Gemini: Invalid response format"
+                        f" (expected dict, got {type(resp_json).__name__})"
+                    )
                     return None
 
                 candidates = resp_json.get("candidates")
@@ -1232,7 +1237,10 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict[str, str | list[str]] | None = None) -> bytes:
+def build_user_feed_xml(
+    user: dict, base_url: str = "", user_id: str = "",
+    channel_focus: dict[str, str | list[str]] | None = None,
+) -> bytes:
     """Build and return RSS feed XML bytes for a user's subscribed channels.
 
     Contains all the feed-building logic.  Does *not* write anything to disk —
