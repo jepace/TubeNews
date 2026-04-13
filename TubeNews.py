@@ -797,7 +797,9 @@ def fetch_transcript(
                 for seg in segments
             ]
             transcript_text = "\n".join(lines)
-            logger.info(f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars")
+            logger.info(
+                f"{prefix}Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars"
+            )
             return transcript_text
         # API returned a response but no transcript content — video has no captions.
         logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
@@ -934,7 +936,10 @@ def call_gemini_api(
             try:
                 resp_json = response.json()
                 if not isinstance(resp_json, dict):
-                    logger.error(f"{prefix}Gemini: Invalid response format (expected dict, got {type(resp_json).__name__})")
+                    logger.error(
+                        f"{prefix}Gemini: Invalid response format"
+                        f" (expected dict, got {type(resp_json).__name__})"
+                    )
                     return None
 
                 candidates = resp_json.get("candidates")
@@ -1232,7 +1237,10 @@ def rebuild_aggregate_feed(base_url: str = "") -> None:
     feed.rss_file(STORAGE_ROOT / "rss.xml", pretty=True)
 
 
-def build_user_feed_xml(user: dict, base_url: str = "", user_id: str = "", channel_focus: dict[str, str | list[str]] | None = None) -> bytes:
+def build_user_feed_xml(
+    user: dict, base_url: str = "", user_id: str = "",
+    channel_focus: dict[str, str | list[str]] | None = None,
+) -> bytes:
     """Build and return RSS feed XML bytes for a user's subscribed channels.
 
     Contains all the feed-building logic.  Does *not* write anything to disk —
@@ -2465,14 +2473,13 @@ def _wsb_try_fetch_transcript(
 
     Returns:
         One of:
-        ``"cached"``             — transcript.txt already on disk (from a prior run).
-        ``"success"``            — transcript fetched and written to transcript.txt.
-        ``"transient"``          — temporary failure; schedule a later retry.
-        ``"permanent"``          — Supadata confirmed no transcript (members-only or deleted).
-        ``"permanent_no_captions"`` — Supadata returned no_captions; may be a YouTube
-                                   processing delay — caller should give one last-chance retry.
-        ``"livestream"``         — video is a live stream still broadcasting.
-        ``"quota_exhausted"``    — Supadata credit quota is exhausted this session.
+        ``"cached"``         — transcript.txt already on disk (from a prior run).
+        ``"success"``        — transcript fetched and written to transcript.txt.
+        ``"transient"``      — temporary failure (including Supadata "permanent" errors,
+                               which are not trusted — all failures retry up to
+                               _TRANSCRIPT_MAX_ATTEMPTS times before being written off).
+        ``"livestream"``     — video is a live stream still broadcasting.
+        ``"quota_exhausted"``— Supadata credit quota is exhausted this session.
     """
     video_id = entry.get("video_id", "")
     feed_dir = STORAGE_ROOT / slugify(feed_cfg["channel_name"])
@@ -2503,11 +2510,10 @@ def _wsb_try_fetch_transcript(
         return "transient"
 
     if result is False:
-        # Distinguish generic "no_captions" (YouTube may not have processed captions
-        # yet) from genuinely permanent failures like members-only or deleted videos.
-        if failure_reason and failure_reason[0] == "no_captions":
-            return "permanent_no_captions"
-        return "permanent"
+        # Supadata's "permanent" errors (no_captions, members-only, not-found) are not
+        # trusted — captions can appear hours after publish.  Treat as transient so the
+        # full retry schedule runs before the video is written off.
+        return "transient"
 
     # Transcript text successfully returned — cache it for the Gemini phase.
     (meeting_dir / "transcript.txt").write_text(result, encoding="utf-8")
@@ -2972,49 +2978,6 @@ def _wsb_processor_thread(config: dict) -> None:
                         f"livestream detected, re-queued for {next_try_at}"
                     )
 
-                elif fetch_result == "permanent":
-                    # Truly permanent (members-only, deleted, etc.) — mark immediately.
-                    video_date = date_str[:10]
-                    _write_no_transcript_metadata(
-                        vid, feed_dir, video_date, entry.get("title", ""),
-                        channel_name=feed_cfg.get("channel_name", "")
-                    )
-                    resolved_ids.add(vid)
-
-                elif fetch_result == "permanent_no_captions":
-                    # Supadata says no captions, but YouTube often takes hours to
-                    # process captions after a video publishes.  Give one last chance
-                    # 4 hours from now before writing the video off forever.
-                    ch_name = feed_cfg.get("channel_name", "?")
-                    title = entry.get("title", "?")
-                    if entry.get("last_chance_no_captions"):
-                        # Already retried — truly no captions.
-                        video_date = date_str[:10]
-                        _write_no_transcript_metadata(
-                            vid, feed_dir, video_date, entry.get("title", ""),
-                            channel_name=feed_cfg.get("channel_name", "")
-                        )
-                        resolved_ids.add(vid)
-                        logger.info(
-                            f"WebSub processor: {ch_name}: {title} ({vid}) — "
-                            f"no captions on last-chance retry, marking permanent"
-                        )
-                    else:
-                        # First no_captions — schedule a last-chance retry in 4 hours.
-                        last_chance_iso = (
-                            datetime.utcnow() + timedelta(hours=4)
-                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-                        retry_updates.append({
-                            **entry,
-                            "next_try_at": last_chance_iso,
-                            "last_chance_no_captions": True,
-                        })
-                        logger.info(
-                            f"WebSub processor: {ch_name}: {title} ({vid}) — "
-                            f"no captions yet (may be YouTube delay), "
-                            f"last-chance retry at {last_chance_iso}"
-                        )
-
                 elif fetch_result == "transient":
                     # Schedule next attempt per the retry table.
                     attempts = entry.get("transcript_attempts", 0) + 1
@@ -3360,6 +3323,7 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
     Results are sorted newest-first.
     """
     subscribed = set(user_data.get("channels", {}).keys())
+    read_set = set(user_data.get("read_articles", []))
     raw: list[dict] = []
     for channel_dir in STORAGE_ROOT.iterdir():
         if not channel_dir.is_dir() or channel_dir.name.startswith("_"):
@@ -3402,11 +3366,14 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
             story_user_ids = s.get("user_ids", [])
             if story_user_ids and user_id not in story_user_ids:
                 continue
+            if s.get("content_hash") in read_set:
+                continue
             stories.append({
                 "title": s["title"],
                 "channel_name": entry["channel_name"],
                 "video_id": entry["meta"]["video_id"],
                 "start_seconds": s["start_seconds"],
+                "content_hash": s.get("content_hash", ""),
             })
         except Exception:
             continue
