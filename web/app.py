@@ -400,6 +400,20 @@ def _get_user_timezone(user) -> str:
     return "UTC"
 
 
+def _fmt_video_date(date_str: str) -> str:
+    """Format a YYYY-MM-DD video date as 'Video published Month D, YYYY'.
+
+    Returns the original string on parse failure, empty string if input is empty.
+    """
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return f"Video published {dt.strftime('%B')} {dt.day}, {dt.year}"
+    except (ValueError, TypeError):
+        return date_str
+
+
 def _reformat_published_timestamp(published_str: str, user_timezone: str, server_timezone: str = "") -> str:
     """Parse published timestamp string and reformat to user's timezone.
 
@@ -765,6 +779,7 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
+                    "video_date": _fmt_video_date(entry["meta"].get("video_date", "")),
                     "body_html": s["body_html"],
                     "start_seconds": s["start_seconds"],
                     "video_id": vid,
@@ -834,6 +849,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
+                "video_date": _fmt_video_date(entry["meta"].get("video_date", "")),
                 "body_html": s["body_html"],
                 "start_seconds": s["start_seconds"],
                 "video_id": vid,

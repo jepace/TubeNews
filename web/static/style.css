@@ -991,8 +991,9 @@ main:has(.feed-layout) {
 }
 
 .story-source {
-  font-size: 0.82rem;
+  font-style: italic;
   color: var(--muted);
+  font-size: 0.9rem;
   margin-bottom: 0.2rem;
 }
 

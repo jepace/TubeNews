@@ -137,10 +137,10 @@
     {% for story in stories %}
     <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}" data-channel-id="{{ story.channel_id }}">
       <h2>{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</h2>
-      <p class="story-dateline">{{ story.dateline }}</p>
+      {% if story.video_date %}<p class="story-dateline"><em>{{ story.video_date }}</em></p>{% endif %}
       {% if story.published %}<p class="story-published"><em>Published {{ story.published }}</em></p>{% endif %}
       <p class="story-source">
-        {{ story.channel_name }}{% if story.video_title %} &mdash; <em>{{ story.video_title }}</em>{% endif %}
+        {{ story.channel_name }}{% if story.video_title %} &mdash; {{ story.video_title }}{% endif %}
       </p>
       <p class="story-links">
         <a class="story-watch" href="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}" target="_blank" rel="noopener">&#9654; Watch source</a>
@@ -152,7 +152,7 @@
       <div class="story-body">{{ story.body_html | safe }}</div>
       <div class="story-toolbar"
            data-title="{{ story.title | e }}"
-           data-dateline="{{ story.dateline | e }}"
+           data-dateline="{{ story.video_date | e }}"
            data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}"
            data-youtube="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}"
            data-content-hash="{{ story.content_hash | e }}"
