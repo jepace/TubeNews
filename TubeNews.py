@@ -2730,23 +2730,39 @@ def _wsb_receiver_thread(config: dict) -> None:
                             existing = []
                         try:
                             by_vid = {e["video_id"]: e for e in existing}
+                            queued_entries: list[dict] = []
                             for ne in new_entries:
-                                by_vid[ne["video_id"]] = ne  # keep latest queued_at
-                            updated = list(by_vid.values())
-                            tmp = queue_path.with_suffix(".tmp")
-                            tmp.write_text(json.dumps(updated, indent=2))
-                            tmp.replace(queue_path)
-                            # Log with channel name and video titles for clarity
-                            video_strs = [
-                                f"{e.get('title', '?')} ({e['video_id']})"
-                                for e in new_entries
-                            ]
-                            ch_id = new_entries[0].get("channel_id", "?")
-                            ch_name = channel_by_id.get(ch_id, "?")
-                            logger.info(
-                                f"WebSub: {ch_name}: queued {len(new_entries)} video(s):"
-                                f" {', '.join(video_strs)}"
-                            )
+                                ne_vid = ne["video_id"]
+                                # Skip videos already fully processed (metadata.json exists).
+                                # channel_by_id is a startup snapshot; unknown channels pass through.
+                                ne_ch = channel_by_id.get(ne.get("channel_id", ""))
+                                if ne_ch:
+                                    ne_dir = STORAGE_ROOT / slugify(ne_ch)
+                                    if not _needs_processing(ne_vid, ne_dir):
+                                        logger.debug(
+                                            f"WebSub: {ne_ch}: {ne.get('title', ne_vid)!r}"
+                                            f" ({ne_vid}) already processed"
+                                            f" — ignoring duplicate push"
+                                        )
+                                        continue
+                                by_vid[ne_vid] = ne  # keep latest queued_at
+                                queued_entries.append(ne)
+                            if queued_entries:
+                                updated = list(by_vid.values())
+                                tmp = queue_path.with_suffix(".tmp")
+                                tmp.write_text(json.dumps(updated, indent=2))
+                                tmp.replace(queue_path)
+                                # Log with channel name and video titles for clarity
+                                video_strs = [
+                                    f"{e.get('title', '?')} ({e['video_id']})"
+                                    for e in queued_entries
+                                ]
+                                ch_id = queued_entries[0].get("channel_id", "?")
+                                ch_name = channel_by_id.get(ch_id, "?")
+                                logger.info(
+                                    f"WebSub: {ch_name}: queued {len(queued_entries)} video(s):"
+                                    f" {', '.join(video_strs)}"
+                                )
                         except Exception as exc:
                             logger.error(f"WebSub: queue write failed ({queue_path}): {exc}")
                 except Exception as exc:
