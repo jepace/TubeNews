@@ -3460,6 +3460,26 @@ def test_scan_stories_since_excludes_unsubscribed_channels(tmp_path, monkeypatch
     assert channels == {"Alpha City Council"}
 
 
+def test_scan_stories_since_excludes_read_articles(tmp_path, monkeypatch):
+    """Stories whose content_hash is in read_articles are excluded from the digest."""
+    monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
+    _make_digest_channel(tmp_path, "alpha_city", "UC_ALPHA", "Alpha City Council")
+    cutoff = time.time() - 3600
+
+    # First, confirm the story appears when not marked read.
+    user_data = {"channels": {"UC_ALPHA": []}}
+    stories = _tn_digest._scan_stories_since(user_data, "", cutoff)
+    assert len(stories) == 1
+    content_hash = stories[0]["content_hash"]
+    assert content_hash  # hash must be present in returned dict
+
+    # Now mark it read — it should disappear from the digest.
+    user_data["read_articles"] = [content_hash]
+    stories_after = _tn_digest._scan_stories_since(user_data, "", cutoff)
+    assert stories_after == []
+
+
 # -- _build_digest_html --
 
 def test_build_digest_html_contains_anchor_links():

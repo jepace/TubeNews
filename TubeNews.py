@@ -3323,6 +3323,7 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
     Results are sorted newest-first.
     """
     subscribed = set(user_data.get("channels", {}).keys())
+    read_set = set(user_data.get("read_articles", []))
     raw: list[dict] = []
     for channel_dir in STORAGE_ROOT.iterdir():
         if not channel_dir.is_dir() or channel_dir.name.startswith("_"):
@@ -3365,11 +3366,14 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
             story_user_ids = s.get("user_ids", [])
             if story_user_ids and user_id not in story_user_ids:
                 continue
+            if s.get("content_hash") in read_set:
+                continue
             stories.append({
                 "title": s["title"],
                 "channel_name": entry["channel_name"],
                 "video_id": entry["meta"]["video_id"],
                 "start_seconds": s["start_seconds"],
+                "content_hash": s.get("content_hash", ""),
             })
         except Exception:
             continue
