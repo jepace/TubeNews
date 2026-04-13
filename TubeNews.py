@@ -802,7 +802,7 @@ def fetch_transcript(
             )
             return transcript_text
         # API returned a response but no transcript content — video has no captions.
-        logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+        logger.info(f"{prefix}Supadata: No transcript content returned")
         if failure_reason is not None:
             failure_reason.append("no_captions")
         return False
@@ -841,7 +841,7 @@ def fetch_transcript(
                 reason = "video_not_found"
             else:
                 reason = "no_captions"
-            logger.info(f"{prefix}Supadata: No transcript available ({reason}) — marking permanent, will not retry")
+            logger.info(f"{prefix}Supadata: No transcript available ({reason})")
             if failure_reason is not None:
                 failure_reason.append(reason)
             return False
