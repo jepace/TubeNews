@@ -3846,21 +3846,17 @@ def test_select_podcast_stories_caps_by_word_count(tmp_path, monkeypatch):
     """Accumulation stops once total word count reaches _PODCAST_TARGET_WORDS."""
     monkeypatch.setattr(_tn_digest, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)
-    # Create two channels each with a story of ~400 words
+    # Each story ~400 words; target 1300 words (~10 min).
+    # 400*3=1200 < 1300; 400*4=1600 >= 1300 → stops after 4th story.
     long_body = " ".join(["word"] * 400)
-    _make_podcast_channel(tmp_path, "ch_a", "UC_A", "Channel A",
-                          video_id="VID_A", body=long_body)
-    _make_podcast_channel(tmp_path, "ch_b", "UC_B", "Channel B",
-                          video_id="VID_B", body=long_body)
-    # Add a third channel to prove it is excluded
-    _make_podcast_channel(tmp_path, "ch_c", "UC_C", "Channel C",
-                          video_id="VID_C", body=long_body)
-    user_data = {"channels": {"UC_A": [], "UC_B": [], "UC_C": []}, "read_articles": []}
-    # 400 + 400 = 800 >= 650 → stops after 2nd story
+    for i in range(5):
+        _make_podcast_channel(tmp_path, f"ch_{i}", f"UC_{i}", f"Channel {i}",
+                              video_id=f"VID_{i}", body=long_body)
+    user_data = {"channels": {f"UC_{i}": [] for i in range(5)}, "read_articles": []}
     stories = _tn_digest._select_podcast_stories(user_data, "", time.time() - 3600)
     total_words = sum(len(s["body_text"].split()) for s in stories)
     assert total_words >= _tn_digest._PODCAST_TARGET_WORDS
-    assert len(stories) < 3  # the 3rd story was cut off
+    assert len(stories) < 5  # the 5th story was cut off
 
 
 # -- _tts_synthesize --

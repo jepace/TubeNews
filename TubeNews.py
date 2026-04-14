@@ -2107,7 +2107,7 @@ _WSB_HUB = "https://pubsubhubbub.appspot.com/subscribe"
 _WSB_LEASE = 604800  # 7 days
 _SECONDS_PER_HOUR = 3600
 _SECONDS_PER_DAY = 86400
-_PODCAST_TARGET_WORDS = 650  # ~5 min at 130 WPM with intro/outro overhead
+_PODCAST_TARGET_WORDS = 1300  # ~10 min at 130 WPM with intro/outro overhead
 _WEBSUB_POST_TIMEOUT = 10  # seconds for WebSub subscription POST
 _GEMINI_TIMEOUT = 150  # seconds for Gemini API calls
 
@@ -3591,7 +3591,7 @@ def _select_podcast_stories(
 def _generate_podcast_script(
     stories: list[dict], user_name: str, date_str: str, config: dict
 ) -> str | None:
-    """Call Gemini to write a natural 5-minute podcast script from *stories*.
+    """Call Gemini to write a natural 10-minute podcast script from *stories*.
 
     Returns the script as plain text, or ``None`` on failure.
     Uses a simpler direct Gemini call (no JSON extraction) compared to
@@ -3618,7 +3618,7 @@ def _generate_podcast_script(
 
     prompt = (
         f"You are a professional news podcast host. Write a natural, conversational "
-        f"5-minute podcast script (approximately {_PODCAST_TARGET_WORDS} words) for "
+        f"10-minute podcast script (approximately {_PODCAST_TARGET_WORDS} words) for "
         f"{user_name}'s TubeNews briefing on {date_human}.\n\n"
         "Format: brief 1-sentence welcome \u2192 one segment per story (introduce with a "
         "transition phrase, summarise in 3-5 sentences) \u2192 brief outro. "
