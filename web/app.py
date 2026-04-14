@@ -97,7 +97,7 @@ _STORY_FILE_RE = re.compile(r'^\d{2}_[A-Za-z0-9_]+\.md$')
 app = Flask(__name__)
 # Trust one level of X-Forwarded-For / X-Forwarded-Proto from the reverse
 # proxy (nginx/Caddy) so rate limiting and IP logging see real client IPs.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[method-assign]
 logger = logging.getLogger(__name__)
 
 try:
@@ -652,7 +652,7 @@ def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
 
 def _archive_channel_stats() -> list[ChannelStat]:
     """Scan archive dirs and return per-channel processing stats."""
-    stats = []
+    stats: list[ChannelStat] = []
     if not STORAGE_ROOT.is_dir():
         return stats
     for channel_dir in STORAGE_ROOT.iterdir():
@@ -662,7 +662,7 @@ def _archive_channel_stats() -> list[ChannelStat]:
         if not info:
             continue
         processed = ignored = no_stories = story_count = 0
-        last_processed = 0
+        last_processed: float = 0.0
         for meta_file in channel_dir.glob("*/metadata.json"):
             try:
                 meta = json.loads(meta_file.read_text())
@@ -687,7 +687,7 @@ def _archive_channel_stats() -> list[ChannelStat]:
             "story_count": story_count,
             "last_processed": last_processed,
         })
-    return sorted(stats, key=lambda s: s["channel_name"].lower())
+    return sorted(stats, key=lambda s: s["channel_name"].lower())  # type: ignore[arg-type]
 
 
 def _channel_counts(stories: list[StoryDict]) -> list[dict]:
@@ -800,8 +800,8 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
             except Exception as exc:
                 logger.debug(f"Skipping {entry['file']}: {exc}")
                 continue
-        return channel_name, stories
-    return None, []
+        return channel_name, stories  # type: ignore[return-value]
+    return None, []  # type: ignore[return-value]
 
 
 def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
@@ -871,7 +871,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
         except Exception as exc:
             logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
-    return stories
+    return stories  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
