@@ -2265,7 +2265,7 @@ def test_send_ntfy_message_includes_story_count_and_channels():
                 {"channel_id": "UCb", "channel_name": "Beta Board", "stories_written": 1},
                 {"channel_id": "UCc", "channel_name": "Gamma Corp", "stories_written": 0},
             ],
-            started_at=0.0,
+            started_at="2026-01-01T07:00:00Z",
         )
 
     assert len(sent) == 1
@@ -2282,7 +2282,7 @@ def test_send_ntfy_singular_story_word():
     sent = []
     import unittest.mock as _mock
     with _mock.patch.object(_ur, "urlopen", lambda req, timeout=None: sent.append(req)):
-        _send_ntfy("t", 1, [{"channel_id": "UCa", "channel_name": "Alpha", "stories_written": 1}], 0.0)
+        _send_ntfy("t", 1, [{"channel_id": "UCa", "channel_name": "Alpha", "stories_written": 1}], "2026-01-01T07:00:00Z")
     assert "1 new story" in sent[0].data.decode()
     assert "stories" not in sent[0].data.decode()
 
@@ -2292,7 +2292,7 @@ def test_send_ntfy_swallows_network_errors():
     import urllib.request as _ur
     import unittest.mock as _mock
     with _mock.patch.object(_ur, "urlopen", side_effect=OSError("network down")):
-        _send_ntfy("t", 1, [], 0.0)  # must not raise
+        _send_ntfy("t", 1, [], "2026-01-01T07:00:00Z")  # must not raise
 
 
 # ---------------------------------------------------------------------------

@@ -47,6 +47,11 @@
 #   R0911 too-many-return-statements
 #   R1702 too-many-nested-blocks
 #
+# Import resolution in CI / test environments:
+#   E0401 import-error — pytest and Flask test deps are not installed in the
+#                        pylint runner; TubeNews is not on sys.path for web/app.py.
+#                        Real import errors in production code are caught by tests.
+#
 disable =
     C0103,
     C0302,
@@ -65,6 +70,7 @@ disable =
     C0116,
     C0115,
     W0212,
+    E0401,
     W0612,
     C1803,
     R0903,

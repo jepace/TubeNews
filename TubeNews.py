@@ -32,7 +32,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, TypedDict
+from typing import Any, Iterator, TypedDict
 
 # ---------------------------------------------------------------------------
 # Third-party imports
@@ -131,7 +131,7 @@ def _get_config_safe(config: dict, key: str, default: object) -> object:
         return default
 
 
-def _safe_int(val: object, default: int) -> int:
+def _safe_int(val: Any, default: int) -> int:
     """Safely convert a value to int with a default fallback.
 
     Args:
@@ -147,7 +147,7 @@ def _safe_int(val: object, default: int) -> int:
         return default
 
 
-def _safe_float(val: object, default: float) -> float:
+def _safe_float(val: Any, default: float) -> float:
     """Safely convert a value to float with a default fallback.
 
     Args:
@@ -291,7 +291,13 @@ class FeedConfig(TypedDict):
     focus: str
 
 
-class GeminiStory(TypedDict):
+class _GeminiStoryBase(TypedDict, total=False):
+    # Internal key set by process_video before write_story_files; not returned
+    # by Gemini and not stored to disk.
+    _user_ids: list[str]
+
+
+class GeminiStory(_GeminiStoryBase):
     """One story dict as returned by :func:`call_gemini_api`."""
     title: str
     dateline: str
@@ -322,7 +328,8 @@ class MetadataDict(TypedDict, total=False):
     video_title: str
     video_date: str
     status: str
-    processed_at: float
+    processed_at: str
+    skip_reason: str
     processed_focuses: list[str]
 
 
@@ -338,7 +345,7 @@ class FeedResult(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-from tubenews_utils import slugify  # noqa: E402  (below module-level constants)
+from tubenews_utils import sanitize_focus, slugify  # noqa: E402  (below module-level constants)
 
 
 def _fmt_no_leading_zeros(dt: datetime, fmt: str) -> str:
@@ -595,26 +602,10 @@ def _validate_channel_id(channel_id: str) -> bool:
     return all(c.isalnum() or c in "-_" for c in channel_id)
 
 
-def _sanitize_focus(text: str, max_length: int = 100) -> str:
-    r"""Sanitize focus text to prevent injection attacks.
-
-    Removes or replaces characters outside [\w\s,\-], collapses whitespace,
-    and truncates to max_length. Used to safely prepare user-entered focus
-    strings for use in Gemini prompts.
-
-    Args:
-        text: User-provided focus text.
-        max_length: Maximum output length in characters.
-
-    Returns:
-        Sanitized focus string.
-    """
-    # Keep only word chars, whitespace, comma, and hyphen
-    sanitized = re.sub(r"[^\w\s,\-]", "", text)
-    # Collapse whitespace
-    sanitized = re.sub(r"\s+", " ", sanitized).strip()
-    # Truncate
-    return sanitized[:max_length]
+# Canonical implementation lives in tubenews_utils.sanitize_focus (ASCII-only
+# regex prevents Unicode homoglyph injection).  Local alias preserves the
+# private naming convention used throughout this file.
+_sanitize_focus = sanitize_focus
 
 
 def _validate_iso_date(date_str: str) -> bool:
@@ -802,7 +793,7 @@ def fetch_transcript(
             )
             return transcript_text
         # API returned a response but no transcript content — video has no captions.
-        logger.info(f"{prefix}Supadata: No transcript available — marking permanent, will not retry")
+        logger.info(f"{prefix}Supadata: No transcript content returned")
         if failure_reason is not None:
             failure_reason.append("no_captions")
         return False
@@ -841,7 +832,7 @@ def fetch_transcript(
                 reason = "video_not_found"
             else:
                 reason = "no_captions"
-            logger.info(f"{prefix}Supadata: No transcript available ({reason}) — marking permanent, will not retry")
+            logger.info(f"{prefix}Supadata: No transcript available ({reason})")
             if failure_reason is not None:
                 failure_reason.append(reason)
             return False
@@ -1335,7 +1326,7 @@ def build_user_feed_xml(
     return feed.rss_str(pretty=True)
 
 
-def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
+def rebuild_user_feed(user: dict[str, Any], base_url: str = "", user_id: str = "") -> None:
     """Write ``archive/users/<id>/rss.xml`` for a user's subscribed channels.
 
     Thin wrapper around :func:`build_user_feed_xml` that writes the result to
@@ -1355,7 +1346,7 @@ def rebuild_user_feed(user: dict[str, object], base_url: str = "", user_id: str 
     (user_dir / "rss.xml").write_bytes(xml_bytes)
 
 
-def rebuild_user_feed_page(user: dict[str, object], base_url: str = "", user_id: str = "") -> None:
+def rebuild_user_feed_page(user: dict[str, Any], base_url: str = "", user_id: str = "") -> None:
     """Generate ``archive/users/<id>/index.html`` — a static feed page for a user.
 
     Pulls stories from the user's subscribed channels (same logic as
@@ -1707,7 +1698,7 @@ def process_video(
         logger.info(f"{log_prefix} Supadata: Fetching transcript")
         _transcript_failure_reason: list[str] = []
         _livestream_error: list[bool] = []
-        transcript_text = fetch_transcript(
+        transcript_text = fetch_transcript(  # type: ignore[assignment]
             video_id, supadata_client,
             feed_name=channel_name, video_title=video_title,
             transcript_rate_limit_event=transcript_rate_limit_event,
@@ -1818,7 +1809,7 @@ def process_video(
             return "ai_rate_limited", 0
         if result is None:
             gemini_transient_error = True
-        for story in (result or []):
+        for story in (result or []):  # type: ignore[union-attr]
             title = story.get("title", "")
             if title in seen_titles:
                 # Merge user_ids: unrestricted (feed-level) always wins
@@ -1942,7 +1933,7 @@ def process_feed(
                 ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
             )
             # Extract queue entry fields if present (from WebSub daemon)
-            queue_entry = video_info.get("_queue_entry", {})
+            queue_entry: dict = video_info.get("_queue_entry") or {}  # type: ignore[assignment]
             result, n = process_video(
                 video_id=video_info["id"],
                 video_title=video_info["title"],
@@ -2451,7 +2442,7 @@ def _write_no_transcript_metadata(
 
 def _wsb_try_fetch_transcript(
     entry: dict,
-    feed_cfg: dict,
+    feed_cfg: FeedConfig,
     supadata_client: object,
     transcript_rate_limit_event: threading.Event | None,
 ) -> str:
@@ -2585,8 +2576,8 @@ def _recover_orphaned_videos() -> int:
             if meta_path.exists():
                 try:
                     vid_date = json.loads(meta_path.read_text()).get("video_date", "")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Could not read video_date from {meta_path}: {exc}")
             new_entries.append({
                 "video_id":          video_id,
                 "channel_id":        channel_id,
@@ -3065,7 +3056,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 content_changed, ai_rate_limited, _ = process_feed(
                     feed, supadata_client, current_config,
                     ai_event, transcript_event,
-                    forced_videos=video_infos,
+                    forced_videos=video_infos,  # type: ignore[arg-type]
                 )
                 if content_changed:
                     rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
@@ -3251,7 +3242,7 @@ def _reload_config_from_disk() -> dict:
                     old_display = f"***{str(old)[-4:]}" if old else "***"
                     new_display = f"***{str(new)[-4:]}" if new else "***"
                 else:
-                    old_display, new_display = old, new
+                    old_display, new_display = str(old), str(new)
                 logger.info(f"Config reload: {key} {old_display} → {new_display}")
 
         # Warn about immutable key changes
@@ -3520,11 +3511,12 @@ def _send_daily_digests(config: dict) -> None:
         logger.info(f"Daily digest: sent to {sent} user{'s' if sent != 1 else ''}")
 
 
-def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], started_at: float) -> None:
+def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], started_at: str) -> None:
     """POST a run-summary notification to ntfy.sh/<topic>."""
     import urllib.request as _urllib_request
 
-    timestamp = _fmt_no_leading_zeros(datetime.fromtimestamp(started_at), "%B %d, %Y at %I:%M %p")
+    started_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00")).astimezone()
+    timestamp = _fmt_no_leading_zeros(started_dt, "%B %d, %Y at %I:%M %p")
     story_word = "story" if total_stories == 1 else "stories"
     lines = [f"{total_stories} new {story_word} — {timestamp}"]
     for r in feed_results:

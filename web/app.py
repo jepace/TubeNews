@@ -10,6 +10,7 @@ The secret key is read from the "tubenews_key" field in TubeNews.json.
 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
+import fcntl
 import html
 import json
 import logging
@@ -70,6 +71,7 @@ from TubeNews import (  # noqa: E402
     parse_story_file,
     build_user_feed_xml,
     slugify,
+    sanitize_focus,
     rebuild_feed,
     rebuild_aggregate_feed,
     _wsb_subscribe,
@@ -95,7 +97,7 @@ _STORY_FILE_RE = re.compile(r'^\d{2}_[A-Za-z0-9_]+\.md$')
 app = Flask(__name__)
 # Trust one level of X-Forwarded-For / X-Forwarded-Proto from the reverse
 # proxy (nginx/Caddy) so rate limiting and IP logging see real client IPs.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[method-assign]
 logger = logging.getLogger(__name__)
 
 try:
@@ -246,15 +248,23 @@ def _write_email_index(index: dict[str, str]) -> None:
 
 
 def _index_add(email: str, uid: str) -> None:
-    index = _read_email_index()
-    index[email.strip().lower()] = uid
-    _write_email_index(index)
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
+    lock_path = USERS_ROOT / "index.lock"
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        index = _read_email_index()
+        index[email.strip().lower()] = uid
+        _write_email_index(index)
 
 
 def _index_remove(email: str) -> None:
-    index = _read_email_index()
-    index.pop(email.strip().lower(), None)
-    _write_email_index(index)
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
+    lock_path = USERS_ROOT / "index.lock"
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        index = _read_email_index()
+        index.pop(email.strip().lower(), None)
+        _write_email_index(index)
 
 
 def _find_user_by_email(email: str) -> User | None:
@@ -569,16 +579,10 @@ def format_datetime(ts: int | str | None) -> str:
         return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _sanitize_focus(text: str) -> str:
-    """Sanitize a user-supplied focus line against prompt injection.
-
-    Allows only ASCII letters, digits, spaces, commas, and hyphens.
-    Strips everything else (prevents URLs and Unicode homographs),
-    collapses runs of whitespace to a single space, and truncates to 100 characters.
-    """
-    cleaned = re.sub(r"[^a-zA-Z0-9\s,\-]", "", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned[:100]
+# Canonical implementation lives in tubenews_utils.sanitize_focus (imported
+# via TubeNews).  Alias preserves private naming used throughout this file and
+# in existing test imports (from web.app import _sanitize_focus).
+_sanitize_focus = sanitize_focus
 
 
 @app.template_filter("focuses_text")
@@ -648,7 +652,7 @@ def _find_archive_dir_for_channel(channel_id: str) -> Path | None:
 
 def _archive_channel_stats() -> list[ChannelStat]:
     """Scan archive dirs and return per-channel processing stats."""
-    stats = []
+    stats: list[ChannelStat] = []
     if not STORAGE_ROOT.is_dir():
         return stats
     for channel_dir in STORAGE_ROOT.iterdir():
@@ -658,7 +662,7 @@ def _archive_channel_stats() -> list[ChannelStat]:
         if not info:
             continue
         processed = ignored = no_stories = story_count = 0
-        last_processed = 0
+        last_processed: float = 0.0
         for meta_file in channel_dir.glob("*/metadata.json"):
             try:
                 meta = json.loads(meta_file.read_text())
@@ -683,7 +687,7 @@ def _archive_channel_stats() -> list[ChannelStat]:
             "story_count": story_count,
             "last_processed": last_processed,
         })
-    return sorted(stats, key=lambda s: s["channel_name"].lower())
+    return sorted(stats, key=lambda s: s["channel_name"].lower())  # type: ignore[arg-type]
 
 
 def _channel_counts(stories: list[StoryDict]) -> list[dict]:
@@ -796,8 +800,8 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
             except Exception as exc:
                 logger.debug(f"Skipping {entry['file']}: {exc}")
                 continue
-        return channel_name, stories
-    return None, []
+        return channel_name, stories  # type: ignore[return-value]
+    return None, []  # type: ignore[return-value]
 
 
 def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
@@ -867,7 +871,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
         except Exception as exc:
             logger.debug(f"Skipping {entry['file']}: {exc}")
             continue
-    return stories
+    return stories  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
