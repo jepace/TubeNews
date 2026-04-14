@@ -4172,3 +4172,109 @@ def test_merge_queue_entry_preserves_retry_state():
     assert merged["transcript_attempts"] == 3                      # preserved
     assert merged["retry_count"] == 2                             # preserved
     assert merged["title"] == "My Video (edited)"                  # updated
+
+
+# ---------------------------------------------------------------------------
+# Video publish timestamp: discover_videos, write_story_files, parse_story_file
+# ---------------------------------------------------------------------------
+
+def test_discover_videos_includes_published_at(monkeypatch):
+    """discover_videos includes the full ISO 8601 publish timestamp."""
+    import TubeNews as _tn
+    xml = _make_rss_feed([{
+        "video_id": "abc12345678",
+        "title": "Budget Meeting",
+        "published": "2026-04-14T10:30:00+00:00",
+    }])
+    monkeypatch.setattr(_tn.requests, "get", lambda *a, **kw: _MockResponse(xml))
+    results = discover_videos("UCtest1234567890")
+    assert len(results) == 1
+    assert results[0]["date"] == "2026-04-14"
+    assert results[0]["published_at"] == "2026-04-14T10:30:00+00:00"
+
+
+def test_write_story_files_video_published_line(tmp_path):
+    """write_story_files writes 'Video published' line when video_published_at is supplied."""
+    stories = [{"title": "Test Story", "dateline": "CITY — 2026", "content": "Body.",
+                 "start_time_seconds": 0}]
+    write_story_files(stories, tmp_path, video_id="TEST12345678",
+                      video_published_at="2026-04-14T10:30:00Z")
+    story_files = list(tmp_path.glob("[0-9]*.md"))
+    assert len(story_files) == 1
+    text = story_files[0].read_text()
+    assert "Video published April 14, 2026 at 10:30 AM UTC" in text
+    assert "Published " in text  # TubeNews processing timestamp also present
+
+
+def test_write_story_files_no_video_published_line_when_absent(tmp_path):
+    """write_story_files does not write 'Video published' when video_published_at is empty."""
+    stories = [{"title": "Test Story", "dateline": "CITY — 2026", "content": "Body.",
+                 "start_time_seconds": 0}]
+    write_story_files(stories, tmp_path)
+    text = list(tmp_path.glob("[0-9]*.md"))[0].read_text()
+    assert "Video published" not in text
+
+
+def test_parse_story_file_extracts_video_published(tmp_path):
+    """parse_story_file returns the 'video_published' field when present."""
+    story_file = tmp_path / "01_test.md"
+    story_file.write_text(
+        "# Headline\n"
+        "*CITY, ST — April 14, 2026*\n"
+        "Video published April 14, 2026 at 10:30 AM UTC\n"
+        "Published April 14, 2026 at 3:15 PM UTC\n"
+        "**Source:** https://youtu.be/TEST12345678?t=0\n"
+        "\nBody paragraph.\n\n"
+        "---\n"
+        "**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    story = parse_story_file(story_file)
+    assert story["video_published"] == "April 14, 2026 at 10:30 AM UTC"
+    assert story["published"] == "April 14, 2026 at 3:15 PM UTC"
+    assert "Video published" not in story["body_html"]
+
+
+def test_parse_story_file_video_published_empty_for_old_stories(tmp_path):
+    """parse_story_file returns '' for video_published when the line is absent (old stories)."""
+    story_file = tmp_path / "01_test.md"
+    story_file.write_text(
+        "# Old Story\n"
+        "*CITY, ST — Jan 1, 2026*\n"
+        "Published January 1, 2026 at 9:00 AM UTC\n"
+        "**Source:** https://youtu.be/OLD1234567?t=0\n"
+        "\nOld body.\n\n"
+        "---\n"
+        "**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    story = parse_story_file(story_file)
+    assert story["video_published"] == ""
+
+
+def test_merge_queue_entry_preserves_published_at_when_new_is_empty():
+    """published_at is preserved from existing when the new notification has none."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "T",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "published_at": "2026-04-01T08:00:00Z",
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {**existing, "published_at": "", "raw_entry_xml": "<entry>new</entry>"}
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["published_at"] == "2026-04-01T08:00:00Z"
+
+
+def test_merge_queue_entry_updates_published_at_from_new_notification():
+    """published_at is updated when the new notification carries a timestamp."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "T",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "published_at": "",
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {**existing, "published_at": "2026-04-01T08:00:00Z"}
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["published_at"] == "2026-04-01T08:00:00Z"
