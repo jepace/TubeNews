@@ -24,6 +24,13 @@
   "resend_from_email": "TubeNews <digest@yourdomain.com>",
   "email_digest_send_hour": 7,
 
+  "tts_provider": "google",
+  "tts_api_key": "",
+  "tts_voice_id": "",
+  "tts_language_code": "en-US",
+  "podcast_generation_hour": 6,
+  "podcast_retention_days": 7,
+
   "websub_callback_url": "https://yourdomain.com/youtube/push",
   "websub_secret": "generate with: python3 -c 'import secrets; print(secrets.token_hex(32))'",
   "websub_daemon_port": 8675,

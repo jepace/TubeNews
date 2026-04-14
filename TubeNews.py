@@ -19,6 +19,7 @@ Configuration lives in TubeNews.json (see TubeNews.json.sample).
 # Standard-library imports
 # ---------------------------------------------------------------------------
 import argparse
+import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import html
@@ -2106,6 +2107,7 @@ _WSB_HUB = "https://pubsubhubbub.appspot.com/subscribe"
 _WSB_LEASE = 604800  # 7 days
 _SECONDS_PER_HOUR = 3600
 _SECONDS_PER_DAY = 86400
+_PODCAST_TARGET_WORDS = 1300  # ~10 min at 130 WPM with intro/outro overhead
 _WEBSUB_POST_TIMEOUT = 10  # seconds for WebSub subscription POST
 _GEMINI_TIMEOUT = 150  # seconds for Gemini API calls
 
@@ -2824,6 +2826,7 @@ def _wsb_processor_thread(config: dict) -> None:
         logger.warning(f"WebSub processor: orphan recovery failed: {exc}")
     _last_orphan_recovery: float = time.time()
     _last_digest_check: float = 0.0
+    _last_podcast_check: float = 0.0
 
     while True:
         # -- Config reload ----------------------------------------------------
@@ -2882,6 +2885,16 @@ def _wsb_processor_thread(config: dict) -> None:
             except Exception as exc:
                 logger.warning(f"Daily digest: unexpected error: {exc}")
             _last_digest_check = time.time()
+
+        # -- Daily podcast generation -----------------------------------------
+        podcast_hour = int(current_config.get("podcast_generation_hour", 6))
+        if (datetime.utcnow().hour == podcast_hour
+                and time.time() - _last_podcast_check >= _SECONDS_PER_DAY):
+            try:
+                _generate_daily_podcasts(current_config)
+            except Exception as exc:
+                logger.warning("Daily podcast: unexpected error: %s", exc, exc_info=True)
+            _last_podcast_check = time.time()
 
         # -- Queue processing -------------------------------------------------
         ripe = _read_push_queue()
@@ -3401,6 +3414,7 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
                 "video_id": entry["meta"]["video_id"],
                 "start_seconds": s["start_seconds"],
                 "content_hash": s.get("content_hash", ""),
+                "file": entry["file"],  # Path; used by _select_podcast_stories
             })
         except Exception:
             continue
@@ -3529,6 +3543,391 @@ def _send_daily_digests(config: dict) -> None:
 
     if sent:
         logger.info(f"Daily digest: sent to {sent} user{'s' if sent != 1 else ''}")
+
+
+def _body_to_plain_text(body_html: str) -> str:
+    """Convert body_html (HTML-escaped, <br>-joined) back to plain prose for TTS."""
+    return html.unescape(body_html.replace("<br>", " ")).strip()
+
+
+def _select_podcast_stories(
+    user_data: dict, user_id: str, cutoff_ts: float
+) -> list[dict]:
+    """Select unread stories since *cutoff_ts* for podcast generation.
+
+    Reuses ``_scan_stories_since`` for channel/attribution/timestamp filtering.
+    Additionally skips stories already in ``read_articles``.  Accumulates
+    stories newest-first until the total estimated word count reaches
+    ``_PODCAST_TARGET_WORDS``.
+
+    Returns a list of ``{"title", "channel_name", "body_text"}`` dicts.
+    """
+    candidates = _scan_stories_since(user_data, user_id, cutoff_ts)
+    read_set = set(user_data.get("read_articles", []))
+    selected: list[dict] = []
+    total_words = 0
+    for story in candidates:
+        if story.get("content_hash") in read_set:
+            continue
+        try:
+            parsed = parse_story_file(story["file"])
+        except Exception:
+            continue
+        body_text = _body_to_plain_text(parsed.get("body_html", ""))
+        if not body_text:
+            continue
+        word_count = len(body_text.split())
+        selected.append({
+            "title": story["title"],
+            "channel_name": story["channel_name"],
+            "body_text": body_text,
+        })
+        total_words += word_count
+        if total_words >= _PODCAST_TARGET_WORDS:
+            break
+    return selected
+
+
+def _generate_podcast_script(
+    stories: list[dict], user_name: str, date_str: str, config: dict
+) -> str | None:
+    """Call Gemini to write a natural 10-minute podcast script from *stories*.
+
+    Returns the script as plain text, or ``None`` on failure.
+    Uses a simpler direct Gemini call (no JSON extraction) compared to
+    :func:`call_gemini_api`.
+    """
+    api_key = config.get("gemini_api_key", "").strip()
+    model = config.get("gemini_model", "gemini-2.0-flash")
+    if not api_key:
+        logger.warning("Podcast: gemini_api_key not set — cannot generate script")
+        return None
+
+    parts = []
+    for i, story in enumerate(stories, 1):
+        parts.append(
+            f"STORY {i} \u2014 {story['title']} ({story['channel_name']})\n"
+            f"{story['body_text']}"
+        )
+    formatted = "\n\n".join(parts)
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        date_human = _fmt_no_leading_zeros(dt, "%B %-d, %Y")
+    except (ValueError, TypeError):
+        date_human = date_str
+
+    prompt = (
+        f"You are a professional news podcast host. Write a natural, conversational "
+        f"10-minute podcast script (approximately {_PODCAST_TARGET_WORDS} words) for "
+        f"{user_name}'s TubeNews briefing on {date_human}.\n\n"
+        "Format: brief 1-sentence welcome \u2192 one segment per story (introduce with a "
+        "transition phrase, summarise in 3-5 sentences) \u2192 brief outro. "
+        "No markdown, no headers. Plain spoken prose only. "
+        "Do not mention \"TubeNews\" more than once. "
+        "Keep a calm, authoritative news-anchor tone.\n\n"
+        f"Stories to cover:\n\n{formatted}"
+    )
+
+    api_url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={api_key}"
+    )
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    try:
+        response = requests.post(api_url, json=payload, timeout=_GEMINI_TIMEOUT)
+        if response.status_code != 200:
+            logger.warning(
+                "Podcast: Gemini returned HTTP %d while generating script",
+                response.status_code,
+            )
+            return None
+        candidates = response.json().get("candidates", [])
+        if not candidates:
+            logger.warning("Podcast: Gemini returned no candidates for script")
+            return None
+        parts_list = (
+            candidates[0].get("content", {}).get("parts", [])
+        )
+        text = next((p.get("text", "") for p in parts_list if "text" in p), "")
+        return text.strip() or None
+    except Exception as exc:
+        logger.warning("Podcast: Gemini script generation failed: %s", exc)
+        return None
+
+
+def _tts_google(text: str, api_key: str, voice: str, config: dict) -> bytes | None:
+    """Synthesise *text* via Google Cloud Text-to-Speech REST API.  Returns MP3 bytes."""
+    lang = config.get("tts_language_code", "en-US")
+    voice_name = voice or "en-US-Neural2-J"
+    url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}"
+    payload = {
+        "input": {"text": text},
+        "voice": {"languageCode": lang, "name": voice_name},
+        "audioConfig": {"audioEncoding": "MP3"},
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=120)
+        if resp.status_code != 200:
+            logger.warning(
+                "Podcast (google TTS): HTTP %d: %s",
+                resp.status_code,
+                resp.text[:120],
+            )
+            return None
+        audio_b64 = resp.json().get("audioContent", "")
+        if not audio_b64:
+            logger.warning("Podcast (google TTS): empty audioContent in response")
+            return None
+        return base64.b64decode(audio_b64)
+    except Exception as exc:
+        logger.warning("Podcast (google TTS): request failed: %s", exc)
+        return None
+
+
+def _tts_deepgram(text: str, api_key: str, voice: str) -> bytes | None:
+    """Synthesise *text* via Deepgram Aura TTS REST API.  Returns MP3 bytes."""
+    model = voice or "aura-asteria-en"
+    url = f"https://api.deepgram.com/v1/speak?model={model}"
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(url, json={"text": text}, headers=headers, timeout=120)
+        if resp.status_code != 200:
+            logger.warning(
+                "Podcast (deepgram TTS): HTTP %d: %s",
+                resp.status_code,
+                resp.text[:120],
+            )
+            return None
+        return resp.content
+    except Exception as exc:
+        logger.warning("Podcast (deepgram TTS): request failed: %s", exc)
+        return None
+
+
+def _tts_elevenlabs(text: str, api_key: str, voice: str) -> bytes | None:
+    """Synthesise *text* via ElevenLabs TTS REST API.  Returns MP3 bytes."""
+    voice_id = voice or "EXAVITQu4vr4xnSDxMaL"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": api_key,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+    }
+    payload = {"text": text, "model_id": "eleven_multilingual_v2"}
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=120)
+        if resp.status_code != 200:
+            logger.warning(
+                "Podcast (elevenlabs TTS): HTTP %d: %s",
+                resp.status_code,
+                resp.text[:120],
+            )
+            return None
+        return resp.content
+    except Exception as exc:
+        logger.warning("Podcast (elevenlabs TTS): request failed: %s", exc)
+        return None
+
+
+def _tts_openai(text: str, api_key: str, voice: str) -> bytes | None:
+    """Synthesise *text* via OpenAI TTS REST API.  Returns MP3 bytes."""
+    url = "https://api.openai.com/v1/audio/speech"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "tts-1-hd",
+        "input": text,
+        "voice": voice or "nova",
+        "response_format": "mp3",
+    }
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=120)
+        if resp.status_code != 200:
+            logger.warning(
+                "Podcast (openai TTS): HTTP %d: %s",
+                resp.status_code,
+                resp.text[:120],
+            )
+            return None
+        return resp.content
+    except Exception as exc:
+        logger.warning("Podcast (openai TTS): request failed: %s", exc)
+        return None
+
+
+def _tts_synthesize(script_text: str, config: dict) -> bytes | None:
+    """Dispatch to the configured TTS provider.  Returns MP3 bytes or ``None``."""
+    provider = config.get("tts_provider", "google").lower()
+    api_key = config.get("tts_api_key", "").strip()
+    voice = config.get("tts_voice_id", "").strip()
+    if not api_key:
+        return None
+    if provider == "google":
+        return _tts_google(script_text, api_key, voice, config)
+    if provider == "deepgram":
+        return _tts_deepgram(script_text, api_key, voice)
+    if provider == "elevenlabs":
+        return _tts_elevenlabs(script_text, api_key, voice)
+    if provider == "openai":
+        return _tts_openai(script_text, api_key, voice)
+    logger.warning("Podcast: unknown tts_provider %r — skipping synthesis", provider)
+    return None
+
+
+def _build_podcast_feed(user_data: dict, episodes: list[dict], base_url: str) -> bytes:
+    """Build an iTunes-compatible podcast RSS feed from *episodes*.
+
+    *episodes* is a list of sidecar dicts (newest-first):
+    ``{"date": "YYYY-MM-DD", "title": str, "duration_seconds": int, "size_bytes": int}``
+    """
+    token = user_data.get("feed_token", "")
+    name = user_data.get("name", "User")
+    feed = FeedGenerator()
+    feed.load_extension("podcast")
+    feed.id(f"{base_url}/feed/{token}/podcast.xml")
+    feed.title(f"{name}'s TubeNews Daily")
+    feed.description("Daily AI-generated audio news briefing from TubeNews")
+    feed.link(href=base_url if base_url else "https://tubenews.example")
+    feed.language("en")
+    feed.podcast.itunes_category("News")  # type: ignore[attr-defined]
+    feed.podcast.itunes_author("TubeNews")  # type: ignore[attr-defined]
+    feed.podcast.itunes_explicit("no")  # type: ignore[attr-defined]
+
+    for ep in episodes:
+        entry = feed.add_entry()
+        mp3_url = f"{base_url}/feed/{token}/podcast/{ep['date']}.mp3"
+        entry.id(mp3_url)
+        entry.title(ep.get("title", f"TubeNews — {ep['date']}"))
+        try:
+            pub_dt = datetime.strptime(ep["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except (ValueError, KeyError):
+            pub_dt = datetime.now(timezone.utc)
+        entry.published(pub_dt)
+        entry.enclosure(mp3_url, str(ep.get("size_bytes", 0)), "audio/mpeg")
+        entry.podcast.itunes_duration(  # type: ignore[attr-defined]
+            str(ep.get("duration_seconds", 0))
+        )
+
+    return feed.rss_str(pretty=True)
+
+
+def _generate_daily_podcasts(config: dict) -> None:
+    """Generate a daily podcast episode for each opted-in user.
+
+    Skips silently when ``tts_api_key`` or ``base_url`` is absent.  For each
+    eligible user, selects unread stories since the last episode, writes a
+    Gemini script, synthesises audio, saves the MP3 + JSON sidecar, purges
+    old episodes beyond ``podcast_retention_days``, and rebuilds
+    ``podcast.xml``.
+    """
+    tts_api_key = config.get("tts_api_key", "").strip()
+    base_url = config.get("base_url", "").rstrip("/")
+    if not tts_api_key or not base_url:
+        return
+
+    now = time.time()
+    retention_days = int(config.get("podcast_retention_days", 7))
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    generated = 0
+
+    for user_data in _iter_all_users():
+        if not user_data.get("preferences", {}).get("podcast_enabled"):
+            continue
+
+        email = user_data.get("email", "")
+        user_dir: Path = user_data["_user_dir"]
+        user_id: str = user_data["_uid"]
+        podcast_dir = user_dir / "podcast"
+
+        last_iso = user_data.get("last_podcast_generated")
+        cutoff_ts: float
+        if last_iso:
+            parsed_ts = iso8601_to_unix(last_iso)
+            cutoff_ts = parsed_ts if parsed_ts is not None else now - _SECONDS_PER_DAY
+        else:
+            cutoff_ts = now - _SECONDS_PER_DAY
+
+        stories = _select_podcast_stories(user_data, user_id, cutoff_ts)
+        if not stories:
+            logger.info("Podcast: no new unread stories for %s — skipping", email)
+            continue
+
+        script = _generate_podcast_script(
+            stories, user_data.get("name", ""), date_str, config
+        )
+        if not script:
+            logger.warning("Podcast: script generation failed for %s", email)
+            continue
+
+        audio = _tts_synthesize(script, config)
+        if not audio:
+            logger.warning("Podcast: TTS synthesis failed for %s", email)
+            continue
+
+        # Write MP3 + JSON sidecar
+        podcast_dir.mkdir(exist_ok=True)
+        (podcast_dir / f"{date_str}.mp3").write_bytes(audio)
+        word_count = len(script.split())
+        duration_sec = max(60, round(word_count / 2.2))  # ~130 WPM
+        try:
+            ep_title = _fmt_no_leading_zeros(
+                datetime.now(timezone.utc), "TubeNews \u2014 %B %-d, %Y"
+            )
+        except (ValueError, TypeError):
+            ep_title = f"TubeNews \u2014 {date_str}"
+        meta = {
+            "date": date_str,
+            "title": ep_title,
+            "duration_seconds": duration_sec,
+            "size_bytes": len(audio),
+        }
+        (podcast_dir / f"{date_str}.json").write_text(
+            json.dumps(meta), encoding="utf-8"
+        )
+
+        # Purge episodes older than retention_days
+        cutoff_date = (
+            datetime.now(timezone.utc) - timedelta(days=retention_days)
+        ).strftime("%Y-%m-%d")
+        for old_mp3 in podcast_dir.glob("*.mp3"):
+            if old_mp3.stem < cutoff_date:
+                old_mp3.unlink(missing_ok=True)
+                (podcast_dir / f"{old_mp3.stem}.json").unlink(missing_ok=True)
+
+        # Rebuild podcast RSS
+        episode_list: list[dict] = []
+        for ep_json in podcast_dir.glob("*.json"):
+            try:
+                episode_list.append(
+                    json.loads(ep_json.read_text(encoding="utf-8"))
+                )
+            except Exception:
+                continue
+        episode_list.sort(key=lambda e: e.get("date", ""), reverse=True)
+        feed_bytes = _build_podcast_feed(user_data, episode_list, base_url)
+        (user_dir / "podcast.xml").write_bytes(feed_bytes)
+
+        # Persist last_podcast_generated
+        user_json_path = user_dir / "user.json"
+        raw = json.loads(user_json_path.read_text(encoding="utf-8"))
+        raw["last_podcast_generated"] = now_utc_iso()
+        tmp = user_json_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+        tmp.rename(user_json_path)
+
+        logger.info(
+            "Podcast: episode generated for %s (%d stories, %ds)",
+            email, len(stories), duration_sec,
+        )
+        generated += 1
+
+    if generated:
+        logger.info("Podcast: generated %d episode%s", generated, "s" if generated != 1 else "")
 
 
 def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], started_at: str) -> None:
