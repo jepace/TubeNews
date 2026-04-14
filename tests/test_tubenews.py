@@ -193,6 +193,82 @@ def test_call_gemini_api_multipart_response(monkeypatch):
     assert result[0]["title"] == "Story"
 
 
+def test_call_gemini_api_503_returns_false(monkeypatch):
+    """HTTP 503 from Gemini must return False (trigger AI backoff) and log at WARNING."""
+    import TubeNews
+    from unittest.mock import MagicMock
+    import logging
+
+    mock_response = MagicMock()
+    mock_response.status_code = 503
+    mock_response.json.return_value = {
+        "error": {
+            "code": 503,
+            "message": "This model is currently experiencing high demand.",
+            "status": "UNAVAILABLE",
+        }
+    }
+    monkeypatch.setattr("requests.post", lambda *a, **kw: mock_response)
+
+    warnings = []
+    original_warning = TubeNews.logger.warning
+    monkeypatch.setattr(TubeNews.logger, "warning", lambda msg, *a, **kw: warnings.append(msg))
+
+    result = TubeNews.call_gemini_api(
+        transcript_text="Test transcript",
+        focus="test",
+        video_title="Test Video",
+        video_date="2026-04-14",
+        gemini_api_key="test_key",
+        model_name="gemini-test",
+    )
+
+    assert result is False, "503 must return False to trigger AI backoff"
+    assert any("503" in w and "Unavailable" in w for w in warnings), (
+        f"Expected warning mentioning 503, got: {warnings}"
+    )
+    assert any("high demand" in w for w in warnings), (
+        "Warning should include the error message from the JSON body"
+    )
+    monkeypatch.setattr(TubeNews.logger, "warning", original_warning)
+
+
+def test_call_gemini_api_other_error_logs_clean_message(monkeypatch):
+    """Non-200/429/503 HTTP errors must extract error.message from JSON, not dump raw text."""
+    import TubeNews
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.status_code = 400
+    mock_response.json.return_value = {
+        "error": {
+            "code": 400,
+            "message": "API key not valid. Please pass a valid API key.",
+            "status": "INVALID_ARGUMENT",
+        }
+    }
+    monkeypatch.setattr("requests.post", lambda *a, **kw: mock_response)
+
+    errors = []
+    original_error = TubeNews.logger.error
+    monkeypatch.setattr(TubeNews.logger, "error", lambda msg, *a, **kw: errors.append(msg))
+
+    result = TubeNews.call_gemini_api(
+        transcript_text="Test transcript",
+        focus="test",
+        video_title="Test Video",
+        video_date="2026-04-14",
+        gemini_api_key="bad_key",
+        model_name="gemini-test",
+    )
+
+    assert result is None
+    assert any("API key not valid" in e for e in errors), (
+        f"Expected clean error message in log, got: {errors}"
+    )
+    monkeypatch.setattr(TubeNews.logger, "error", original_error)
+
+
 # ---------------------------------------------------------------------------
 # parse_story_file
 # ---------------------------------------------------------------------------

@@ -989,8 +989,23 @@ def call_gemini_api(
         elif response.status_code == 429:
             logger.warning(f"{prefix}Gemini: Rate limit hit (429) — AI disabled for this cycle")
             return False
+        elif response.status_code == 503:
+            try:
+                err_msg = response.json().get("error", {}).get(
+                    "message", "Service temporarily unavailable"
+                )
+            except Exception:
+                err_msg = "Service temporarily unavailable"
+            logger.warning(
+                f"{prefix}Gemini: Unavailable (503): {err_msg} — AI disabled for this cycle"
+            )
+            return False
         else:
-            logger.error(f"{prefix}Gemini: HTTP {response.status_code}: {response.text[:200]}")
+            try:
+                err_msg = response.json().get("error", {}).get("message", response.text[:120])
+            except Exception:
+                err_msg = response.text[:120]
+            logger.error(f"{prefix}Gemini: HTTP {response.status_code}: {err_msg}")
             return None
 
     except requests.RequestException as exc:
@@ -3076,8 +3091,13 @@ def _wsb_processor_thread(config: dict) -> None:
                     evid = entry["video_id"]
                     if not _needs_processing(evid, feed_dir):
                         resolved_ids.add(evid)
+                    elif ai_in_backoff or ai_rate_limited:
+                        # AI was unavailable this cycle (backoff active or just triggered).
+                        # Don't charge a retry against the video — this is a Gemini
+                        # availability issue, not a per-video failure.
+                        retry_updates.append({**entry})
                     else:
-                        # Gemini failed or was skipped; use retry_count backstop.
+                        # Gemini ran but failed or returned no output; use retry_count backstop.
                         rc = entry.get("retry_count", 0) + 1
                         if rc > _QUEUE_MAX_RETRIES:
                             logger.warning(
