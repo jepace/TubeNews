@@ -3157,3 +3157,114 @@ def test_account_prefs_digest_unchecked_saves_false(logged_in_client, archive):
     assert user_jsons
     data = json.loads(user_jsons[0].read_text())
     assert data.get("preferences", {}).get("digest_email_enabled") is False
+
+
+# ---------------------------------------------------------------------------
+# Podcast routes: serve_podcast_feed, serve_podcast_episode
+# ---------------------------------------------------------------------------
+
+def _make_podcast_files(archive: Path, token: str = "podtoken123") -> Path:
+    """Create a user dir with podcast.xml and a sample episode MP3."""
+    users_root = archive / "state" / "users"
+    users_root.mkdir(parents=True, exist_ok=True)
+    user_dir = users_root / "pod-uuid"
+    user_dir.mkdir(exist_ok=True)
+    (user_dir / "user.json").write_text(json.dumps({
+        "name": "Pod User",
+        "email": "pod@example.com",
+        "feed_token": token,
+        "preferences": {"podcast_enabled": True},
+    }))
+    # Minimal podcast RSS
+    (user_dir / "podcast.xml").write_bytes(
+        b'<?xml version="1.0"?><rss version="2.0"><channel>'
+        b'<title>Test Podcast</title></channel></rss>'
+    )
+    podcast_dir = user_dir / "podcast"
+    podcast_dir.mkdir()
+    (podcast_dir / "2026-04-14.mp3").write_bytes(b"FAKEMP3DATA")
+    return user_dir
+
+
+def test_podcast_feed_route_returns_xml(client, archive):
+    """GET /feed/<token>/podcast.xml returns the podcast RSS feed."""
+    _make_podcast_files(archive, token="podtoken123")
+    r = client.get("/feed/podtoken123/podcast.xml")
+    assert r.status_code == 200
+    assert r.content_type.startswith("application/rss+xml")
+    assert b"Test Podcast" in r.data
+
+
+def test_podcast_feed_route_returns_404_for_unknown_token(client, archive):
+    """Unknown token returns 404."""
+    _make_podcast_files(archive, token="realtoken")
+    r = client.get("/feed/wrongtoken/podcast.xml")
+    assert r.status_code == 404
+
+
+def test_podcast_feed_route_returns_404_when_no_xml(client, archive):
+    """Token matches but podcast.xml doesn't exist → 404."""
+    users_root = archive / "state" / "users"
+    users_root.mkdir(parents=True, exist_ok=True)
+    user_dir = users_root / "nopod-uuid"
+    user_dir.mkdir()
+    (user_dir / "user.json").write_text(json.dumps({
+        "name": "No Pod", "email": "nopod@example.com", "feed_token": "nopodtoken",
+    }))
+    r = client.get("/feed/nopodtoken/podcast.xml")
+    assert r.status_code == 404
+
+
+def test_podcast_episode_route_returns_audio(client, archive):
+    """GET /feed/<token>/podcast/<date>.mp3 returns MP3 audio."""
+    _make_podcast_files(archive, token="podtoken123")
+    r = client.get("/feed/podtoken123/podcast/2026-04-14.mp3")
+    assert r.status_code == 200
+    assert r.content_type == "audio/mpeg"
+    assert r.data == b"FAKEMP3DATA"
+
+
+def test_podcast_episode_route_returns_404_for_missing_date(client, archive):
+    """Valid token but non-existent date returns 404."""
+    _make_podcast_files(archive, token="podtoken123")
+    r = client.get("/feed/podtoken123/podcast/2020-01-01.mp3")
+    assert r.status_code == 404
+
+
+def test_podcast_episode_route_rejects_bad_date(client, archive):
+    """Non-YYYY-MM-DD date string returns 400."""
+    _make_podcast_files(archive, token="podtoken123")
+    r = client.get("/feed/podtoken123/podcast/../../etc/passwd.mp3")
+    assert r.status_code in (400, 404)
+
+
+def test_account_prefs_saves_podcast_enabled(logged_in_client, archive):
+    """Submitting the prefs form with podcast_enabled checked stores True."""
+    r = logged_in_client.post("/account", data={
+        "action": "prefs",
+        "font_size": "normal",
+        "podcast_enabled": "on",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    users_root = archive / "state" / "users"
+    user_jsons = list(users_root.glob("*/user.json"))
+    assert user_jsons
+    data = json.loads(user_jsons[0].read_text())
+    assert data.get("preferences", {}).get("podcast_enabled") is True
+
+
+def test_account_prefs_podcast_unchecked_saves_false(logged_in_client, archive):
+    """Submitting the prefs form without podcast_enabled stores False."""
+    r = logged_in_client.post("/account", data={
+        "action": "prefs",
+        "font_size": "normal",
+        # podcast_enabled intentionally omitted
+    }, follow_redirects=True)
+    assert r.status_code == 200
+
+    users_root = archive / "state" / "users"
+    user_jsons = list(users_root.glob("*/user.json"))
+    assert user_jsons
+    data = json.loads(user_jsons[0].read_text())
+    assert data.get("preferences", {}).get("podcast_enabled") is False

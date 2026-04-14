@@ -207,6 +207,14 @@
         </label>
       </div>
 
+      <div class="form-row" style="margin-top:0.5rem;">
+        <label class="checkbox-label">
+          <input type="checkbox" name="podcast_enabled"
+                 {% if prefs.get('podcast_enabled') %}checked{% endif %}>
+          Generate a daily audio podcast of new stories
+        </label>
+      </div>
+
       <button type="submit" class="btn-save">Save display preferences</button>
     </form>
   </section>

@@ -1082,6 +1082,44 @@ def serve_feed_public(token: str):
     abort(404)
 
 
+@app.route("/feed/<token>/podcast.xml")
+def serve_podcast_feed(token: str) -> Response:
+    """Serve a user's podcast RSS feed by feed token — no login required."""
+    if not USERS_ROOT.is_dir():
+        abort(404)
+    for user_json in USERS_ROOT.glob("*/user.json"):
+        try:
+            data = json.loads(user_json.read_text(encoding="utf-8"))
+            if data.get("feed_token") == token:
+                podcast_xml = user_json.parent / "podcast.xml"
+                if not podcast_xml.exists():
+                    abort(404)
+                return Response(podcast_xml.read_bytes(), mimetype="application/rss+xml")
+        except Exception:
+            continue
+    abort(404)
+
+
+@app.route("/feed/<token>/podcast/<date>.mp3")
+def serve_podcast_episode(token: str, date: str) -> Response:
+    """Serve a single podcast episode MP3 by feed token and YYYY-MM-DD date."""
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        abort(400)
+    if not USERS_ROOT.is_dir():
+        abort(404)
+    for user_json in USERS_ROOT.glob("*/user.json"):
+        try:
+            data = json.loads(user_json.read_text(encoding="utf-8"))
+            if data.get("feed_token") == token:
+                mp3_path = user_json.parent / "podcast" / f"{date}.mp3"
+                if not mp3_path.exists():
+                    abort(404)
+                return send_file(mp3_path, mimetype="audio/mpeg")
+        except Exception:
+            continue
+    abort(404)
+
+
 @app.route("/feed")
 @login_required
 def serve_feed():
@@ -1273,8 +1311,10 @@ def account():
                 flash("Invalid timezone.", "error")
                 return redirect(url_for("account"))
             digest_email_enabled = "digest_email_enabled" in request.form
+            podcast_enabled = "podcast_enabled" in request.form
             current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode,
-                                                  "digest_email_enabled": digest_email_enabled}
+                                                  "digest_email_enabled": digest_email_enabled,
+                                                  "podcast_enabled": podcast_enabled}
             if timezone:
                 current_user._data["preferences"]["timezone"] = timezone
             current_user._save()
