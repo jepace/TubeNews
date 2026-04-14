@@ -250,7 +250,7 @@ def _write_email_index(index: dict[str, str]) -> None:
 def _index_add(email: str, uid: str) -> None:
     USERS_ROOT.mkdir(parents=True, exist_ok=True)
     lock_path = USERS_ROOT / "index.lock"
-    with open(lock_path, "w") as lf:
+    with open(lock_path, "w", encoding="utf-8") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         index = _read_email_index()
         index[email.strip().lower()] = uid
@@ -260,7 +260,7 @@ def _index_add(email: str, uid: str) -> None:
 def _index_remove(email: str) -> None:
     USERS_ROOT.mkdir(parents=True, exist_ok=True)
     lock_path = USERS_ROOT / "index.lock"
-    with open(lock_path, "w") as lf:
+    with open(lock_path, "w", encoding="utf-8") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         index = _read_email_index()
         index.pop(email.strip().lower(), None)

@@ -2282,7 +2282,11 @@ def test_send_ntfy_singular_story_word():
     sent = []
     import unittest.mock as _mock
     with _mock.patch.object(_ur, "urlopen", lambda req, timeout=None: sent.append(req)):
-        _send_ntfy("t", 1, [{"channel_id": "UCa", "channel_name": "Alpha", "stories_written": 1}], "2026-01-01T07:00:00Z")
+        _send_ntfy(
+            "t", 1,
+            [{"channel_id": "UCa", "channel_name": "Alpha", "stories_written": 1}],
+            "2026-01-01T07:00:00Z",
+        )
     assert "1 new story" in sent[0].data.decode()
     assert "stories" not in sent[0].data.decode()
 
