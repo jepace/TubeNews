@@ -44,6 +44,9 @@ from TubeNews import (
     _TRANSCRIPT_MAX_ATTEMPTS,
     now_utc_iso,
     unix_to_iso8601,
+    _title_from_entry_el,
+    _title_from_raw_xml,
+    _merge_queue_entry,
 )
 
 
@@ -4016,3 +4019,156 @@ def test_generate_daily_podcasts_purges_old_episodes(tmp_path, monkeypatch):
     # Old episode (10 days) should be gone; recent one should remain
     assert not (podcast_dir / f"{old_date}.mp3").exists()
     assert (podcast_dir / f"{recent_date}.mp3").exists()
+
+
+# ---------------------------------------------------------------------------
+# _title_from_entry_el / _title_from_raw_xml
+# ---------------------------------------------------------------------------
+
+import xml.etree.ElementTree as ET
+
+_ATOM_NS   = "http://www.w3.org/2005/Atom"
+_YT_SCHEMA = "http://www.youtube.com/xml/schemas/2015"
+_MEDIA_NS_URI = "http://search.yahoo.com/mrss/"
+
+
+def _make_entry_xml(atom_title: str = "", media_title: str = "") -> str:
+    """Build a minimal YouTube WebSub Atom entry XML string for testing."""
+    parts = [
+        f'<entry xmlns="{_ATOM_NS}"'
+        f' xmlns:yt="{_YT_SCHEMA}"'
+        f' xmlns:media="{_MEDIA_NS_URI}">',
+        f"  <yt:videoId>TEST12345678</yt:videoId>",
+        f"  <yt:channelId>UCtest</yt:channelId>",
+    ]
+    if atom_title is not None:
+        parts.append(f"  <title>{atom_title}</title>")
+    if media_title:
+        parts.append(
+            f"  <media:group>"
+            f"<media:title>{media_title}</media:title>"
+            f"</media:group>"
+        )
+    parts.append("</entry>")
+    return "".join(parts)
+
+
+def test_title_from_entry_el_atom_title():
+    """Extracts the title from the standard <atom:title> element."""
+    raw = _make_entry_xml(atom_title="Council Meeting April 2026")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Council Meeting April 2026"
+
+
+def test_title_from_entry_el_media_title_fallback():
+    """Falls back to <media:title> when <atom:title> is empty."""
+    raw = _make_entry_xml(atom_title="", media_title="Budget Hearing")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Budget Hearing"
+
+
+def test_title_from_entry_el_atom_title_preferred_over_media():
+    """Prefers <atom:title> even when <media:title> is also present."""
+    raw = _make_entry_xml(atom_title="Atom Title", media_title="Media Title")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Atom Title"
+
+
+def test_title_from_entry_el_both_empty():
+    """Returns '' when neither title field has content."""
+    raw = _make_entry_xml(atom_title="", media_title="")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == ""
+
+
+def test_title_from_entry_el_strips_whitespace():
+    """Strips surrounding whitespace from the extracted title."""
+    raw = _make_entry_xml(atom_title="  Planning Meeting  ")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Planning Meeting"
+
+
+def test_title_from_raw_xml_success():
+    """_title_from_raw_xml extracts title from a well-formed XML string."""
+    raw = _make_entry_xml(atom_title="Zoning Board Update")
+    assert _title_from_raw_xml(raw) == "Zoning Board Update"
+
+
+def test_title_from_raw_xml_media_fallback():
+    """_title_from_raw_xml falls back to media:title when atom:title is empty."""
+    raw = _make_entry_xml(atom_title="", media_title="Parks Commission")
+    assert _title_from_raw_xml(raw) == "Parks Commission"
+
+
+def test_title_from_raw_xml_empty_string():
+    """_title_from_raw_xml returns '' for an empty input."""
+    assert _title_from_raw_xml("") == ""
+
+
+def test_title_from_raw_xml_malformed_xml():
+    """_title_from_raw_xml returns '' for malformed XML (fails open)."""
+    assert _title_from_raw_xml("<not-valid-xml") == ""
+
+
+# ---------------------------------------------------------------------------
+# _merge_queue_entry
+# ---------------------------------------------------------------------------
+
+def test_merge_queue_entry_updates_title_from_new_notification():
+    """When the new notification has a title, it replaces an older/empty one."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 2, "retry_count": 1,
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "Updated Title",
+        "queued_at": "2026-04-01T01:00:00Z", "next_try_at": "2026-04-01T01:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "raw_entry_xml": "<entry>new</entry>", "date": "2026-04-01",
+    }
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["title"] == "Updated Title"
+
+
+def test_merge_queue_entry_preserves_title_when_new_is_empty():
+    """When the new notification has no title, the existing title is kept."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "Original Title",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 1, "retry_count": 0,
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "",
+        "queued_at": "2026-04-01T01:00:00Z", "next_try_at": "2026-04-01T01:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "raw_entry_xml": "<entry>updated-xml</entry>", "date": "2026-04-01",
+    }
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["title"] == "Original Title"
+    # But raw_entry_xml should be updated to the newer notification
+    assert merged["raw_entry_xml"] == "<entry>updated-xml</entry>"
+
+
+def test_merge_queue_entry_preserves_retry_state():
+    """Retry state (queued_at, next_try_at, transcript_attempts, retry_count) is preserved."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "My Video",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T02:00:00Z",
+        "transcript_attempts": 3, "retry_count": 2,
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "My Video (edited)",
+        "queued_at": "2026-04-01T03:00:00Z", "next_try_at": "2026-04-01T03:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "raw_entry_xml": "<entry>new</entry>", "date": "2026-04-01",
+    }
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["queued_at"] == "2026-04-01T00:00:00Z"          # preserved
+    assert merged["next_try_at"] == "2026-04-01T02:00:00Z"        # preserved
+    assert merged["transcript_attempts"] == 3                      # preserved
+    assert merged["retry_count"] == 2                             # preserved
+    assert merged["title"] == "My Video (edited)"                  # updated

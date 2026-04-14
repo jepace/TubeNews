@@ -633,6 +633,8 @@ _YT_RSS_NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "yt":   "http://www.youtube.com/xml/schemas/2015",
 }
+# Alias used by WebSub entry parsing helpers (same namespaces, different context).
+_YT_NS = _YT_RSS_NS
 
 # Browser-like headers for YouTube requests.  YouTube doesn't actively block
 # programmatic access to public RSS feeds or redirect checks, but sending a
@@ -2345,6 +2347,107 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
         logger.error(f"Queue removal update failed ({path}): {exc}")
 
 
+_MEDIA_NS = {"media": "http://search.yahoo.com/mrss/"}
+
+
+def _title_from_entry_el(entry_el: "ET.Element") -> str:
+    """Extract the best available title from an Atom ``<entry>`` XML element.
+
+    YouTube WebSub notifications include the video title in (at least) two
+    places:
+
+    1. ``<title>`` in the Atom namespace — present in standard notifications.
+    2. ``<media:group><media:title>`` in the MediaRSS namespace — present in
+       some notifications, and always matches the ``<title>`` when both exist.
+
+    We try both so that a notification with an empty ``<title>`` but a
+    populated ``<media:title>`` still yields the correct title.
+
+    Args:
+        entry_el: A parsed ``xml.etree.ElementTree.Element`` for the
+                  ``<entry>`` node of a YouTube Atom notification.
+
+    Returns:
+        The video title string, or ``""`` if neither field is populated.
+    """
+    # 1. Standard Atom <title>
+    title_el = entry_el.find("atom:title", _YT_NS)
+    if title_el is not None and title_el.text:
+        return title_el.text.strip()
+
+    # 2. MediaRSS <media:group><media:title>
+    group_el = entry_el.find("media:group", _MEDIA_NS)
+    if group_el is not None:
+        mt = group_el.find("media:title", _MEDIA_NS)
+        if mt is not None and mt.text:
+            return mt.text.strip()
+
+    return ""
+
+
+def _title_from_raw_xml(raw_xml: str) -> str:
+    """Parse a stored WebSub entry XML fragment and extract the video title.
+
+    Accepts the ``raw_entry_xml`` string stored in push-queue entries and
+    delegates to :func:`_title_from_entry_el` for the actual extraction.
+    Used at processing time so that a queue entry whose ``title`` field is
+    empty — but whose ``raw_entry_xml`` was later updated by a second
+    notification that carried the title — can still be processed with the
+    correct title without any external network calls.
+
+    Fails open: returns ``""`` on any parse error.
+
+    Args:
+        raw_xml: Raw XML string of a single ``<entry>`` element from a
+                 YouTube WebSub Atom notification.
+
+    Returns:
+        The video title string, or ``""`` if it cannot be extracted.
+    """
+    if not raw_xml:
+        return ""
+    try:
+        entry_el = ET.fromstring(raw_xml)
+        return _title_from_entry_el(entry_el)
+    except Exception as exc:
+        logger.debug(f"Raw entry XML title parse failed: {exc}")
+        return ""
+
+
+def _merge_queue_entry(existing: dict, new_entry: dict) -> dict:
+    """Merge a newer WebSub notification into an existing push-queue entry.
+
+    When YouTube sends a second notification for the same video (e.g. because
+    the channel owner edited the title or description), we want to:
+
+    * Pull in fresh metadata (``raw_entry_xml``, ``scheduled_start``, ``date``)
+      from the new notification.
+    * Update ``title`` only when the new notification carries a non-empty one —
+      a blank title in a re-push must not overwrite a title we already have.
+    * **Preserve** all retry state (``queued_at``, ``next_try_at``,
+      ``transcript_attempts``, ``retry_count``) so the retry schedule is not
+      inadvertently reset by a metadata-only re-push.
+
+    Args:
+        existing:  The queue entry currently stored in the push queue.
+        new_entry: The fresh entry parsed from the incoming WebSub notification.
+
+    Returns:
+        Merged dict ready to be written back to the push queue.
+    """
+    return {
+        **new_entry,
+        # Keep the original enqueueing timestamp.
+        "queued_at":           existing.get("queued_at", new_entry["queued_at"]),
+        # Preserve the existing retry schedule; don't reset the timer.
+        "next_try_at":         existing.get("next_try_at", new_entry["next_try_at"]),
+        "transcript_attempts": existing.get("transcript_attempts", 0),
+        "retry_count":         existing.get("retry_count", 0),
+        # Keep the known title when the new notification omits it.
+        "title":               new_entry.get("title") or existing.get("title", ""),
+    }
+
+
 def _requeue_video(
     video_id: str,
     channel_id: str,
@@ -2653,11 +2756,6 @@ def _wsb_receiver_thread(config: dict) -> None:
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_path = queue_dir / "push_queue.json"
 
-    _YT_NS = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "yt":   "http://www.youtube.com/xml/schemas/2015",
-    }
-
     class _Handler(_http_server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # silence access log  # pylint: disable=redefined-builtin
             logger.debug("WebSub receiver: " + format % args)
@@ -2704,7 +2802,6 @@ def _wsb_receiver_thread(config: dict) -> None:
             for entry in root.findall("atom:entry", _YT_NS):
                 vid_el   = entry.find("yt:videoId",    _YT_NS)
                 ch_el    = entry.find("yt:channelId",  _YT_NS)
-                title_el = entry.find("atom:title",    _YT_NS)
                 pub_el   = entry.find("atom:published", _YT_NS)
                 sched_el = entry.find("yt:scheduledStartTime", _YT_NS)
                 if vid_el is not None and ch_el is not None:
@@ -2717,7 +2814,8 @@ def _wsb_receiver_thread(config: dict) -> None:
                     new_entries.append({
                         "video_id":   vid_el.text.strip(),
                         "channel_id": ch_el.text.strip(),
-                        "title":      (title_el.text or "").strip() if title_el is not None else "",
+                        # Try atom:title first; fall back to media:title inside media:group.
+                        "title":      _title_from_entry_el(entry),
                         "date":       pub_date,
                         "scheduled_start": sched_start,
                         "raw_entry_xml": raw_entry,
@@ -2753,7 +2851,9 @@ def _wsb_receiver_thread(config: dict) -> None:
                                             f" — ignoring duplicate push"
                                         )
                                         continue
-                                by_vid[ne_vid] = ne  # keep latest queued_at
+                                if ne_vid in by_vid:
+                                    ne = _merge_queue_entry(by_vid[ne_vid], ne)
+                                by_vid[ne_vid] = ne
                                 queued_entries.append(ne)
                             if queued_entries:
                                 updated = list(by_vid.values())
@@ -3075,7 +3175,11 @@ def _wsb_processor_thread(config: dict) -> None:
                 video_infos = [
                     {
                         "id":    e["video_id"],
-                        "title": e.get("title", "") or "[title unknown]",
+                        "title": (
+                            e.get("title", "")
+                            or _title_from_raw_xml(e.get("raw_entry_xml", ""))
+                            or "[title unknown]"
+                        ),
                         "date":  (e.get("date", "") or today_str)[:10],
                         "_queue_entry": e,
                     }
