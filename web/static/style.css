@@ -924,27 +924,28 @@ main:has(.feed-layout) {
 
 /* Sidebar drag-resize handle */
 .sidebar-resize {
-  width: 8px;
+  width: 9px;
   flex-shrink: 0;
   cursor: col-resize;
   position: relative;
-  /* Negative margin so the handle overlaps the gap slightly, keeping the
-     visual weight the same as the old fixed margin between sidebar and feed. */
-  margin-right: -4px;
 }
 .sidebar-resize::after {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 3px;
-  width: 2px;
-  background: transparent;
+  left: 4px;
+  width: 1px;
+  background: var(--border);
   border-radius: 1px;
-  transition: background 0.15s;
+  transition: width 0.1s, left 0.1s, background 0.1s;
 }
-.sidebar-resize:hover::after { background: var(--border); }
-.sidebar-resize.is-dragging::after { background: var(--accent); }
+.sidebar-resize:hover::after,
+.sidebar-resize.is-dragging::after {
+  width: 3px;
+  left: 3px;
+  background: var(--accent);
+}
 
 /* Persistent sidebar: hidden state (desktop only — mobile uses overlay) */
 @media (min-width: 701px) {
