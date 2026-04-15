@@ -2164,6 +2164,7 @@ def _read_channels() -> list[FeedConfig]:
 
 _WSB_HUB = "https://pubsubhubbub.appspot.com/subscribe"
 _WSB_LEASE = 604800  # 7 days
+_WSB_RENEWAL_RETRY_COOLDOWN = 3600  # 1 hour — don't retry renewal more frequently
 _SECONDS_PER_HOUR = 3600
 _SECONDS_PER_DAY = 86400
 _PODCAST_TARGET_WORDS = 1300  # ~10 min at 130 WPM with intro/outro overhead
@@ -2177,7 +2178,10 @@ def _wsb_topic(channel_id: str) -> str:
 
 
 def _wsb_record_subscription(channel_id: str, callback_url: str) -> None:
-    """Write or update the subscription record for *channel_id* in ``state/subscriptions.json``."""
+    """Write or update the subscription record for *channel_id* in ``state/subscriptions.json``.
+
+    Updates ``last_renew_attempt`` to now to prevent retry spam after successful subscription.
+    """
     path = STATE_ROOT / "subscriptions.json"
     try:
         subs: dict = json.loads(path.read_text()) if path.exists() else {}
@@ -2187,6 +2191,7 @@ def _wsb_record_subscription(channel_id: str, callback_url: str) -> None:
         "subscribed_at": now_utc_iso(),
         "lease_seconds": _WSB_LEASE,
         "callback_url": callback_url,
+        "last_renew_attempt": now_utc_iso(),
     }
     _atomic_write(path, json.dumps(subs, indent=2))
 
@@ -2230,12 +2235,15 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
         ok = r.status_code == 202
         if ok:
             _wsb_record_subscription(channel_id, cb)
-            logger.debug(f"WebSub: subscribed channel {channel_id}")
+            logger.debug(f"WebSub: subscription confirmed for {channel_id}")
         else:
-            logger.warning(f"WebSub: subscribe returned HTTP {r.status_code} for {channel_id}")
+            logger.debug(
+                f"WebSub: subscription request returned HTTP {r.status_code} for {channel_id} "
+                f"(transient; will retry later)"
+            )
         return ok
     except Exception as exc:
-        logger.warning(f"WebSub: subscribe failed for {channel_id}: {exc}")
+        logger.debug(f"WebSub: subscription request failed for {channel_id}: {exc} (transient; will retry)")
         return False
 
 
@@ -3022,7 +3030,7 @@ def _wsb_processor_thread(config: dict) -> None:
             current_config = _daemon_config.copy()
         supadata_client = Supadata(api_key=supadata_key)
 
-        # -- Renewal check ----------------------------------------------------
+        # -- Renewal check (respects cooldown to prevent spam) ------------------
         subs_path = STATE_ROOT / "subscriptions.json"
         if subs_path.exists():
             try:
@@ -3033,13 +3041,29 @@ def _wsb_processor_thread(config: dict) -> None:
             channels = _read_channels()
             channel_by_id = {ch["channel_id"]: ch["channel_name"] for ch in channels}
             renew_before = time.time() + _SECONDS_PER_DAY  # within next 24 h
+            now_ts = time.time()
             for cid, info in subs.items():
                 subscribed_at = _get_timestamp_as_float(info.get("subscribed_at", 0))
                 expires = subscribed_at + info.get("lease_seconds", _WSB_LEASE)
                 if expires <= renew_before:
+                    # Check cooldown to avoid renewal spam; respect last_renew_attempt timestamp
+                    last_attempt = _get_timestamp_as_float(info.get("last_renew_attempt", 0))
+                    time_since_attempt = now_ts - last_attempt
+                    should_retry = time_since_attempt >= _WSB_RENEWAL_RETRY_COOLDOWN
+
                     ch_name = channel_by_id.get(cid, "?")
-                    logger.info(f"WebSub: renewing subscription for {ch_name} ({cid})")
-                    _wsb_subscribe(cid, current_config)
+                    if should_retry:
+                        logger.debug(
+                            f"WebSub: attempting renewal for {ch_name} ({cid}); "
+                            f"expires in {int(expires - now_ts)}s"
+                        )
+                        _wsb_subscribe(cid, current_config)
+                    else:
+                        remaining_cooldown = int(_WSB_RENEWAL_RETRY_COOLDOWN - time_since_attempt)
+                        logger.debug(
+                            f"WebSub: deferring renewal for {ch_name} ({cid}); "
+                            f"will retry in {remaining_cooldown}s"
+                        )
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
         if time.time() - _last_orphan_recovery >= _SECONDS_PER_DAY:
