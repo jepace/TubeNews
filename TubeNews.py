@@ -2982,9 +2982,9 @@ def _wsb_processor_thread(config: dict) -> None:
     Runs until the process exits (daemon thread).
     """
     # pylint: disable=too-many-locals  # orchestrator thread; locals are named state, not complexity
-    # When Gemini returns 429, back off for this many seconds before retrying
+    # When Gemini returns 429 or 503, back off for this many seconds before retrying
     # AI calls.  Videos stay in the queue; only the AI step is skipped.
-    _AI_BACKOFF_SECONDS = 3600  # 1 hour
+    _AI_BACKOFF_SECONDS = 600  # 10 minutes
     _ai_backoff_until: float = 0.0
     _deprecated_min_age_warned = False
 
