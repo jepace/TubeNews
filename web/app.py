@@ -1807,6 +1807,7 @@ def admin_user(uid: str):
         subscribed=set(user.channel_ids),
         rss_url=_rss_url(user.feed_token),
         feed_url=_feed_url(user.feed_token),
+        bundles=_user_bundles(user._data),
     )
 
 
@@ -1953,6 +1954,33 @@ def admin_rotate_token(uid: str):
     user._data["feed_token"] = str(uuid.uuid4())
     user._save()
     flash("Feed token rotated. The old RSS URL is now invalid.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/bundles", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_bundles(uid: str):
+    """Save channel bundles for the target user."""
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    bundle_count = int(request.form.get("bundle_count", "0") or "0")
+    valid_ids = set(user.channel_ids)
+    bundles: list[dict] = []
+    for i in range(min(bundle_count, 20)):
+        name = request.form.get(f"bundle_name_{i}", "").strip()[:100]
+        if not name:
+            continue
+        channel_ids = [cid for cid in request.form.getlist(f"bundle_channels_{i}") if cid in valid_ids]
+        bundles.append({"name": name, "channel_ids": channel_ids})
+    new_name = request.form.get("new_bundle_name", "").strip()[:100]
+    if new_name:
+        new_channels = [cid for cid in request.form.getlist("new_bundle_channels") if cid in valid_ids]
+        bundles.append({"name": new_name, "channel_ids": new_channels})
+    user._data["bundles"] = bundles
+    user._save()
+    flash("Bundles saved.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
 
