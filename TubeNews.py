@@ -895,7 +895,7 @@ def call_gemini_api(
             time.sleep(call_delay - elapsed)
         _gemini_last_call_time = time.time()
 
-    api_version = "v1beta" if "preview" in model_name else "v1"
+    api_version = "v1beta"  # v1beta supports all models; no need to guess
     api_url = (
         f"https://generativelanguage.googleapis.com/{api_version}/models/"
         f"{model_name}:generateContent?key={gemini_api_key}"
@@ -981,6 +981,10 @@ def call_gemini_api(
             except (KeyError, TypeError, AttributeError) as exc:
                 logger.error(f"{prefix}Gemini: Failed to parse response structure: {exc}")
                 return None
+
+            # Strip markdown code blocks (Gemma and some LLMs wrap JSON in ```json ... ```)
+            raw_text = re.sub(r"```(?:json|python)?\s*\n(.*?)\n```", r"\1", raw_text, flags=re.DOTALL)
+            raw_text = raw_text.strip()
 
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
             if not json_match:
