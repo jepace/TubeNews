@@ -3,11 +3,7 @@
 
 {% block head_extra %}
 {% if is_running %}
-  {% if starting %}
-    <meta http-equiv="refresh" content="2;url={{ url_for('admin_runs') }}">
-  {% else %}
-    <meta http-equiv="refresh" content="5">
-  {% endif %}
+  <meta http-equiv="refresh" content="10">
 {% endif %}
 {% endblock %}
 
@@ -15,9 +11,9 @@
 <div class="admin">
 
   <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
-    <h1 style="margin:0;">Run History</h1>
+    <h1 style="margin:0;">Daemon Log</h1>
     {% if is_running %}
-      <span class="pill pill-locked" style="font-size:0.9rem;">&#9679; Running<span id="run-dots"></span></span>
+      <span class="pill pill-active" style="font-size:0.9rem;">&#9679; Running<span id="run-dots"></span></span>
       <script>
         (function() {
           var el = document.getElementById('run-dots');
@@ -28,16 +24,7 @@
         })();
       </script>
     {% else %}
-      <form method="post" action="{{ url_for('admin_run_now') }}" style="display:flex; align-items:center; gap:0.5rem;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn-sm">Run Now</button>
-        <label style="font-size:0.85rem; color:var(--muted); display:flex; align-items:center; gap:0.25rem;">
-          <input type="checkbox" name="debug" value="1"> Debug
-        </label>
-      </form>
-    {% endif %}
-    {% if current_run_pid %}
-      <a href="{{ url_for('admin_run_log', pid=current_run_pid) }}" style="font-size:0.9rem;">View log</a>
+      <span class="pill pill-locked" style="font-size:0.9rem;">&#9679; Not running</span>
     {% endif %}
   </div>
 
@@ -47,7 +34,6 @@
       <div class="alert-danger">
         <strong>Supadata quota exhausted.</strong>
         No transcript credits remaining ({{ supadata.usedCredits | int }} / {{ supadata.maxCredits | int }} used).
-        Runs are aborted until quota resets.
         {% if supadata.resetDate %}
           Resets: <strong>{{ supadata.resetDate }}</strong>.
         {% endif %}
@@ -55,85 +41,42 @@
     {% endif %}
   {% endif %}
 
-  {% if runs %}
-  <table class="user-table" id="runs-table">
-    <thead>
-      <tr>
-        <th>Started</th>
-        <th>Duration</th>
-        <th>Stories</th>
-        <th>AI</th>
-        <th>Transcripts</th>
-        <th>Channels</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for run in runs %}
-      {% set rid = loop.index %}
-      <tr class="run-row" data-detail="run-detail-{{ rid }}" style="cursor:pointer;" title="Click to expand">
-        <td class="mono">{{ run.started_at | int | format_datetime }}</td>
-        <td class="muted">{{ ((run.finished_at - run.started_at) | int) }}s</td>
-        <td>{{ run.total_stories }}</td>
-        <td>
-          {% if run.ai_rate_limited %}
-            <span class="pill pill-locked">Rate limited</span>
-          {% else %}
-            <span class="pill pill-active">OK</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if run.transcript_quota_exhausted %}
-            <span class="pill pill-locked">Quota exhausted</span>
-          {% else %}
-            <span class="pill pill-active">OK</span>
-          {% endif %}
-        </td>
-        <td>
-          {% set active = run.feeds | selectattr("stories_written", "gt", 0) | list %}
-          {% if active %}
-            {% for f in active %}
-              <a href="{{ url_for('channel_feed', channel_id=f.channel_id) }}">{{ f.channel_name }}</a> (+{{ f.stories_written }}){% if not loop.last %}, {% endif %}
-            {% endfor %}
-          {% else %}
-            <span class="muted">No new stories</span>
-          {% endif %}
-        </td>
-        <td style="white-space:nowrap;">
-          {% if run.has_log and run.pid %}
-            <a href="{{ url_for('admin_run_log', pid=run.pid) }}" onclick="event.stopPropagation();" style="font-size:0.85rem;">Log</a>
-          {% endif %}
-        </td>
-      </tr>
-      <tr class="run-detail" id="run-detail-{{ rid }}" style="display:none;">
-        <td colspan="7" style="padding:0 1rem 0.75rem 2.5rem; background:var(--bg);">
-          <table style="font-size:0.85rem; border-collapse:collapse; width:100%;">
-            <thead>
-              <tr>
-                <th style="text-align:left; padding:4px 8px; color:var(--muted); font-weight:500;">Channel</th>
-                <th style="text-align:right; padding:4px 8px; color:var(--muted); font-weight:500;">Stories written</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for f in run.feeds %}
-              <tr>
-                <td style="padding:3px 8px;">
-                  <a href="{{ url_for('channel_feed', channel_id=f.channel_id) }}">{{ f.channel_name }}</a>
-                </td>
-                <td style="padding:3px 8px; text-align:right; {% if f.stories_written == 0 %}color:var(--muted);{% endif %}">
-                  {{ f.stories_written if f.stories_written else '—' }}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% if log_content %}
+    <p class="muted" style="font-size:0.8rem; margin-bottom:0.5rem;">
+      Last {{ log_tail_lines }} lines of <code>state/run_logs/tubenews_daemon.log</code>
+      {% if is_running %} — refreshing every 10s{% endif %}
+    </p>
+    <pre id="log-pre" style="background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:1rem; font-size:0.75rem; overflow:auto; max-height:70vh; white-space:pre-wrap; word-break:break-all;">{{ log_content }}</pre>
+    <script>
+      document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+          var pre = document.getElementById('log-pre');
+          if (!pre) return;
+          e.preventDefault();
+          var sel = window.getSelection();
+          var range = document.createRange();
+          range.selectNodeContents(pre);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      });
+      (function() {
+        var pre = document.getElementById('log-pre');
+        {% if is_running %}
+        var pinned = true;
+        pre.addEventListener('scroll', function() {
+          pinned = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+        });
+        function scrollToBottom() { if (pinned) pre.scrollTop = pre.scrollHeight; }
+        scrollToBottom();
+        window.addEventListener('load', scrollToBottom);
+        {% else %}
+        pre.scrollTop = pre.scrollHeight;
+        {% endif %}
+      })();
+    </script>
   {% else %}
-    <p class="muted">No runs recorded yet. Run <code>TubeNews.py</code> to generate the first entry.</p>
+    <p class="muted">No daemon log found. Start the daemon to begin logging.</p>
   {% endif %}
 
   <h1 style="margin-top: 2.5rem;">Channel Health</h1>
@@ -162,17 +105,6 @@
   {% else %}
     <p class="muted">No archive data found.</p>
   {% endif %}
-</div>
 
-<script>
-(function() {
-  document.querySelectorAll('.run-row').forEach(function(row) {
-    row.addEventListener('click', function() {
-      var detail = document.getElementById(row.dataset.detail);
-      if (!detail) return;
-      detail.style.display = detail.style.display === 'none' ? '' : 'none';
-    });
-  });
-})();
-</script>
+</div>
 {% endblock %}
