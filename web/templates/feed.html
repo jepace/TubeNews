@@ -8,6 +8,16 @@
   if (localStorage.getItem('tn_sidebar') === 'closed') {
     document.documentElement.classList.add('sidebar-hidden');
   }
+  /* Restore sidebar width before first paint (saved as em-units so it
+     stays proportional when the user switches font sizes). */
+  (function () {
+    var savedEm = parseFloat(localStorage.getItem('tn_sidebar_w_em'));
+    if (!savedEm) return;
+    var cls = document.documentElement.className;
+    var fs = cls.indexOf('font-larger') >= 0 ? 24
+           : cls.indexOf('font-large')  >= 0 ? 20 : 16;
+    document.documentElement.style.setProperty('--sidebar-w', (savedEm * fs) + 'px');
+  })();
 </script>
 {% endif %}
 {% endblock %}
@@ -123,6 +133,7 @@
   </a>
   {% endfor %}
 </aside>
+<div class="sidebar-resize" id="sidebar-resize" title="Drag to resize · Double-click to reset"></div>
 {% endif %}
 <div class="feed-page">
 
@@ -951,6 +962,55 @@
       document.body.classList.remove('sidebar-backdrop');
       btn.setAttribute('aria-expanded', 'false');
     }
+  });
+})();
+
+/* Sidebar drag-to-resize */
+(function () {
+  var sidebar = document.getElementById('channel-sidebar');
+  var handle  = document.getElementById('sidebar-resize');
+  if (!sidebar || !handle) return;
+
+  var STORAGE_KEY = 'tn_sidebar_w_em';
+
+  function getRootFontSize() {
+    return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  }
+
+  var startX, startW;
+
+  handle.addEventListener('pointerdown', function (e) {
+    if (document.documentElement.classList.contains('sidebar-hidden')) return;
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    handle.classList.add('is-dragging');
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(ev) {
+      var newW = Math.max(120, Math.min(480, startW + (ev.clientX - startX)));
+      document.documentElement.style.setProperty('--sidebar-w', newW + 'px');
+    }
+
+    function onUp() {
+      handle.classList.remove('is-dragging');
+      document.body.style.cursor     = '';
+      document.body.style.userSelect = '';
+      var finalPx = sidebar.getBoundingClientRect().width;
+      localStorage.setItem(STORAGE_KEY, finalPx / getRootFontSize());
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup',   onUp);
+    }
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup',   onUp);
+    e.preventDefault();
+  });
+
+  /* Double-click resets to the CSS default (removes any saved override). */
+  handle.addEventListener('dblclick', function () {
+    document.documentElement.style.removeProperty('--sidebar-w');
+    localStorage.removeItem(STORAGE_KEY);
   });
 })();
 </script>

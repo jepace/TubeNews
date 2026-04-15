@@ -1686,6 +1686,7 @@ def test_process_feed_processes_new_video(tmp_path, monkeypatch):
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1751,6 +1752,7 @@ def test_process_feed_propagates_ai_rate_limit(tmp_path, monkeypatch):
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1775,6 +1777,7 @@ def test_process_feed_gemini_no_stories_writes_no_stories_metadata(tmp_path, mon
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -1801,6 +1804,7 @@ def test_process_feed_gemini_transient_error_no_metadata(tmp_path, monkeypatch):
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
@@ -2117,6 +2121,7 @@ def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
 
     feed = {"channel_id": "UCtest1234", "channel_name": "Test Channel", "focus": "housing"}
     feed_dir = tmp_path / "test_channel"
@@ -2291,6 +2296,7 @@ def test_process_feed_stops_on_transcript_quota_exhausted(tmp_path, monkeypatch)
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     monkeypatch.setattr(TubeNews, "discover_videos", lambda *a, **kw: [
