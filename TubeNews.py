@@ -33,7 +33,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, TypedDict
+from typing import Any, Iterator, NotRequired, TypedDict
 
 # ---------------------------------------------------------------------------
 # Third-party imports
@@ -283,6 +283,7 @@ class VideoInfo(TypedDict):
     id: str
     title: str
     date: str
+    published_at: NotRequired[str]  # full ISO 8601 timestamp; "" when unavailable
 
 
 class FeedConfig(TypedDict):
@@ -317,6 +318,7 @@ class ParsedStory(TypedDict):
     content_hash: str
     user_ids: list[str]
     published: str
+    video_published: str  # when the YouTube video was published; "" for older stories
 
 
 class MetadataDict(TypedDict, total=False):
@@ -328,6 +330,7 @@ class MetadataDict(TypedDict, total=False):
     video_id: str
     video_title: str
     video_date: str
+    video_published_at: str  # full ISO 8601 publish timestamp; "" when unknown
     status: str
     processed_at: str
     skip_reason: str
@@ -477,6 +480,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         and not l.startswith("**Topics:**")
         and not l.startswith("**Users:**")
         and not l.startswith("Published")
+        and not l.startswith("Video published")
     ]
     body_html = "<br>".join(html.escape(l) for l in body_lines)
 
@@ -498,6 +502,9 @@ def parse_story_file(story_path: Path) -> ParsedStory:
     published_match = re.search(r"^Published\s+(.+)$", text, re.MULTILINE)
     published = published_match.group(1).strip() if published_match else ""
 
+    vid_pub_match = re.search(r"^Video published\s+(.+)$", text, re.MULTILINE)
+    video_published = vid_pub_match.group(1).strip() if vid_pub_match else ""
+
     return {
         "title": title,
         "dateline": dateline,
@@ -506,6 +513,7 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         "topics": topics,
         "user_ids": user_ids,
         "published": published,
+        "video_published": video_published,
         # Keep a hash of the raw text so feed entry IDs are stable across runs.
         "content_hash": hashlib.md5(text.encode()).hexdigest(),
     }
@@ -633,6 +641,8 @@ _YT_RSS_NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "yt":   "http://www.youtube.com/xml/schemas/2015",
 }
+# Alias used by WebSub entry parsing helpers (same namespaces, different context).
+_YT_NS = _YT_RSS_NS
 
 # Browser-like headers for YouTube requests.  YouTube doesn't actively block
 # programmatic access to public RSS feeds or redirect checks, but sending a
@@ -730,6 +740,7 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
             "id":    vid_el.text.strip(),
             "title": (title_el.text or "").strip() if title_el is not None else "",
             "date":  date,
+            "published_at": pub,  # full ISO 8601 timestamp; "" if not present
         })
     if not videos:
         logger.warning(f"{prefix}YouTube RSS: Feed returned 0 entries — channel ID may be wrong")
@@ -1024,6 +1035,7 @@ def write_story_files(
     *,
     clear_existing: bool = True,
     start_index: int = 1,
+    video_published_at: str = "",
 ) -> None:
     """Write each story dict as a numbered Markdown file inside *meeting_dir*.
 
@@ -1038,13 +1050,19 @@ def write_story_files(
 
         # Story Title
         *AP-style dateline*
-        Published April 5, 2026 at 3:15 PM EST
+        Video published April 5, 2026 at 10:30 AM UTC
+        Published April 5, 2026 at 3:15 PM UTC
         **Source:** https://youtu.be/<video_id>?t=120
 
         Body text …
 
         ---
         **Segment Start:** 120s
+
+    The ``Video published`` line (when *video_published_at* is supplied) shows
+    when YouTube made the source video public.  The ``Published`` line records
+    when TubeNews wrote the story — the two will differ by however long
+    transcript fetching and AI processing took.
     """
     if clear_existing:
         for old_file in meeting_dir.glob("[0-9]*.md"):
@@ -1056,6 +1074,21 @@ def write_story_files(
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"# {story['title']}\n")
             fh.write(f"*{story.get('dateline', 'Local News')}*\n")
+            # Optional: when the source video was published on YouTube.
+            if video_published_at:
+                try:
+                    vid_pub_utc = datetime.fromisoformat(
+                        video_published_at.replace("Z", "+00:00")
+                    ).astimezone(timezone.utc)
+                    vid_pub_formatted = (
+                        _fmt_no_leading_zeros(vid_pub_utc, "%B %d, %Y")
+                        + " at "
+                        + _fmt_no_leading_zeros(vid_pub_utc, "%I:%M %p")
+                        + " UTC"
+                    )
+                    fh.write(f"Video published {vid_pub_formatted}\n")
+                except Exception:
+                    pass
             # Record when TubeNews wrote this story (not the YouTube publish date).
             # Always stored in UTC. Timezone conversion happens at display time in the web app.
             pub_now_utc = datetime.now(timezone.utc)
@@ -1634,6 +1667,7 @@ def process_video(
     channel_id: str = "",
     scheduled_start: str | None = None,
     raw_entry_xml: str = "",
+    video_published_at: str = "",
 ) -> tuple[str, int]:
     """Fetch, analyse, and archive one video.
 
@@ -1707,6 +1741,7 @@ def process_video(
                 "video_id": video_id,
                 "video_title": video_title,
                 "video_date": video_date,
+                "video_published_at": video_published_at,
                 "status": "ignored_short",
                 "processed_at": now_utc_iso(),
             }))
@@ -1728,10 +1763,15 @@ def process_video(
             # to process captions. Treat those as transient so the daemon retries.
             try:
                 from datetime import datetime as _dt
-                pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
-                age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
+                if video_published_at:
+                    # Prefer full timestamp for sub-day precision.
+                    pub_dt = _dt.fromisoformat(video_published_at.replace("Z", "+00:00"))
+                    age_hours = (_dt.now(timezone.utc) - pub_dt).total_seconds() / _SECONDS_PER_HOUR
+                else:
+                    pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
+                    age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
             except Exception as exc:
-                logger.debug(f"{log_prefix} Failed to parse video_date '{video_date}': {exc}")
+                logger.debug(f"{log_prefix} Failed to parse video publish time: {exc}")
                 age_hours = float("inf")
             if age_hours < 48:
                 logger.info(
@@ -1750,6 +1790,7 @@ def process_video(
                 "video_id": video_id,
                 "video_title": video_title,
                 "video_date": video_date,
+                "video_published_at": video_published_at,
                 "status": "no_transcript_available",
                 "skip_reason": skip_reason,
                 "processed_at": now_utc_iso(),
@@ -1846,11 +1887,13 @@ def process_video(
         return "skipped", 0
 
     if all_stories:
-        write_story_files(all_stories, meeting_dir, video_id)
+        write_story_files(all_stories, meeting_dir, video_id,
+                          video_published_at=video_published_at)
         metadata = {
             "video_id": video_id,
             "video_title": video_title,
             "video_date": video_date,
+            "video_published_at": video_published_at,
             "status": "processed",
             "processed_at": now_utc_iso(),
             "processed_focuses": sorted(f for f, _ in focuses),
@@ -1865,6 +1908,7 @@ def process_video(
         "video_id": video_id,
         "video_title": video_title,
         "video_date": video_date,
+        "video_published_at": video_published_at,
         "status": "no_stories",
         "processed_at": now_utc_iso(),
         "processed_focuses": sorted(f for f, _ in focuses),
@@ -1966,6 +2010,10 @@ def process_feed(
                 channel_id=queue_entry.get("channel_id", ""),
                 scheduled_start=queue_entry.get("scheduled_start"),
                 raw_entry_xml=queue_entry.get("raw_entry_xml", ""),
+                video_published_at=(
+                    video_info.get("published_at", "")  # type: ignore[call-overload]
+                    or queue_entry.get("published_at", "")
+                ),
             )
             if result == "content_written":
                 content_changed = True
@@ -2058,6 +2106,7 @@ def process_feed(
             total_videos=total,
             focuses=focuses,
             transcript_rate_limit_event=transcript_rate_limit_event,
+            video_published_at=video_info.get("published_at", ""),  # type: ignore[call-overload]
         )
 
         if result == "content_written":
@@ -2345,6 +2394,109 @@ def _remove_from_queue(processed_ids: set[str]) -> None:
         logger.error(f"Queue removal update failed ({path}): {exc}")
 
 
+_MEDIA_NS = {"media": "http://search.yahoo.com/mrss/"}
+
+
+def _title_from_entry_el(entry_el: "ET.Element") -> str:
+    """Extract the best available title from an Atom ``<entry>`` XML element.
+
+    YouTube WebSub notifications include the video title in (at least) two
+    places:
+
+    1. ``<title>`` in the Atom namespace — present in standard notifications.
+    2. ``<media:group><media:title>`` in the MediaRSS namespace — present in
+       some notifications, and always matches the ``<title>`` when both exist.
+
+    We try both so that a notification with an empty ``<title>`` but a
+    populated ``<media:title>`` still yields the correct title.
+
+    Args:
+        entry_el: A parsed ``xml.etree.ElementTree.Element`` for the
+                  ``<entry>`` node of a YouTube Atom notification.
+
+    Returns:
+        The video title string, or ``""`` if neither field is populated.
+    """
+    # 1. Standard Atom <title>
+    title_el = entry_el.find("atom:title", _YT_NS)
+    if title_el is not None and title_el.text:
+        return title_el.text.strip()
+
+    # 2. MediaRSS <media:group><media:title>
+    group_el = entry_el.find("media:group", _MEDIA_NS)
+    if group_el is not None:
+        mt = group_el.find("media:title", _MEDIA_NS)
+        if mt is not None and mt.text:
+            return mt.text.strip()
+
+    return ""
+
+
+def _title_from_raw_xml(raw_xml: str) -> str:
+    """Parse a stored WebSub entry XML fragment and extract the video title.
+
+    Accepts the ``raw_entry_xml`` string stored in push-queue entries and
+    delegates to :func:`_title_from_entry_el` for the actual extraction.
+    Used at processing time so that a queue entry whose ``title`` field is
+    empty — but whose ``raw_entry_xml`` was later updated by a second
+    notification that carried the title — can still be processed with the
+    correct title without any external network calls.
+
+    Fails open: returns ``""`` on any parse error.
+
+    Args:
+        raw_xml: Raw XML string of a single ``<entry>`` element from a
+                 YouTube WebSub Atom notification.
+
+    Returns:
+        The video title string, or ``""`` if it cannot be extracted.
+    """
+    if not raw_xml:
+        return ""
+    try:
+        entry_el = ET.fromstring(raw_xml)
+        return _title_from_entry_el(entry_el)
+    except Exception as exc:
+        logger.debug(f"Raw entry XML title parse failed: {exc}")
+        return ""
+
+
+def _merge_queue_entry(existing: dict, new_entry: dict) -> dict:
+    """Merge a newer WebSub notification into an existing push-queue entry.
+
+    When YouTube sends a second notification for the same video (e.g. because
+    the channel owner edited the title or description), we want to:
+
+    * Pull in fresh metadata (``raw_entry_xml``, ``scheduled_start``, ``date``)
+      from the new notification.
+    * Update ``title`` only when the new notification carries a non-empty one —
+      a blank title in a re-push must not overwrite a title we already have.
+    * **Preserve** all retry state (``queued_at``, ``next_try_at``,
+      ``transcript_attempts``, ``retry_count``) so the retry schedule is not
+      inadvertently reset by a metadata-only re-push.
+
+    Args:
+        existing:  The queue entry currently stored in the push queue.
+        new_entry: The fresh entry parsed from the incoming WebSub notification.
+
+    Returns:
+        Merged dict ready to be written back to the push queue.
+    """
+    return {
+        **new_entry,
+        # Keep the original enqueueing timestamp.
+        "queued_at":           existing.get("queued_at", new_entry["queued_at"]),
+        # Preserve the existing retry schedule; don't reset the timer.
+        "next_try_at":         existing.get("next_try_at", new_entry["next_try_at"]),
+        "transcript_attempts": existing.get("transcript_attempts", 0),
+        "retry_count":         existing.get("retry_count", 0),
+        # Keep the known title when the new notification omits it.
+        "title":        new_entry.get("title") or existing.get("title", ""),
+        # Keep the known publish timestamp when the new notification omits it.
+        "published_at": new_entry.get("published_at") or existing.get("published_at", ""),
+    }
+
+
 def _requeue_video(
     video_id: str,
     channel_id: str,
@@ -2418,6 +2570,7 @@ def _write_no_transcript_metadata(
     video_title: str,
     skip_reason: str = "no_captions",
     channel_name: str = "",
+    video_published_at: str = "",
 ) -> None:
     """Write a permanent ``no_transcript_available`` metadata.json for a video.
 
@@ -2433,6 +2586,7 @@ def _write_no_transcript_metadata(
         skip_reason: Reason code — ``"no_captions"``, ``"members_only_or_restricted"``,
             or ``"video_not_found"``.
         channel_name: Channel name for log prefix.
+        video_published_at: Full ISO 8601 publish timestamp; ``""`` when unknown.
     """
     meeting_dir = feed_dir / video_id
     meeting_dir.mkdir(parents=True, exist_ok=True)
@@ -2440,6 +2594,7 @@ def _write_no_transcript_metadata(
         "video_id": video_id,
         "video_title": video_title,
         "video_date": video_date,
+        "video_published_at": video_published_at,
         "status": "no_transcript_available",
         "skip_reason": skip_reason,
         "processed_at": now_utc_iso(),
@@ -2653,11 +2808,6 @@ def _wsb_receiver_thread(config: dict) -> None:
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_path = queue_dir / "push_queue.json"
 
-    _YT_NS = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "yt":   "http://www.youtube.com/xml/schemas/2015",
-    }
-
     class _Handler(_http_server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # silence access log  # pylint: disable=redefined-builtin
             logger.debug("WebSub receiver: " + format % args)
@@ -2704,7 +2854,6 @@ def _wsb_receiver_thread(config: dict) -> None:
             for entry in root.findall("atom:entry", _YT_NS):
                 vid_el   = entry.find("yt:videoId",    _YT_NS)
                 ch_el    = entry.find("yt:channelId",  _YT_NS)
-                title_el = entry.find("atom:title",    _YT_NS)
                 pub_el   = entry.find("atom:published", _YT_NS)
                 sched_el = entry.find("yt:scheduledStartTime", _YT_NS)
                 if vid_el is not None and ch_el is not None:
@@ -2717,8 +2866,10 @@ def _wsb_receiver_thread(config: dict) -> None:
                     new_entries.append({
                         "video_id":   vid_el.text.strip(),
                         "channel_id": ch_el.text.strip(),
-                        "title":      (title_el.text or "").strip() if title_el is not None else "",
+                        # Try atom:title first; fall back to media:title inside media:group.
+                        "title":      _title_from_entry_el(entry),
                         "date":       pub_date,
+                        "published_at": pub_raw,  # full ISO 8601; "" when absent
                         "scheduled_start": sched_start,
                         "raw_entry_xml": raw_entry,
                         "queued_at":  now,
@@ -2753,7 +2904,9 @@ def _wsb_receiver_thread(config: dict) -> None:
                                             f" — ignoring duplicate push"
                                         )
                                         continue
-                                by_vid[ne_vid] = ne  # keep latest queued_at
+                                if ne_vid in by_vid:
+                                    ne = _merge_queue_entry(by_vid[ne_vid], ne)
+                                by_vid[ne_vid] = ne
                                 queued_entries.append(ne)
                             if queued_entries:
                                 updated = list(by_vid.values())
@@ -3027,7 +3180,8 @@ def _wsb_processor_thread(config: dict) -> None:
                         video_date = date_str[:10]
                         _write_no_transcript_metadata(
                             vid, feed_dir, video_date, entry.get("title", ""),
-                            channel_name=feed_cfg.get("channel_name", "")
+                            channel_name=feed_cfg.get("channel_name", ""),
+                            video_published_at=entry.get("published_at", ""),
                         )
                         resolved_ids.add(vid)
                     else:
@@ -3075,8 +3229,13 @@ def _wsb_processor_thread(config: dict) -> None:
                 video_infos = [
                     {
                         "id":    e["video_id"],
-                        "title": e.get("title", "") or "[title unknown]",
-                        "date":  (e.get("date", "") or today_str)[:10],
+                        "title": (
+                            e.get("title", "")
+                            or _title_from_raw_xml(e.get("raw_entry_xml", ""))
+                            or "[title unknown]"
+                        ),
+                        "date":        (e.get("date", "") or today_str)[:10],
+                        "published_at": e.get("published_at", ""),
                         "_queue_entry": e,
                     }
                     for e in entries

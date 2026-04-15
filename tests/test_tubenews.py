@@ -44,6 +44,9 @@ from TubeNews import (
     _TRANSCRIPT_MAX_ATTEMPTS,
     now_utc_iso,
     unix_to_iso8601,
+    _title_from_entry_el,
+    _title_from_raw_xml,
+    _merge_queue_entry,
 )
 
 
@@ -4016,3 +4019,262 @@ def test_generate_daily_podcasts_purges_old_episodes(tmp_path, monkeypatch):
     # Old episode (10 days) should be gone; recent one should remain
     assert not (podcast_dir / f"{old_date}.mp3").exists()
     assert (podcast_dir / f"{recent_date}.mp3").exists()
+
+
+# ---------------------------------------------------------------------------
+# _title_from_entry_el / _title_from_raw_xml
+# ---------------------------------------------------------------------------
+
+import xml.etree.ElementTree as ET
+
+_ATOM_NS   = "http://www.w3.org/2005/Atom"
+_YT_SCHEMA = "http://www.youtube.com/xml/schemas/2015"
+_MEDIA_NS_URI = "http://search.yahoo.com/mrss/"
+
+
+def _make_entry_xml(atom_title: str = "", media_title: str = "") -> str:
+    """Build a minimal YouTube WebSub Atom entry XML string for testing."""
+    parts = [
+        f'<entry xmlns="{_ATOM_NS}"'
+        f' xmlns:yt="{_YT_SCHEMA}"'
+        f' xmlns:media="{_MEDIA_NS_URI}">',
+        f"  <yt:videoId>TEST12345678</yt:videoId>",
+        f"  <yt:channelId>UCtest</yt:channelId>",
+    ]
+    if atom_title is not None:
+        parts.append(f"  <title>{atom_title}</title>")
+    if media_title:
+        parts.append(
+            f"  <media:group>"
+            f"<media:title>{media_title}</media:title>"
+            f"</media:group>"
+        )
+    parts.append("</entry>")
+    return "".join(parts)
+
+
+def test_title_from_entry_el_atom_title():
+    """Extracts the title from the standard <atom:title> element."""
+    raw = _make_entry_xml(atom_title="Council Meeting April 2026")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Council Meeting April 2026"
+
+
+def test_title_from_entry_el_media_title_fallback():
+    """Falls back to <media:title> when <atom:title> is empty."""
+    raw = _make_entry_xml(atom_title="", media_title="Budget Hearing")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Budget Hearing"
+
+
+def test_title_from_entry_el_atom_title_preferred_over_media():
+    """Prefers <atom:title> even when <media:title> is also present."""
+    raw = _make_entry_xml(atom_title="Atom Title", media_title="Media Title")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Atom Title"
+
+
+def test_title_from_entry_el_both_empty():
+    """Returns '' when neither title field has content."""
+    raw = _make_entry_xml(atom_title="", media_title="")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == ""
+
+
+def test_title_from_entry_el_strips_whitespace():
+    """Strips surrounding whitespace from the extracted title."""
+    raw = _make_entry_xml(atom_title="  Planning Meeting  ")
+    el = ET.fromstring(raw)
+    assert _title_from_entry_el(el) == "Planning Meeting"
+
+
+def test_title_from_raw_xml_success():
+    """_title_from_raw_xml extracts title from a well-formed XML string."""
+    raw = _make_entry_xml(atom_title="Zoning Board Update")
+    assert _title_from_raw_xml(raw) == "Zoning Board Update"
+
+
+def test_title_from_raw_xml_media_fallback():
+    """_title_from_raw_xml falls back to media:title when atom:title is empty."""
+    raw = _make_entry_xml(atom_title="", media_title="Parks Commission")
+    assert _title_from_raw_xml(raw) == "Parks Commission"
+
+
+def test_title_from_raw_xml_empty_string():
+    """_title_from_raw_xml returns '' for an empty input."""
+    assert _title_from_raw_xml("") == ""
+
+
+def test_title_from_raw_xml_malformed_xml():
+    """_title_from_raw_xml returns '' for malformed XML (fails open)."""
+    assert _title_from_raw_xml("<not-valid-xml") == ""
+
+
+# ---------------------------------------------------------------------------
+# _merge_queue_entry
+# ---------------------------------------------------------------------------
+
+def test_merge_queue_entry_updates_title_from_new_notification():
+    """When the new notification has a title, it replaces an older/empty one."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 2, "retry_count": 1,
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "Updated Title",
+        "queued_at": "2026-04-01T01:00:00Z", "next_try_at": "2026-04-01T01:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "raw_entry_xml": "<entry>new</entry>", "date": "2026-04-01",
+    }
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["title"] == "Updated Title"
+
+
+def test_merge_queue_entry_preserves_title_when_new_is_empty():
+    """When the new notification has no title, the existing title is kept."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "Original Title",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 1, "retry_count": 0,
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "",
+        "queued_at": "2026-04-01T01:00:00Z", "next_try_at": "2026-04-01T01:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "raw_entry_xml": "<entry>updated-xml</entry>", "date": "2026-04-01",
+    }
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["title"] == "Original Title"
+    # But raw_entry_xml should be updated to the newer notification
+    assert merged["raw_entry_xml"] == "<entry>updated-xml</entry>"
+
+
+def test_merge_queue_entry_preserves_retry_state():
+    """Retry state (queued_at, next_try_at, transcript_attempts, retry_count) is preserved."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "My Video",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T02:00:00Z",
+        "transcript_attempts": 3, "retry_count": 2,
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "My Video (edited)",
+        "queued_at": "2026-04-01T03:00:00Z", "next_try_at": "2026-04-01T03:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "raw_entry_xml": "<entry>new</entry>", "date": "2026-04-01",
+    }
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["queued_at"] == "2026-04-01T00:00:00Z"          # preserved
+    assert merged["next_try_at"] == "2026-04-01T02:00:00Z"        # preserved
+    assert merged["transcript_attempts"] == 3                      # preserved
+    assert merged["retry_count"] == 2                             # preserved
+    assert merged["title"] == "My Video (edited)"                  # updated
+
+
+# ---------------------------------------------------------------------------
+# Video publish timestamp: discover_videos, write_story_files, parse_story_file
+# ---------------------------------------------------------------------------
+
+def test_discover_videos_includes_published_at(monkeypatch):
+    """discover_videos includes the full ISO 8601 publish timestamp."""
+    import TubeNews as _tn
+    xml = _make_rss_feed([{
+        "video_id": "abc12345678",
+        "title": "Budget Meeting",
+        "published": "2026-04-14T10:30:00+00:00",
+    }])
+    monkeypatch.setattr(_tn.requests, "get", lambda *a, **kw: _MockResponse(xml))
+    results = discover_videos("UCtest1234567890")
+    assert len(results) == 1
+    assert results[0]["date"] == "2026-04-14"
+    assert results[0]["published_at"] == "2026-04-14T10:30:00+00:00"
+
+
+def test_write_story_files_video_published_line(tmp_path):
+    """write_story_files writes 'Video published' line when video_published_at is supplied."""
+    stories = [{"title": "Test Story", "dateline": "CITY — 2026", "content": "Body.",
+                 "start_time_seconds": 0}]
+    write_story_files(stories, tmp_path, video_id="TEST12345678",
+                      video_published_at="2026-04-14T10:30:00Z")
+    story_files = list(tmp_path.glob("[0-9]*.md"))
+    assert len(story_files) == 1
+    text = story_files[0].read_text()
+    assert "Video published April 14, 2026 at 10:30 AM UTC" in text
+    assert "Published " in text  # TubeNews processing timestamp also present
+
+
+def test_write_story_files_no_video_published_line_when_absent(tmp_path):
+    """write_story_files does not write 'Video published' when video_published_at is empty."""
+    stories = [{"title": "Test Story", "dateline": "CITY — 2026", "content": "Body.",
+                 "start_time_seconds": 0}]
+    write_story_files(stories, tmp_path)
+    text = list(tmp_path.glob("[0-9]*.md"))[0].read_text()
+    assert "Video published" not in text
+
+
+def test_parse_story_file_extracts_video_published(tmp_path):
+    """parse_story_file returns the 'video_published' field when present."""
+    story_file = tmp_path / "01_test.md"
+    story_file.write_text(
+        "# Headline\n"
+        "*CITY, ST — April 14, 2026*\n"
+        "Video published April 14, 2026 at 10:30 AM UTC\n"
+        "Published April 14, 2026 at 3:15 PM UTC\n"
+        "**Source:** https://youtu.be/TEST12345678?t=0\n"
+        "\nBody paragraph.\n\n"
+        "---\n"
+        "**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    story = parse_story_file(story_file)
+    assert story["video_published"] == "April 14, 2026 at 10:30 AM UTC"
+    assert story["published"] == "April 14, 2026 at 3:15 PM UTC"
+    assert "Video published" not in story["body_html"]
+
+
+def test_parse_story_file_video_published_empty_for_old_stories(tmp_path):
+    """parse_story_file returns '' for video_published when the line is absent (old stories)."""
+    story_file = tmp_path / "01_test.md"
+    story_file.write_text(
+        "# Old Story\n"
+        "*CITY, ST — Jan 1, 2026*\n"
+        "Published January 1, 2026 at 9:00 AM UTC\n"
+        "**Source:** https://youtu.be/OLD1234567?t=0\n"
+        "\nOld body.\n\n"
+        "---\n"
+        "**Segment Start:** 0s\n",
+        encoding="utf-8",
+    )
+    story = parse_story_file(story_file)
+    assert story["video_published"] == ""
+
+
+def test_merge_queue_entry_preserves_published_at_when_new_is_empty():
+    """published_at is preserved from existing when the new notification has none."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "T",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "published_at": "2026-04-01T08:00:00Z",
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {**existing, "published_at": "", "raw_entry_xml": "<entry>new</entry>"}
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["published_at"] == "2026-04-01T08:00:00Z"
+
+
+def test_merge_queue_entry_updates_published_at_from_new_notification():
+    """published_at is updated when the new notification carries a timestamp."""
+    existing = {
+        "video_id": "VID1", "channel_id": "UCx", "title": "T",
+        "queued_at": "2026-04-01T00:00:00Z", "next_try_at": "2026-04-01T00:05:00Z",
+        "transcript_attempts": 0, "retry_count": 0,
+        "published_at": "",
+        "raw_entry_xml": "<entry/>", "date": "2026-04-01",
+    }
+    new_entry = {**existing, "published_at": "2026-04-01T08:00:00Z"}
+    merged = _merge_queue_entry(existing, new_entry)
+    assert merged["published_at"] == "2026-04-01T08:00:00Z"
