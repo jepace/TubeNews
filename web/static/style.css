@@ -17,6 +17,7 @@
   --info-text: #1e40af;
   --radius: 6px;
   --max-w: 640px;
+  --sidebar-w: 14rem; /* scales with font size: 224px default, 280px large, 336px larger */
 }
 
 /* Font size preference — set on <html> so rem values throughout scale */
@@ -858,7 +859,7 @@ main:has(.feed-layout) {
 }
 
 .channel-sidebar {
-  width: 200px;
+  width: var(--sidebar-w);
   flex-shrink: 0;
   position: sticky;
   top: 88px; /* 52px header + 36px sub-header */
@@ -921,13 +922,39 @@ main:has(.feed-layout) {
   flex-shrink: 0;
 }
 
+/* Sidebar drag-resize handle */
+.sidebar-resize {
+  width: 8px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  /* Negative margin so the handle overlaps the gap slightly, keeping the
+     visual weight the same as the old fixed margin between sidebar and feed. */
+  margin-right: -4px;
+}
+.sidebar-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  border-radius: 1px;
+  transition: background 0.15s;
+}
+.sidebar-resize:hover::after { background: var(--border); }
+.sidebar-resize.is-dragging::after { background: var(--accent); }
+
 /* Persistent sidebar: hidden state (desktop only — mobile uses overlay) */
 @media (min-width: 701px) {
   html.sidebar-hidden .channel-sidebar { display: none; }
+  html.sidebar-hidden .sidebar-resize   { display: none; }
   html.sidebar-hidden .feed-page { margin-left: 0; }
 }
 
 @media (max-width: 700px) {
+  .sidebar-resize { display: none; }
   .feed-layout { display: block; padding: 0 1rem; }
 
   .feed-page { margin-left: 0; }
