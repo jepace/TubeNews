@@ -410,11 +410,27 @@ def _get_user_timezone(user) -> str:
     return "UTC"
 
 
-def _fmt_video_date(date_str: str) -> str:
-    """Format a YYYY-MM-DD video date as 'Video published Month D, YYYY'.
+def _fmt_video_date(date_str: str, published_at: str = "", user_tz: str = "UTC") -> str:
+    """Format the 'Video published' display string.
 
-    Returns the original string on parse failure, empty string if input is empty.
+    Uses *published_at* (full ISO 8601 timestamp) for date+time when available,
+    converted to *user_tz*.  Falls back to *date_str* (YYYY-MM-DD) for date-only.
     """
+    if not date_str and not published_at:
+        return ""
+
+    if published_at:
+        try:
+            dt_utc = datetime.fromisoformat(
+                published_at.replace("Z", "+00:00")
+            ).astimezone(timezone.utc)
+            hour12 = dt_utc.hour % 12 or 12
+            ampm = "AM" if dt_utc.hour < 12 else "PM"
+            utc_str = f"{dt_utc.strftime('%B')} {dt_utc.day}, {dt_utc.year} at {hour12}:{dt_utc.strftime('%M')} {ampm} UTC"
+            return "Video published " + _reformat_published_timestamp(utc_str, user_tz, "UTC")
+        except Exception:
+            pass  # fall through to date-only
+
     if not date_str:
         return ""
     try:
@@ -783,7 +799,11 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
-                    "video_date": _fmt_video_date(entry["meta"].get("video_date", "")),
+                    "video_date": _fmt_video_date(
+                        entry["meta"].get("video_date", ""),
+                        published_at=entry["meta"].get("video_published_at", ""),
+                        user_tz=user_timezone or "UTC",
+                    ),
                     "body_html": s["body_html"],
                     "start_seconds": s["start_seconds"],
                     "video_id": vid,
@@ -847,13 +867,17 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             vt = entry["meta"].get("video_title", "")
             # Reformat published timestamp to user's timezone if present
             published = s.get("published", "")
+            user_tz = user_data.get("preferences", {}).get("timezone", "UTC")
             if published:
-                user_tz = user_data.get("preferences", {}).get("timezone", "UTC")
                 published = _reformat_published_timestamp(published, user_tz, "UTC")
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
-                "video_date": _fmt_video_date(entry["meta"].get("video_date", "")),
+                "video_date": _fmt_video_date(
+                    entry["meta"].get("video_date", ""),
+                    published_at=entry["meta"].get("video_published_at", ""),
+                    user_tz=user_tz,
+                ),
                 "body_html": s["body_html"],
                 "start_seconds": s["start_seconds"],
                 "video_id": vid,
@@ -1783,6 +1807,7 @@ def admin_user(uid: str):
         subscribed=set(user.channel_ids),
         rss_url=_rss_url(user.feed_token),
         feed_url=_feed_url(user.feed_token),
+        bundles=_user_bundles(user._data),
     )
 
 
@@ -1929,6 +1954,33 @@ def admin_rotate_token(uid: str):
     user._data["feed_token"] = str(uuid.uuid4())
     user._save()
     flash("Feed token rotated. The old RSS URL is now invalid.", "success")
+    return redirect(url_for("admin_user", uid=uid))
+
+
+@app.route("/admin/user/<uid>/bundles", methods=["POST"])
+@login_required
+@admin_required
+def admin_user_bundles(uid: str):
+    """Save channel bundles for the target user."""
+    user = _find_user_by_id(uid)
+    if not user:
+        abort(404)
+    bundle_count = int(request.form.get("bundle_count", "0") or "0")
+    valid_ids = set(user.channel_ids)
+    bundles: list[dict] = []
+    for i in range(min(bundle_count, 20)):
+        name = request.form.get(f"bundle_name_{i}", "").strip()[:100]
+        if not name:
+            continue
+        channel_ids = [cid for cid in request.form.getlist(f"bundle_channels_{i}") if cid in valid_ids]
+        bundles.append({"name": name, "channel_ids": channel_ids})
+    new_name = request.form.get("new_bundle_name", "").strip()[:100]
+    if new_name:
+        new_channels = [cid for cid in request.form.getlist("new_bundle_channels") if cid in valid_ids]
+        bundles.append({"name": new_name, "channel_ids": new_channels})
+    user._data["bundles"] = bundles
+    user._save()
+    flash("Bundles saved.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
 

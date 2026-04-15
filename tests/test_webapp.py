@@ -2765,6 +2765,88 @@ def test_account_bundles_clear_name_deletes_bundle(logged_in_client, archive, mo
         assert data.get("bundles", []) == []
 
 
+# ---------------------------------------------------------------------------
+# /admin/user/<uid>/bundles
+# ---------------------------------------------------------------------------
+
+def test_admin_user_bundles_requires_login(client, archive):
+    r = client.post("/admin/user/some-uid/bundles", data={"bundle_count": "0"})
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_admin_user_bundles_requires_admin(logged_in_client, archive):
+    r = logged_in_client.post("/admin/user/some-uid/bundles", data={"bundle_count": "0"})
+    assert r.status_code == 403
+
+
+def test_admin_user_bundles_404_for_unknown_uid(admin_client, archive, monkeypatch):
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
+    r = admin_client.post("/admin/user/nonexistent-uid/bundles", data={"bundle_count": "0"})
+    assert r.status_code == 404
+
+
+def test_admin_user_bundles_saves_bundle(admin_client, archive, monkeypatch):
+    """Admin can create a bundle for another user via the admin interface."""
+    import json as _json
+    import web.app as _wa
+    users_root = archive / "state" / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+
+    # Create a separate non-admin target user with a channel subscription
+    _make_user(users_root, "Target User", "target-bundles@example.com", ["UC_ALPHA_ID"])
+    target_uid = next(
+        p.name for p in users_root.iterdir()
+        if p.is_dir() and (p / "user.json").exists()
+        and _json.loads((p / "user.json").read_text())["email"] == "target-bundles@example.com"
+    )
+    user_json_path = users_root / target_uid / "user.json"
+    data = _json.loads(user_json_path.read_text())
+    data["channels"] = {"UC_ALPHA_ID": []}
+    user_json_path.write_text(_json.dumps(data))
+
+    r = admin_client.post(
+        f"/admin/user/{target_uid}/bundles",
+        data={"bundle_count": "0", "new_bundle_name": "Admin Bundle",
+              "new_bundle_channels": "UC_ALPHA_ID"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+
+    saved = _json.loads(user_json_path.read_text())
+    bundles = saved.get("bundles", [])
+    assert len(bundles) == 1
+    assert bundles[0]["name"] == "Admin Bundle"
+    assert "UC_ALPHA_ID" in bundles[0]["channel_ids"]
+
+
+def test_admin_user_bundles_shown_on_page(admin_client, archive, monkeypatch):
+    """Existing bundles appear in the admin user page."""
+    import json as _json
+    import web.app as _wa
+    users_root = archive / "state" / "users"
+    monkeypatch.setattr(_wa, "USERS_ROOT", users_root)
+    monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+
+    _make_user(users_root, "Bundle User", "bundle-shown@example.com", ["UC_ALPHA_ID"])
+    target_uid = next(
+        p.name for p in users_root.iterdir()
+        if p.is_dir() and (p / "user.json").exists()
+        and _json.loads((p / "user.json").read_text())["email"] == "bundle-shown@example.com"
+    )
+    user_json_path = users_root / target_uid / "user.json"
+    data = _json.loads(user_json_path.read_text())
+    data["channels"] = {"UC_ALPHA_ID": []}
+    data["bundles"] = [{"name": "Existing Bundle", "channel_ids": ["UC_ALPHA_ID"]}]
+    user_json_path.write_text(_json.dumps(data))
+
+    r = admin_client.get(f"/admin/user/{target_uid}")
+    assert r.status_code == 200
+    assert b"Existing Bundle" in r.data
+
+
 def test_serve_blog_bundle_filter(logged_in_client, archive, monkeypatch):
     """GET /blog?bundle=<slug> must show only stories from channels in that bundle."""
     import json as _json
@@ -3266,3 +3348,39 @@ def test_account_prefs_podcast_unchecked_saves_false(logged_in_client, archive):
     assert user_jsons
     data = json.loads(user_jsons[0].read_text())
     assert data.get("preferences", {}).get("podcast_enabled") is False
+
+
+# ---------------------------------------------------------------------------
+# _fmt_video_date — video publish timestamp formatting
+# ---------------------------------------------------------------------------
+
+def test_fmt_video_date_date_only_fallback():
+    """Without published_at, formats as date-only with no time component."""
+    from web.app import _fmt_video_date
+    result = _fmt_video_date("2026-04-14")
+    assert result == "Video published April 14, 2026"
+    assert "at" not in result
+
+
+def test_fmt_video_date_uses_full_timestamp_when_available():
+    """With a full ISO timestamp, includes time in UTC."""
+    from web.app import _fmt_video_date
+    result = _fmt_video_date("2026-04-14", published_at="2026-04-14T22:58:00Z", user_tz="UTC")
+    assert result == "Video published April 14, 2026 at 10:58 PM UTC"
+
+
+def test_fmt_video_date_converts_to_user_timezone():
+    """Converts UTC timestamp to the user's local timezone."""
+    from web.app import _fmt_video_date
+    result = _fmt_video_date("2026-04-14", published_at="2026-04-15T01:58:00Z",
+                             user_tz="America/Los_Angeles")
+    # 01:58 UTC on Apr 15 = 6:58 PM PDT on Apr 14
+    assert "April 14, 2026" in result
+    assert "6:58 PM" in result
+
+
+def test_fmt_video_date_empty_returns_empty():
+    """Empty inputs return empty string."""
+    from web.app import _fmt_video_date
+    assert _fmt_video_date("") == ""
+    assert _fmt_video_date("", published_at="") == ""

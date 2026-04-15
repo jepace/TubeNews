@@ -2894,6 +2894,42 @@ def test_process_video_permanent_when_no_transcript_and_old(tmp_path, monkeypatc
     assert meta["status"] == "no_transcript_available"
 
 
+@pytest.mark.parametrize("reason", ["members_only_or_restricted", "video_not_found"])
+def test_process_video_permanent_immediately_for_paywall_or_deleted(tmp_path, monkeypatch, reason):
+    """Members-only / deleted videos must be written off immediately even if the video
+    was published today — no 48-hour grace period applies."""
+    import TubeNews
+
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "_is_youtube_short", lambda *a, **kw: False)
+
+    def fake_fetch(*a, failure_reason=None, **kw):
+        if failure_reason is not None:
+            failure_reason.append(reason)
+        return False
+
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+
+    feed = {"channel_id": "UC1", "channel_name": "Chan", "focus": ""}
+    feed_dir = tmp_path / "Chan"
+    feed_dir.mkdir()
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    result, n = TubeNews.process_video(
+        video_id="vidPaywall", video_title="Members Only Episode", video_date=today,
+        feed=feed, feed_dir=feed_dir,
+        supadata_client=type("C", (), {})(), config={}, ai_disabled=False,
+    )
+    assert result == "skipped"
+    # Must write metadata immediately (no grace period)
+    meta_files = list(feed_dir.rglob("metadata.json"))
+    assert meta_files, f"metadata.json must be written immediately for {reason}"
+    meta = json.loads(meta_files[0].read_text())
+    assert meta["status"] == "no_transcript_available"
+    assert meta["skip_reason"] == reason
+
+
 # ---------------------------------------------------------------------------
 # _recover_orphaned_videos
 # ---------------------------------------------------------------------------
@@ -3214,23 +3250,31 @@ def test_wsb_try_fetch_transcript_transient_for_no_captions(tmp_path, monkeypatc
     assert result == "transient"
 
 
-def test_wsb_try_fetch_transcript_transient_for_members_only(tmp_path, monkeypatch):
-    """Returns 'transient' even for members_only_or_restricted (not trusted as permanent)."""
+@pytest.mark.parametrize("reason", ["members_only_or_restricted", "video_not_found"])
+def test_wsb_try_fetch_transcript_permanent_for_paywall_or_deleted(tmp_path, monkeypatch, reason):
+    """Returns 'permanent' and writes metadata for members-only or deleted videos."""
     import TubeNews
 
     def fake_fetch(*a, failure_reason=None, **kw):
         if failure_reason is not None:
-            failure_reason.append("members_only_or_restricted")
+            failure_reason.append(reason)
         return False
 
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
     (tmp_path / "Chan").mkdir()
-    entry = {"video_id": "vidForbid", "channel_id": "UC1", "date": "2026-04-08", "title": "V"}
+    entry = {"video_id": "vidRestrict", "channel_id": "UC1", "date": "2026-04-08", "title": "Restricted"}
     feed_cfg = {"channel_name": "Chan"}
 
     result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
-    assert result == "transient"
+    assert result == "permanent"
+
+    # Metadata must be written immediately so the video is not retried.
+    meta_path = tmp_path / "Chan" / "vidRestrict" / "metadata.json"
+    assert meta_path.exists(), "metadata.json must be written for permanent failures"
+    meta = json.loads(meta_path.read_text())
+    assert meta["status"] == "no_transcript_available"
+    assert meta["skip_reason"] == reason
 
 
 def test_wsb_try_fetch_transcript_returns_quota_exhausted(tmp_path, monkeypatch):
