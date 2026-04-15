@@ -873,7 +873,7 @@ def call_gemini_api(
     feed_name: str = "",
     video_id: str = "",
     call_delay: float = 8.0,
-) -> list[GeminiStory] | bool | None:
+) -> list[GeminiStory] | bool | str | None:
     """Send a transcript to Google Gemini and parse the returned news stories.
 
     The prompt instructs Gemini to act as an investigative reporter and return
@@ -882,8 +882,8 @@ def call_gemini_api(
 
     Returns:
         list  – one dict per story on success.
-        False – caller should disable AI for the remainder of this processing
-                cycle because the API returned HTTP 429 (rate-limited).
+        False – API returned HTTP 429 (quota exhausted); caller should back off.
+        "service_unavailable" – API returned HTTP 503 (service down); caller should back off longer.
         None  – any other failure; the caller should skip this video.
     """
     # Sanitize user input to prevent prompt injection
@@ -1013,9 +1013,9 @@ def call_gemini_api(
             except Exception:
                 err_msg = "Service temporarily unavailable"
             logger.warning(
-                f"{prefix}Gemini: Unavailable (503): {err_msg} — AI disabled for this cycle"
+                f"{prefix}Gemini: Unavailable (503): {err_msg} — backing off (service recovering)"
             )
-            return False
+            return "service_unavailable"
         else:
             try:
                 err_msg = response.json().get("error", {}).get("message", response.text[:120])
@@ -1873,7 +1873,11 @@ def process_video(
             call_delay=_safe_float(config.get("gemini_call_delay", 8), 8),
         )
         if result is False:
+            # 429: quota exhausted
             return "ai_rate_limited", 0
+        if result == "service_unavailable":
+            # 503: service temporarily down
+            return "service_unavailable", 0
         if result is None:
             gemini_transient_error = True
         for story in (result or []):  # type: ignore[union-attr]
@@ -1936,7 +1940,7 @@ def process_feed(
     transcript_rate_limit_event: threading.Event | None = None,
     *,
     forced_videos: list[VideoInfo] | None = None,
-) -> tuple[bool, bool, int]:
+) -> tuple[bool, str, int]:
     """Process all new videos for one configured channel.
 
     Discovers videos from YouTube, skips ones already archived, and calls
@@ -1957,17 +1961,18 @@ def process_feed(
     YouTube request is made.
 
     Returns:
-        A ``(content_changed, ai_rate_limited, stories_written)`` tuple.
+        A ``(content_changed, error_type, stories_written)`` tuple.
         *content_changed* is True if any new stories were written (i.e., the
         RSS feed needs to be rebuilt).
-        *ai_rate_limited* is True if Gemini hit its quota during this feed.
+        *error_type* is "" (no error), "ai_rate_limited" (429), or
+        "service_unavailable" (503) if Gemini hit a quota or service issue.
         *stories_written* is the total count of story files created.
     """
     # Validate channel_id to prevent directory traversal attacks
     channel_id = feed.get("channel_id", "")
     if not _validate_channel_id(channel_id):
         logger.error(f"Invalid channel_id '{channel_id}' — skipping feed")
-        return (False, False, 0)
+        return (False, "", 0)
 
     channel_slug = slugify(feed["channel_name"])
     channel_name = feed["channel_name"]
@@ -1978,7 +1983,7 @@ def process_feed(
     # build an initial feed even if nothing new was processed this run.
     content_changed = not (feed_dir / "rss.xml").exists()
     is_new_feed = not feed_dir.exists()
-    ai_rate_limited = False
+    error_type = ""  # "", "ai_rate_limited", or "service_unavailable"
     stories_written = 0
 
     feed_dir.mkdir(parents=True, exist_ok=True)
@@ -1995,11 +2000,11 @@ def process_feed(
         ]
         if not videos_to_process:
             logger.info(f"{channel_name}: TubeNews: No new videos in push queue")
-            return content_changed, ai_rate_limited, stories_written
+            return content_changed, error_type, stories_written
         logger.info(f"{channel_name}: TubeNews: Processing {len(videos_to_process)} pushed video(s)")
         total = len(videos_to_process)
         for video_num, video_info in enumerate(videos_to_process, start=1):
-            ai_disabled = ai_rate_limited or (
+            ai_disabled = bool(error_type) or (
                 ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
             )
             # Extract queue entry fields if present (from WebSub daemon)
@@ -2029,16 +2034,18 @@ def process_feed(
                 content_changed = True
                 stories_written += n
             elif result == "ai_rate_limited":
-                ai_rate_limited = True
+                error_type = "ai_rate_limited"
                 if ai_rate_limit_event is not None:
                     ai_rate_limit_event.set()
+            elif result == "service_unavailable":
+                error_type = "service_unavailable"
             elif result == "transcript_quota_exhausted":
                 break
-        return content_changed, ai_rate_limited, stories_written
+        return content_changed, error_type, stories_written
 
     all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
     if not all_videos:
-        return content_changed, ai_rate_limited, stories_written
+        return content_changed, error_type, stories_written
 
     all_ids = [v["id"] for v in all_videos]
     video_meta = {v["id"]: v for v in all_videos}
@@ -2100,7 +2107,7 @@ def process_feed(
             continue  # held until tomorrow's run
 
         video_num = videos_to_process.index(video_info) + 1
-        ai_disabled = ai_rate_limited or (
+        ai_disabled = bool(error_type) or (
             ai_rate_limit_event is not None and ai_rate_limit_event.is_set()
         )
         result, n = process_video(
@@ -2123,14 +2130,16 @@ def process_feed(
             content_changed = True
             stories_written += n
         elif result == "ai_rate_limited":
-            ai_rate_limited = True
+            error_type = "ai_rate_limited"
             if ai_rate_limit_event is not None:
                 ai_rate_limit_event.set()
+        elif result == "service_unavailable":
+            error_type = "service_unavailable"
         elif result == "transcript_quota_exhausted":
             # Event already set by process_video; stop wasting time on this feed.
             break
 
-    return content_changed, ai_rate_limited, stories_written
+    return content_changed, error_type, stories_written
 
 
 # ---------------------------------------------------------------------------
@@ -2994,9 +3003,12 @@ def _wsb_processor_thread(config: dict) -> None:
     Runs until the process exits (daemon thread).
     """
     # pylint: disable=too-many-locals  # orchestrator thread; locals are named state, not complexity
-    # When Gemini returns 429 or 503, back off for this many seconds before retrying
-    # AI calls.  Videos stay in the queue; only the AI step is skipped.
-    _AI_BACKOFF_SECONDS = 600  # 10 minutes
+    # Backoff times for Gemini errors:
+    # - 429 (quota exhausted): shorter backoff; we're just rate-limited
+    # - 503 (service down): longer backoff; service needs recovery time
+    # Videos stay in the queue; only the AI step is skipped during backoff.
+    _AI_BACKOFF_QUOTA = 120  # 2 minutes for 429 (rate limited)
+    _AI_BACKOFF_SERVICE = 300  # 5 minutes for 503 (service unavailable)
     _ai_backoff_until: float = 0.0
     _deprecated_min_age_warned = False
 
@@ -3108,8 +3120,10 @@ def _wsb_processor_thread(config: dict) -> None:
             channels = _read_channels()
             channel_map = {ch["channel_id"]: ch for ch in channels}
 
-            # max_per_cycle caps Gemini calls only (not transcript fetches).
-            max_per_cycle = int(current_config.get("websub_max_videos_per_cycle", 3))
+            # Drain the queue aggressively while service is healthy.
+            # Only break when we hit 503 (service down) or similar.
+            # websub_max_videos_per_cycle config is now ignored; we process all ready videos.
+            max_per_cycle = 10000  # Effectively unlimited; 503 is the natural brake
 
             ai_in_backoff = time.time() < _ai_backoff_until
             if ai_in_backoff:
@@ -3288,7 +3302,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     }
                     for e in entries
                 ]
-                content_changed, ai_rate_limited, _ = process_feed(
+                content_changed, error_type, _ = process_feed(
                     feed, supadata_client, current_config,
                     ai_event, transcript_event,
                     forced_videos=video_infos,  # type: ignore[arg-type]
@@ -3296,11 +3310,17 @@ def _wsb_processor_thread(config: dict) -> None:
                 if content_changed:
                     rebuild_feed(STORAGE_ROOT / slugify(feed["channel_name"]), feed)
                     any_changed = True
-                if ai_rate_limited and not ai_in_backoff:
-                    _ai_backoff_until = time.time() + _AI_BACKOFF_SECONDS
+                if error_type and not ai_in_backoff:
+                    if error_type == "service_unavailable":
+                        backoff_secs = _AI_BACKOFF_SERVICE
+                        msg = "service unavailable (503)"
+                    else:  # "ai_rate_limited"
+                        backoff_secs = _AI_BACKOFF_QUOTA
+                        msg = "quota exhausted (429)"
+                    _ai_backoff_until = time.time() + backoff_secs
                     logger.warning(
-                        f"WebSub processor: Gemini rate-limited — backing off "
-                        f"AI calls for {_AI_BACKOFF_SECONDS // 60} minutes"
+                        f"WebSub processor: Gemini {msg} — backing off "
+                        f"AI calls for {backoff_secs // 60}m {backoff_secs % 60}s"
                     )
 
                 gemini_count += len(entries)
@@ -3311,7 +3331,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     evid = entry["video_id"]
                     if not _needs_processing(evid, feed_dir):
                         resolved_ids.add(evid)
-                    elif ai_in_backoff or ai_rate_limited:
+                    elif ai_in_backoff or error_type:
                         # AI was unavailable this cycle (backoff active or just triggered).
                         # Don't charge a retry against the video — this is a Gemini
                         # availability issue, not a per-video failure.
