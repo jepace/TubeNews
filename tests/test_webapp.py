@@ -3266,3 +3266,39 @@ def test_account_prefs_podcast_unchecked_saves_false(logged_in_client, archive):
     assert user_jsons
     data = json.loads(user_jsons[0].read_text())
     assert data.get("preferences", {}).get("podcast_enabled") is False
+
+
+# ---------------------------------------------------------------------------
+# _fmt_video_date — video publish timestamp formatting
+# ---------------------------------------------------------------------------
+
+def test_fmt_video_date_date_only_fallback():
+    """Without published_at, formats as date-only with no time component."""
+    from web.app import _fmt_video_date
+    result = _fmt_video_date("2026-04-14")
+    assert result == "Video published April 14, 2026"
+    assert "at" not in result
+
+
+def test_fmt_video_date_uses_full_timestamp_when_available():
+    """With a full ISO timestamp, includes time in UTC."""
+    from web.app import _fmt_video_date
+    result = _fmt_video_date("2026-04-14", published_at="2026-04-14T22:58:00Z", user_tz="UTC")
+    assert result == "Video published April 14, 2026 at 10:58 PM UTC"
+
+
+def test_fmt_video_date_converts_to_user_timezone():
+    """Converts UTC timestamp to the user's local timezone."""
+    from web.app import _fmt_video_date
+    result = _fmt_video_date("2026-04-14", published_at="2026-04-15T01:58:00Z",
+                             user_tz="America/Los_Angeles")
+    # 01:58 UTC on Apr 15 = 6:58 PM PDT on Apr 14
+    assert "April 14, 2026" in result
+    assert "6:58 PM" in result
+
+
+def test_fmt_video_date_empty_returns_empty():
+    """Empty inputs return empty string."""
+    from web.app import _fmt_video_date
+    assert _fmt_video_date("") == ""
+    assert _fmt_video_date("", published_at="") == ""

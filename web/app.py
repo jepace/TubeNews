@@ -410,11 +410,27 @@ def _get_user_timezone(user) -> str:
     return "UTC"
 
 
-def _fmt_video_date(date_str: str) -> str:
-    """Format a YYYY-MM-DD video date as 'Video published Month D, YYYY'.
+def _fmt_video_date(date_str: str, published_at: str = "", user_tz: str = "UTC") -> str:
+    """Format the 'Video published' display string.
 
-    Returns the original string on parse failure, empty string if input is empty.
+    Uses *published_at* (full ISO 8601 timestamp) for date+time when available,
+    converted to *user_tz*.  Falls back to *date_str* (YYYY-MM-DD) for date-only.
     """
+    if not date_str and not published_at:
+        return ""
+
+    if published_at:
+        try:
+            dt_utc = datetime.fromisoformat(
+                published_at.replace("Z", "+00:00")
+            ).astimezone(timezone.utc)
+            hour12 = dt_utc.hour % 12 or 12
+            ampm = "AM" if dt_utc.hour < 12 else "PM"
+            utc_str = f"{dt_utc.strftime('%B')} {dt_utc.day}, {dt_utc.year} at {hour12}:{dt_utc.strftime('%M')} {ampm} UTC"
+            return "Video published " + _reformat_published_timestamp(utc_str, user_tz, "UTC")
+        except Exception:
+            pass  # fall through to date-only
+
     if not date_str:
         return ""
     try:
@@ -783,7 +799,11 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
                 stories.append({
                     "title": s["title"],
                     "dateline": s["dateline"],
-                    "video_date": _fmt_video_date(entry["meta"].get("video_date", "")),
+                    "video_date": _fmt_video_date(
+                        entry["meta"].get("video_date", ""),
+                        published_at=entry["meta"].get("video_published_at", ""),
+                        user_tz=user_timezone or "UTC",
+                    ),
                     "body_html": s["body_html"],
                     "start_seconds": s["start_seconds"],
                     "video_id": vid,
@@ -847,13 +867,17 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             vt = entry["meta"].get("video_title", "")
             # Reformat published timestamp to user's timezone if present
             published = s.get("published", "")
+            user_tz = user_data.get("preferences", {}).get("timezone", "UTC")
             if published:
-                user_tz = user_data.get("preferences", {}).get("timezone", "UTC")
                 published = _reformat_published_timestamp(published, user_tz, "UTC")
             stories.append({
                 "title": s["title"],
                 "dateline": s["dateline"],
-                "video_date": _fmt_video_date(entry["meta"].get("video_date", "")),
+                "video_date": _fmt_video_date(
+                    entry["meta"].get("video_date", ""),
+                    published_at=entry["meta"].get("video_published_at", ""),
+                    user_tz=user_tz,
+                ),
                 "body_html": s["body_html"],
                 "start_seconds": s["start_seconds"],
                 "video_id": vid,
