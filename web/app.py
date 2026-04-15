@@ -1995,37 +1995,29 @@ def admin_user_add():
     return redirect(url_for("admin_users"))
 
 
+_LOG_TAIL_LINES = 500
+
+
 @app.route("/admin/runs")
 @login_required
 @admin_required
 def admin_runs():
-    run_log_path = STATE_ROOT / "run_logs" / "run_log.json"
-    try:
-        runs = json.loads(run_log_path.read_text()) if run_log_path.exists() else []
-    except Exception:
-        runs = []
-    starting = request.args.get("starting") == "1"
-    is_running = _is_running() or starting
-    # Determine which historical runs have a log file available.
-    run_logs_dir = STATE_ROOT / "run_logs"
-    for run in runs:
-        pid = run.get("pid")
-        run["has_log"] = bool(pid and (run_logs_dir / f"run-{pid}.log").exists())
-    # Pass current running PID so the template can link to the live log.
-    current_run_pid = None
-    if is_running and not starting:
+    is_running = _is_running()
+    log_path = STATE_ROOT / "run_logs" / "tubenews_daemon.log"
+    log_content = ""
+    if log_path.exists():
         try:
-            current_run_pid = int(LOCK_FILE.read_text().strip())
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            log_content = "\n".join(lines[-_LOG_TAIL_LINES:])
         except Exception:
             pass
     return render_template(
         "admin_runs.html",
-        runs=list(reversed(runs)),
         channel_stats=_archive_channel_stats(),
         is_running=is_running,
-        starting=starting,
         supadata=_get_supadata_balance(),
-        current_run_pid=current_run_pid,
+        log_content=log_content,
+        log_tail_lines=_LOG_TAIL_LINES,
     )
 
 

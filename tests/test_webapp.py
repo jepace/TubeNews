@@ -608,11 +608,12 @@ def test_admin_runs_requires_admin(logged_in_client, archive):
     assert r.status_code == 403
 
 
-def test_admin_runs_shows_run_now_button_when_idle(admin_client, archive):
-    """When no lock file exists the page must show the Run Now button."""
+def test_admin_runs_shows_not_running_when_idle(admin_client, archive):
+    """When no lock file exists the page must show the 'Not running' indicator."""
     r = admin_client.get("/admin/runs")
     assert r.status_code == 200
-    assert b"Run Now" in r.data
+    assert b"Not running" in r.data
+    assert b"Run Now" not in r.data
 
 
 def test_admin_runs_shows_running_banner_when_locked(admin_client, archive):
@@ -631,8 +632,8 @@ def test_admin_runs_channel_health_links_to_browse(admin_client, archive):
     assert b"/channel/UC_BETA__ID" in r.data
 
 
-def test_admin_runs_run_history_links_to_browse(admin_client, archive):
-    """Channel names in a run record's Channels column must link to /channel/<channel_id>."""
+def test_admin_runs_channel_health_shows_all_channels(admin_client, archive):
+    """Channel Health table must show all configured channels with links."""
     import json as _json
     run_log = [{
         "started_at": 1741910400.0,
@@ -782,29 +783,26 @@ def test_run_now_launches_process_without_stdout_redirect(admin_client, archive,
     assert "stderr" not in kwargs
 
 
-def test_admin_runs_shows_log_link_for_run_with_log(admin_client, archive):
-    """The runs table must link to the log page for runs that have a log file."""
-    pid = 77777
+def test_admin_runs_shows_daemon_log_content(admin_client, archive):
+    """When tubenews_daemon.log exists its content must appear inline in the page."""
     run_logs_dir = archive / "state" / "run_logs"
-    run_logs_dir.mkdir()
-    (run_logs_dir / f"run-{pid}.log").write_text("INFO: run output\n")
-    run_log = [{
-        "started_at": 1741910400.0, "finished_at": 1741910460.0,
-        "total_stories": 0, "ai_rate_limited": False,
-        "transcript_quota_exhausted": False, "feeds": [], "pid": pid,
-    }]
-    (archive / "state" / "run_logs").mkdir(exist_ok=True)
-    (archive / "state" / "run_logs" / "run_log.json").write_text(json.dumps(run_log))
+    run_logs_dir.mkdir(exist_ok=True)
+    (run_logs_dir / "tubenews_daemon.log").write_text("2026-04-15 10:00:00 INFO: Daemon started\n")
     r = admin_client.get("/admin/runs")
-    assert f"/admin/run-log/{pid}".encode() in r.data
+    assert r.status_code == 200
+    assert b"Daemon started" in r.data
 
 
-def test_admin_runs_shows_view_log_link_when_running(admin_client, archive):
-    """'View log' link appears next to the Running indicator when a run is active."""
+def test_admin_runs_shows_running_indicator_and_log(admin_client, archive):
+    """When lock file holds our PID the page shows 'Running' and daemon log content."""
     pid = os.getpid()
+    run_logs_dir = archive / "state" / "run_logs"
+    run_logs_dir.mkdir(exist_ok=True)
     (archive / "state" / ".tubenews.lock").write_text(str(pid))
+    (run_logs_dir / "tubenews_daemon.log").write_text("2026-04-15 10:00:00 INFO: Processing\n")
     r = admin_client.get("/admin/runs")
-    assert f"/admin/run-log/{pid}".encode() in r.data
+    assert b"Running" in r.data
+    assert b"Processing" in r.data
 
 
 # ---------------------------------------------------------------------------
