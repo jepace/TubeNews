@@ -1761,18 +1761,24 @@ def process_video(
             # (< 48 h) the captions may simply not be ready yet — live streams
             # end hours after the push notification fires and YouTube takes time
             # to process captions. Treat those as transient so the daemon retries.
-            try:
-                from datetime import datetime as _dt
-                if video_published_at:
-                    # Prefer full timestamp for sub-day precision.
-                    pub_dt = _dt.fromisoformat(video_published_at.replace("Z", "+00:00"))
-                    age_hours = (_dt.now(timezone.utc) - pub_dt).total_seconds() / _SECONDS_PER_HOUR
-                else:
-                    pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
-                    age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
-            except Exception as exc:
-                logger.debug(f"{log_prefix} Failed to parse video publish time: {exc}")
-                age_hours = float("inf")
+            # Exception: members-only/restricted and deleted videos are permanent
+            # regardless of age — no amount of waiting will produce a transcript.
+            _perm_reason = _transcript_failure_reason[0] if _transcript_failure_reason else ""
+            if _perm_reason in {"members_only_or_restricted", "video_not_found"}:
+                age_hours = float("inf")  # force permanent write-off immediately
+            else:
+                try:
+                    from datetime import datetime as _dt
+                    if video_published_at:
+                        # Prefer full timestamp for sub-day precision.
+                        pub_dt = _dt.fromisoformat(video_published_at.replace("Z", "+00:00"))
+                        age_hours = (_dt.now(timezone.utc) - pub_dt).total_seconds() / _SECONDS_PER_HOUR
+                    else:
+                        pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
+                        age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
+                except Exception as exc:
+                    logger.debug(f"{log_prefix} Failed to parse video publish time: {exc}")
+                    age_hours = float("inf")
             if age_hours < 48:
                 logger.info(
                     f"{log_prefix} TubeNews: "
@@ -2638,9 +2644,10 @@ def _wsb_try_fetch_transcript(
         One of:
         ``"cached"``         — transcript.txt already on disk (from a prior run).
         ``"success"``        — transcript fetched and written to transcript.txt.
-        ``"transient"``      — temporary failure (including Supadata "permanent" errors,
-                               which are not trusted — all failures retry up to
-                               _TRANSCRIPT_MAX_ATTEMPTS times before being written off).
+        ``"permanent"``      — Supadata confirmed the video is members-only/restricted or
+                               not found; metadata written immediately, video resolved.
+        ``"transient"``      — temporary failure (no_captions retries up to
+                               _TRANSCRIPT_MAX_ATTEMPTS before being written off).
         ``"livestream"``     — video is a live stream still broadcasting.
         ``"quota_exhausted"``— Supadata credit quota is exhausted this session.
     """
@@ -2673,9 +2680,18 @@ def _wsb_try_fetch_transcript(
         return "transient"
 
     if result is False:
-        # Supadata's "permanent" errors (no_captions, members-only, not-found) are not
-        # trusted — captions can appear hours after publish.  Treat as transient so the
-        # full retry schedule runs before the video is written off.
+        reason = failure_reason[0] if failure_reason else ""
+        if reason in {"members_only_or_restricted", "video_not_found"}:
+            # Genuinely permanent: paywall or deleted video will never have a transcript.
+            video_date = entry.get("date", "")[:10]
+            _write_no_transcript_metadata(
+                video_id, feed_dir, video_date, entry.get("title", ""),
+                skip_reason=reason,
+                channel_name=feed_cfg.get("channel_name", ""),
+                video_published_at=entry.get("published_at", ""),
+            )
+            return "permanent"
+        # no_captions: captions may appear later — retry per the normal schedule.
         return "transient"
 
     # Transcript text successfully returned — cache it for the Gemini phase.
@@ -3165,6 +3181,10 @@ def _wsb_processor_thread(config: dict) -> None:
                         f"WebSub processor: {ch_name}: {title} ({vid}) — "
                         f"livestream detected, re-queued for {next_try_at}"
                     )
+
+                elif fetch_result == "permanent":
+                    # Metadata already written by _wsb_try_fetch_transcript.
+                    resolved_ids.add(vid)
 
                 elif fetch_result == "transient":
                     # Schedule next attempt per the retry table.
