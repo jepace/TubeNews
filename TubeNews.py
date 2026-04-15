@@ -1727,8 +1727,8 @@ def process_video(
 
     # --- Load or fetch transcript ---
     if existing_dir and (existing_dir / "transcript.txt").exists():
-        # Re-use cached transcript; only the AI step needs to re-run.
-        logger.info(f"{log_prefix} TubeNews: Found cached transcript, re-running AI")
+        # Re-use cached transcript; only the AI step needs to re-run (if not disabled).
+        logger.info(f"{log_prefix} TubeNews: Found cached transcript")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         meeting_dir = existing_dir
     else:
@@ -3322,6 +3322,9 @@ def _wsb_processor_thread(config: dict) -> None:
                         f"WebSub processor: Gemini {msg} — backing off "
                         f"AI calls for {backoff_secs // 60}m {backoff_secs % 60}s"
                     )
+                    # Stop processing more channels once we hit an error.
+                    # Remaining channels' entries stay in the queue for next cycle.
+                    break
 
                 gemini_count += len(entries)
 
