@@ -4088,8 +4088,8 @@ def _make_entry_xml(atom_title: str = "", media_title: str = "") -> str:
         f'<entry xmlns="{_ATOM_NS}"'
         f' xmlns:yt="{_YT_SCHEMA}"'
         f' xmlns:media="{_MEDIA_NS_URI}">',
-        f"  <yt:videoId>TEST12345678</yt:videoId>",
-        f"  <yt:channelId>UCtest</yt:channelId>",
+        "  <yt:videoId>TEST12345678</yt:videoId>",
+        "  <yt:channelId>UCtest</yt:channelId>",
     ]
     if atom_title is not None:
         parts.append(f"  <title>{atom_title}</title>")
