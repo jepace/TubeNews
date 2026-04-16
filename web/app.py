@@ -750,6 +750,80 @@ def _story_comment_count(story_file: Path) -> int:
         return 0
 
 
+# ── Unified user edit helpers (for both /account and /admin/user) ──
+
+def _save_user_preferences(user: User, form_data: dict) -> str | None:
+    """Save user display preferences. Returns None on success, or error message."""
+    font_size = form_data.get("font_size", "normal")
+    if font_size not in ("normal", "large", "larger"):
+        font_size = "normal"
+    dark_mode = "dark_mode" in form_data
+    digest_email_enabled = "digest_email_enabled" in form_data
+    podcast_enabled = "podcast_enabled" in form_data
+    timezone = form_data.get("timezone", "").strip()
+
+    if timezone and timezone not in pytz.all_timezones:
+        return "Invalid timezone."
+
+    user._data["preferences"] = {
+        "font_size": font_size,
+        "dark_mode": dark_mode,
+        "digest_email_enabled": digest_email_enabled,
+        "podcast_enabled": podcast_enabled,
+    }
+    if timezone:
+        user._data["preferences"]["timezone"] = timezone
+    user._save()
+    return None
+
+
+def _save_user_info(user: User, form_data: dict, require_password: bool = False,
+                    current_pw_from_form: str | None = None) -> str | None:
+    """Save user name/email. Returns None on success, or error message.
+    If require_password is True, current_pw_from_form must be verified against current_user's hash."""
+    if require_password and current_pw_from_form is not None:
+        if not check_password_hash(current_user._data["password_hash"], current_pw_from_form):
+            return "Current password is incorrect."
+
+    new_name = form_data.get("name", "").strip()
+    new_email = form_data.get("email", "").strip().lower()
+    if not new_name or not new_email or "@" not in new_email:
+        return "Name and a valid email are required."
+
+    # Check email uniqueness (ignore if unchanged)
+    if new_email != user.email:
+        existing = _find_user_by_email(new_email)
+        if existing:
+            return "That email is already in use by another account."
+
+    old_email = user.email
+    user._data["name"] = new_name
+    user._data["email"] = new_email
+    user._save()
+    if new_email != old_email:
+        _index_remove(old_email)
+        _index_add(new_email, user.get_id())
+    return None
+
+
+def _save_user_subscriptions(user: User, form_data: dict, channels: list[dict]) -> None:
+    """Save user channel subscriptions and preferences."""
+    selected = set(form_data.getlist("channel_ids"))
+    valid_ids = {ch["channel_id"] for ch in channels}
+    new_ids = sorted(selected & valid_ids)
+    channels_data = {}
+    for ch_id in new_ids:
+        raw = form_data.get(f"focus_{ch_id}", "")
+        lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
+        lines = [ln for ln in lines if ln]
+        channels_data[ch_id] = lines
+    user._data["channels"] = channels_data
+    feed_name = form_data.get("feed_name", "").strip()
+    user._data["feed_name"] = feed_name
+    user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
+    user._save()
+
+
 def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str | None, list[StoryDict]]:
     """Return (channel_name, stories) for a single channel, newest-first.
 
@@ -1329,65 +1403,25 @@ def account():
         action = request.form.get("action", "")
 
         if action == "prefs":
-            font_size = request.form.get("font_size", "normal")
-            if font_size not in ("normal", "large", "larger"):
-                font_size = "normal"
-            dark_mode = "dark_mode" in request.form
-            timezone = request.form.get("timezone", "").strip()
-            if timezone and timezone not in pytz.all_timezones:
-                flash("Invalid timezone.", "error")
-                return redirect(url_for("account"))
-            digest_email_enabled = "digest_email_enabled" in request.form
-            podcast_enabled = "podcast_enabled" in request.form
-            current_user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode,
-                                                  "digest_email_enabled": digest_email_enabled,
-                                                  "podcast_enabled": podcast_enabled}
-            if timezone:
-                current_user._data["preferences"]["timezone"] = timezone
-            current_user._save()
-            flash("Display preferences saved.", "success")
+            error = _save_user_preferences(current_user, request.form)
+            if error:
+                flash(error, "error")
+            else:
+                flash("Display preferences saved.", "success")
             return redirect(url_for("account"))
 
         if action == "info":
             current_pw = request.form.get("current_password", "")
-            if not check_password_hash(current_user._data["password_hash"], current_pw):
-                flash("Current password is incorrect.", "error")
-                return redirect(url_for("account"))
-            new_name = request.form.get("name", "").strip()
-            new_email = request.form.get("email", "").strip().lower()
-            if not new_name or not new_email or "@" not in new_email:
-                flash("Name and a valid email are required.", "error")
-                return redirect(url_for("account"))
-            if new_email != current_user.email:
-                existing = _find_user_by_email(new_email)
-                if existing:
-                    flash("That email is already in use by another account.", "error")
-                    return redirect(url_for("account"))
-            old_email = current_user.email
-            current_user._data["name"] = new_name
-            current_user._data["email"] = new_email
-            current_user._save()
-            if new_email != old_email:
-                _index_remove(old_email)
-                _index_add(new_email, current_user.get_id())
-            flash("Account info updated.", "success")
+            error = _save_user_info(current_user, request.form, require_password=True,
+                                    current_pw_from_form=current_pw)
+            if error:
+                flash(error, "error")
+            else:
+                flash("Account info updated.", "success")
             return redirect(url_for("account"))
 
         # Default: subscription save
-        selected = set(request.form.getlist("channel_ids"))
-        valid_ids = {ch["channel_id"] for ch in channels}
-        new_ids = sorted(selected & valid_ids)
-        channels_data = {}
-        for ch_id in new_ids:
-            raw = request.form.get(f"focus_{ch_id}", "")
-            lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
-            lines = [ln for ln in lines if ln]
-            channels_data[ch_id] = lines
-        current_user._data["channels"] = channels_data
-        feed_name = request.form.get("feed_name", "").strip()
-        current_user._data["feed_name"] = feed_name
-        current_user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
-        current_user._save()
+        _save_user_subscriptions(current_user, request.form, channels)
         flash("Subscriptions updated.", "success")
         return redirect(url_for("account"))
 
@@ -1821,26 +1855,13 @@ def admin_user_info(uid: str):
     user = _find_user_by_id(uid)
     if not user:
         abort(404)
-    new_name = request.form.get("name", "").strip()
-    new_email = request.form.get("email", "").strip().lower()
-    if not new_name or not new_email or "@" not in new_email:
-        flash("Name and a valid email are required.", "error")
-        return redirect(url_for("admin_user", uid=uid))
-    # Check email uniqueness (ignore if unchanged)
-    if new_email != user.email:
-        existing = _find_user_by_email(new_email)
-        if existing:
-            flash("That email is already in use by another account.", "error")
-            return redirect(url_for("admin_user", uid=uid))
-    old_email = user.email
-    user._data["name"] = new_name
-    user._data["email"] = new_email
-    user._data["feed_name"] = request.form.get("feed_name", "").strip()
-    user._save()
-    if new_email != old_email:
-        _index_remove(old_email)
-        _index_add(new_email, uid)
-    flash("User info updated.", "success")
+    error = _save_user_info(user, request.form, require_password=False)
+    if error:
+        flash(error, "error")
+    else:
+        user._data["feed_name"] = request.form.get("feed_name", "").strip()
+        user._save()
+        flash("User info updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
 
@@ -1890,23 +1911,11 @@ def admin_user_prefs(uid: str):
     user = _find_user_by_id(uid)
     if not user:
         abort(404)
-    font_size = request.form.get("font_size", "normal")
-    if font_size not in ("normal", "large", "larger"):
-        font_size = "normal"
-    dark_mode = "dark_mode" in request.form
-    timezone = request.form.get("timezone", "").strip()
-    if timezone and timezone not in pytz.all_timezones:
-        flash("Invalid timezone.", "error")
-        return redirect(url_for("admin_user", uid=uid))
-    digest_email_enabled = "digest_email_enabled" in request.form
-    podcast_enabled = "podcast_enabled" in request.form
-    user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode,
-                                 "digest_email_enabled": digest_email_enabled,
-                                 "podcast_enabled": podcast_enabled}
-    if timezone:
-        user._data["preferences"]["timezone"] = timezone
-    user._save()
-    flash("Display preferences updated.", "success")
+    error = _save_user_preferences(user, request.form)
+    if error:
+        flash(error, "error")
+    else:
+        flash("Display preferences updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
 
