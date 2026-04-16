@@ -3040,11 +3040,13 @@ def _wsb_processor_thread(config: dict) -> None:
     """
     # pylint: disable=too-many-locals  # orchestrator thread; locals are named state, not complexity
     # Backoff times for Gemini errors:
-    # - 429 (quota exhausted): shorter backoff; we're just rate-limited
+    # - 429 RPM (rate-limited per-minute): shorter backoff; recoverable quickly
+    # - 429 RPD (daily quota exhausted): 12 hours; quota resets sometime during the day
     # - 503 (service down): longer backoff; service needs recovery time
     # Videos stay in the queue; only the AI step is skipped during backoff.
-    _AI_BACKOFF_QUOTA = 120  # 2 minutes for 429 (rate limited)
-    _AI_BACKOFF_SERVICE = 300  # 5 minutes for 503 (service unavailable)
+    _AI_BACKOFF_QUOTA_RPM = 120  # 2 minutes for 429 RPM
+    _AI_BACKOFF_QUOTA_RPD = 43200  # 12 hours for 429 RPD (safer than 24h)
+    _AI_BACKOFF_SERVICE = 300  # 5 minutes for 503
     _ai_backoff_until: float = 0.0
     _deprecated_min_age_warned = False
 
@@ -3351,11 +3353,11 @@ def _wsb_processor_thread(config: dict) -> None:
                         backoff_secs = _AI_BACKOFF_SERVICE
                         msg = "service unavailable (503)"
                     elif error_type == "quota_exhausted_daily":
-                        # Daily quota hit; back off until tomorrow
-                        backoff_secs = 86400  # 24 hours
-                        msg = "daily quota exhausted (429 RPD) — backing off until tomorrow"
+                        # Daily quota hit; back off 12 hours (quota resets sometime during day)
+                        backoff_secs = _AI_BACKOFF_QUOTA_RPD
+                        msg = "daily quota exhausted (429 RPD)"
                     else:  # "ai_rate_limited" (RPM)
-                        backoff_secs = _AI_BACKOFF_QUOTA
+                        backoff_secs = _AI_BACKOFF_QUOTA_RPM
                         msg = "per-minute rate limited (429 RPM)"
                     _ai_backoff_until = time.time() + backoff_secs
                     logger.warning(
