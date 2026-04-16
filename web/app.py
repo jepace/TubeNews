@@ -1431,7 +1431,9 @@ def account():
 
     prefs = current_user._data.get("preferences", {})
     return render_template(
-        "account.html",
+        "user_edit.html",
+        is_own_profile=True,
+        user=current_user,
         channels=channels,
         subscribed=set(current_user.channel_ids),
         channel_focus=current_user._data.get("channels", {}),
@@ -1439,6 +1441,13 @@ def account():
         feed_url=_feed_url(current_user.feed_token) if current_user.channel_ids else None,
         prefs=prefs,
         bundles=_user_bundles(current_user._data),
+        info_action=url_for("account"),
+        subscriptions_action=url_for("account"),
+        bundles_action=url_for("account_bundles"),
+        prefs_action=url_for("account"),
+        password_action=url_for("account_password"),
+        rotate_token_action=url_for("account_rotate_token"),
+        delete_action=url_for("account_delete"),
     )
 
 
@@ -1838,13 +1847,21 @@ def admin_user(uid: str):
         user._data["seen_channel_ids"] = [ch["channel_id"] for ch in channels]
         user._save()
     return render_template(
-        "admin_user.html",
-        u=user,
+        "user_edit.html",
+        is_own_profile=False,
+        user=user,
         channels=channels,
         subscribed=set(user.channel_ids),
+        channel_focus=user._data.get("channels", {}),
         rss_url=_rss_url(user.feed_token),
         feed_url=_feed_url(user.feed_token),
         bundles=_user_bundles(user._data),
+        info_action=url_for("admin_user_info", uid=user.get_id()),
+        subscriptions_action=url_for("admin_user_subscriptions", uid=user.get_id()),
+        bundles_action=url_for("admin_user_bundles", uid=user.get_id()),
+        prefs_action=url_for("admin_user_prefs", uid=user.get_id()),
+        password_action=url_for("admin_user_password", uid=user.get_id()),
+        delete_action=url_for("admin_user_delete", uid=user.get_id()),
     )
 
 
