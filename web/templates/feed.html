@@ -972,46 +972,67 @@
   if (!sidebar || !handle) return;
 
   var STORAGE_KEY = 'tn_sidebar_w_em';
+  var MIN_WIDTH = 140;
+  var MAX_WIDTH = 500;
+  var isDragging = false;
 
   function getRootFontSize() {
     return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   }
 
-  var startX, startW;
-
-  handle.addEventListener('pointerdown', function (e) {
+  function startResize(e) {
     if (document.documentElement.classList.contains('sidebar-hidden')) return;
-    startX = e.clientX;
-    startW = sidebar.getBoundingClientRect().width;
+    if (e.button && e.button !== 0) return; // Only left mouse button
+
+    isDragging = true;
+    var startX = e.clientX;
+    var startW = sidebar.getBoundingClientRect().width;
+
     handle.classList.add('is-dragging');
-    document.body.style.cursor     = 'col-resize';
-    document.body.style.userSelect = 'none';
+    document.documentElement.style.userSelect = 'none';
+    e.preventDefault();
 
     function onMove(ev) {
-      var newW = Math.max(120, Math.min(480, startW + (ev.clientX - startX)));
+      if (!isDragging) return;
+      var delta = ev.clientX - startX;
+      var newW = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + delta));
       document.documentElement.style.setProperty('--sidebar-w', newW + 'px');
     }
 
-    function onUp() {
+    function onUp(ev) {
+      if (!isDragging) return;
+      isDragging = false;
+
       handle.classList.remove('is-dragging');
-      document.body.style.cursor     = '';
-      document.body.style.userSelect = '';
+      document.documentElement.style.userSelect = '';
+
+      // Save final width
       var finalPx = sidebar.getBoundingClientRect().width;
-      localStorage.setItem(STORAGE_KEY, finalPx / getRootFontSize());
+      var finalEm = finalPx / getRootFontSize();
+      localStorage.setItem(STORAGE_KEY, finalEm);
+
+      // Clean up listeners
       document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup',   onUp);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
     }
 
     document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup',   onUp);
-    e.preventDefault();
-  });
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  }
 
-  /* Double-click resets to the CSS default (removes any saved override). */
-  handle.addEventListener('dblclick', function () {
+  // Double-click resets to the CSS default
+  function resetSize() {
     document.documentElement.style.removeProperty('--sidebar-w');
     localStorage.removeItem(STORAGE_KEY);
-  });
+  }
+
+  handle.addEventListener('pointerdown', startResize);
+  handle.addEventListener('dblclick', resetSize);
+
+  // Also support mouse events as fallback
+  handle.addEventListener('mousedown', startResize);
 })();
 </script>
 {% endblock %}
