@@ -2006,12 +2006,12 @@ def process_feed(
     # Validate channel_id to prevent directory traversal attacks
     channel_id = feed.get("channel_id", "")
     if not _validate_channel_id(channel_id):
-        logger.error(f"Invalid channel_id '{channel_id}' — skipping feed")
+        logger.error(f"TubeNews: Invalid channel_id '{channel_id}' — skipping feed")
         return (False, "", 0)
 
     channel_slug = slugify(feed["channel_name"])
     channel_name = feed["channel_name"]
-    logger.info(f"{channel_name}: TubeNews: Starting feed check")
+    logger.info(f"TubeNews: Starting feed check - {channel_name}")
     feed_dir = STORAGE_ROOT / channel_slug
 
     # If the RSS file doesn't exist yet, treat content as changed so we always
@@ -2034,9 +2034,9 @@ def process_feed(
             v for v in forced_videos if _needs_processing(v["id"], feed_dir)
         ]
         if not videos_to_process:
-            logger.info(f"{channel_name}: TubeNews: No new videos in push queue")
+            logger.info(f"TubeNews: No new videos in push queue - {channel_name}")
             return content_changed, error_type, stories_written
-        logger.info(f"{channel_name}: TubeNews: Processing {len(videos_to_process)} pushed video(s)")
+        logger.info(f"TubeNews: Processing {len(videos_to_process)} pushed video(s) - {channel_name}")
         total = len(videos_to_process)
         for video_num, video_info in enumerate(videos_to_process, start=1):
             ai_disabled = bool(error_type) or (
@@ -2093,9 +2093,9 @@ def process_feed(
     unprocessed = [v for v in all_videos if _needs_processing(v["id"], feed_dir)]
 
     if unprocessed:
-        logger.info(f"{channel_name}: TubeNews: Found {len(unprocessed)} new video(s)")
+        logger.info(f"TubeNews: Found {len(unprocessed)} new video(s) - {channel_name}")
     else:
-        logger.info(f"{channel_name}: TubeNews: No new videos")
+        logger.info(f"TubeNews: No new videos - {channel_name}")
 
     # Hold same-day videos — YouTube's auto-caption pipeline needs time to
     # finish, and transcript proxies can return garbage for very fresh videos.
@@ -2106,16 +2106,15 @@ def process_feed(
     ]
     if fresh:
         noun = "video" if len(fresh) == 1 else "videos"
-        logger.info(f"{channel_name}: TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow")
+        logger.info(f"TubeNews: Holding {len(fresh)} {noun} posted today — will process tomorrow - {channel_name}")
         for v in fresh:
-            logger.info(f"  held: {v['id']} (parsed date: {v['date']}) — {v['title']}")
+            logger.debug(f"TubeNews: Held video {v['id']} (date: {v['date']}) - {channel_name}: {v['title']}")
 
     if is_new_feed:
         too_old_count = len([v for v in unprocessed if all_ids.index(v["id"]) > 0])
         if too_old_count:
             logger.info(
-                f"{channel_name}: TubeNews: New feed — marking"
-                f" {too_old_count} existing video(s) as too old to process"
+                f"TubeNews: New feed — marking {too_old_count} existing video(s) as too old to process - {channel_name}"
             )
 
     # Videos that will actually be processed (not too old, not too fresh).
