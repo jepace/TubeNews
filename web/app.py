@@ -426,7 +426,10 @@ def _fmt_video_date(date_str: str, published_at: str = "", user_tz: str = "UTC")
             ).astimezone(timezone.utc)
             hour12 = dt_utc.hour % 12 or 12
             ampm = "AM" if dt_utc.hour < 12 else "PM"
-            utc_str = f"{dt_utc.strftime('%B')} {dt_utc.day}, {dt_utc.year} at {hour12}:{dt_utc.strftime('%M')} {ampm} UTC"
+            utc_str = (
+                f"{dt_utc.strftime('%B')} {dt_utc.day}, {dt_utc.year} at "
+                f"{hour12}:{dt_utc.strftime('%M')} {ampm} UTC"
+            )
             return "Video published " + _reformat_published_timestamp(utc_str, user_tz, "UTC")
         except Exception:
             pass  # fall through to date-only

@@ -792,20 +792,20 @@ def fetch_transcript(
             segments = transcript_response.content
             lang_received = getattr(transcript_response, "lang", "") or ""
             if lang_received and lang_received != "en":
-                logger.warning(f"Supadata: {{prefix}}Requested English transcript but received '{lang_received}'")
+                logger.warning(f"Supadata: {prefix}Requested English transcript but received '{lang_received}'")
             else:
-                logger.debug(f"Supadata: {{prefix}}Language: {lang_received or 'unknown'}")
+                logger.debug(f"Supadata: {prefix}Language: {lang_received or 'unknown'}")
             lines = [
                 f"{int(getattr(seg, 'offset', 0) / 1000)}s --> {getattr(seg, 'text', '')}"
                 for seg in segments
             ]
             transcript_text = "\n".join(lines)
             logger.info(
-                f"Supadata: {{prefix}}Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars"
+                f"Supadata: {prefix}Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars"
             )
             return transcript_text
         # API returned a response but no transcript content — video has no captions.
-        logger.info(f"Supadata: {{prefix}}No transcript content returned")
+        logger.info(f"Supadata: {prefix}No transcript content returned")
         if failure_reason is not None:
             failure_reason.append("no_captions")
         return False
@@ -831,8 +831,8 @@ def fetch_transcript(
 
         if is_quota_error:
             logger.error(
-                f"Supadata: {{prefix}}Quota exhausted — no credits remaining. "
-                f"Halting transcript fetches for this cycle."
+                f"Supadata: {prefix}Quota exhausted — no credits remaining. "
+                "Halting transcript fetches for this cycle."
             )
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
@@ -844,16 +844,16 @@ def fetch_transcript(
                 reason = "video_not_found"
             else:
                 reason = "no_captions"
-            logger.info(f"Supadata: {{prefix}}No transcript available ({reason})")
+            logger.info(f"Supadata: {prefix}No transcript available ({reason})")
             if failure_reason is not None:
                 failure_reason.append(reason)
             return False
         elif "live streaming" in exc_str:
-            logger.warning(f"Supadata: {{prefix}}Live stream — transcript unavailable, will retry later")
+            logger.warning(f"Supadata: {prefix}Live stream — transcript unavailable, will retry later")
             if livestream_error is not None:
                 livestream_error.append(True)
         else:
-            logger.error(f"Supadata: {{prefix}}Call failed: {exc}")
+            logger.error(f"Supadata: {prefix}Call failed: {exc}")
 
     return None
 
@@ -902,9 +902,9 @@ def call_gemini_api(
     )
 
     directive = (
-        f"You are a highly experienced investigative reporter. "
+        "You are a highly experienced investigative reporter. "
         f"Analyze this transcript of '{video_title}' recorded on {video_date}.\n\n"
-        f"OBJECTIVE: Identify and extract distinct news stories strictly "
+        "OBJECTIVE: Identify and extract distinct news stories strictly "
         f"relevant to this FOCUS: <focus>{focus}</focus>.\n\n"
         "WRITING GUIDELINES:\n"
         "1. TONE: Professional, objective, and authoritative. Use the Inverted "
@@ -940,29 +940,29 @@ def call_gemini_api(
                 resp_json = response.json()
                 if not isinstance(resp_json, dict):
                     logger.error(
-                        f"Gemini: {{prefix}}Invalid response format"
+                        f"Gemini: {prefix}Invalid response format"
                         f" (expected dict, got {type(resp_json).__name__})"
                     )
                     return None
 
                 candidates = resp_json.get("candidates")
                 if not isinstance(candidates, list) or len(candidates) == 0:
-                    logger.error(f"Gemini: {{prefix}}Invalid response: 'candidates' missing or empty")
+                    logger.error(f"Gemini: {prefix}Invalid response: 'candidates' missing or empty")
                     return None
 
                 first_candidate = candidates[0]
                 if not isinstance(first_candidate, dict):
-                    logger.error(f"Gemini: {{prefix}}Invalid response: candidate is not a dict")
+                    logger.error(f"Gemini: {prefix}Invalid response: candidate is not a dict")
                     return None
 
                 content = first_candidate.get("content")
                 if not isinstance(content, dict):
-                    logger.error(f"Gemini: {{prefix}}Invalid response: 'content' missing or not a dict")
+                    logger.error(f"Gemini: {prefix}Invalid response: 'content' missing or not a dict")
                     return None
 
                 parts = content.get("parts")
                 if not isinstance(parts, list) or len(parts) == 0:
-                    logger.error(f"Gemini: {{prefix}}Invalid response: 'parts' missing or empty")
+                    logger.error(f"Gemini: {prefix}Invalid response: 'parts' missing or empty")
                     return None
 
                 # Find the part with "text" (may not be first in multi-part responses)
@@ -975,11 +975,11 @@ def call_gemini_api(
                         break
 
                 if raw_text is None:
-                    logger.error(f"Gemini: {{prefix}}Invalid response: 'text' missing or not a string in any part")
+                    logger.error(f"Gemini: {prefix}Invalid response: 'text' missing or not a string in any part")
                     return None
 
             except (KeyError, TypeError, AttributeError) as exc:
-                logger.error(f"Gemini: {{prefix}}Failed to parse response structure: {exc}")
+                logger.error(f"Gemini: {prefix}Failed to parse response structure: {exc}")
                 return None
 
             # Strip markdown code blocks (Gemma and some LLMs wrap JSON in ```json ... ```)
@@ -988,18 +988,18 @@ def call_gemini_api(
 
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
             if not json_match:
-                logger.info(f"Gemini: {{prefix}}No stories returned (no JSON in response)")
+                logger.info(f"Gemini: {prefix}No stories returned (no JSON in response)")
                 return []
 
             try:
                 stories = json.loads(json_match.group(0))
                 if not isinstance(stories, list):
-                    logger.error(f"Gemini: {{prefix}}JSON parse result is not a list (got {type(stories).__name__})")
+                    logger.error(f"Gemini: {prefix}JSON parse result is not a list (got {type(stories).__name__})")
                     return None
-                logger.info(f"Gemini: {{prefix}}{len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
+                logger.info(f"Gemini: {prefix}{len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
                 return stories
             except json.JSONDecodeError as exc:
-                logger.error(f"Gemini: {{prefix}}Failed to parse JSON from response: {exc}")
+                logger.error(f"Gemini: {prefix}Failed to parse JSON from response: {exc}")
                 return None
 
         elif response.status_code == 429:
@@ -1021,14 +1021,13 @@ def call_gemini_api(
 
             if is_daily_quota:
                 logger.warning(
-                    f"Gemini: {{prefix}}429 daily quota (RPD): {err_msg} — backing off"
+                    f"Gemini: {prefix}429 daily quota (RPD): {err_msg} — backing off"
                 )
                 return "quota_exhausted_daily"
-            else:
-                logger.warning(
-                    f"Gemini: {{prefix}}429 per-minute rate limited (RPM): {err_msg} — backing off"
-                )
-                return False
+            logger.warning(
+                f"Gemini: {prefix}429 per-minute rate limited (RPM): {err_msg} — backing off"
+            )
+            return False
         elif response.status_code == 503:
             try:
                 err_msg = response.json().get("error", {}).get(
@@ -1037,7 +1036,7 @@ def call_gemini_api(
             except Exception:
                 err_msg = "Service temporarily unavailable"
             logger.warning(
-                f"Gemini: {{prefix}}Unavailable (503): {err_msg} — backing off (service recovering)"
+                f"Gemini: {prefix}Unavailable (503): {err_msg} — backing off (service recovering)"
             )
             return "service_unavailable"
         else:
@@ -1049,18 +1048,18 @@ def call_gemini_api(
             # Detect config errors (invalid model name) vs other errors
             if response.status_code == 404 and "models/" in err_msg and "is not found" in err_msg:
                 logger.error(
-                    f"Gemini: {{prefix}}CONFIG ERROR — invalid gemini_model in TubeNews.json. "
+                    f"Gemini: {prefix}CONFIG ERROR — invalid gemini_model in TubeNews.json. "
                     f"{err_msg}"
                 )
             else:
-                logger.error(f"Gemini: {{prefix}}HTTP {response.status_code}: {err_msg}")
+                logger.error(f"Gemini: {prefix}HTTP {response.status_code}: {err_msg}")
             return None
 
     except requests.RequestException as exc:
-        logger.error(f"Gemini: {{prefix}}Network error: {exc}")
+        logger.error(f"Gemini: {prefix}Network error: {exc}")
         return None
     except Exception as exc:
-        logger.error(f"Gemini: {{prefix}}Unexpected error: {exc}", exc_info=True)
+        logger.error(f"Gemini: {prefix}Unexpected error: {exc}", exc_info=True)
         return None
 
 
@@ -1521,16 +1520,16 @@ def rebuild_user_feed_page(user: dict[str, Any], base_url: str = "", user_id: st
                 "&#128221; Read transcript</a>"
             )
         story_blocks.append(
-            f"<article>\n"
+            "<article>\n"
             f"  <h2>{story['title']}</h2>\n"
             f"  <p class='dateline'>{story['dateline']}</p>\n"
             f"  <p class='source'>{entry['channel_name']}"
             + (f" &mdash; <em>{video_title}</em>" if video_title else "")
             + f" &mdash; <a class='watch' href='{yt_url}' target='_blank' rel='noopener'>&#9654; Watch source</a>"
             + transcript_link
-            + f"</p>\n"
+            + "</p>\n"
             f"  <div class='body'>{paras}</div>\n"
-            f"</article>"
+            "</article>"
         )
 
     page_title = user.get("feed_name") or f"TubeNews — {name}"
@@ -1540,7 +1539,7 @@ def rebuild_user_feed_page(user: dict[str, Any], base_url: str = "", user_id: st
     rss_feed_path = f"/feed/{user['feed_token']}.xml"
     rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_feed_path}">'
 
-    html = f"""<!DOCTYPE html>
+    html = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -2293,7 +2292,7 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
         else:
             logger.debug(
                 f"WebSub: subscription request returned HTTP {r.status_code} for {channel_id} "
-                f"(transient; will retry later)"
+                "(transient; will retry later)"
             )
         return ok
     except Exception as exc:
@@ -2983,7 +2982,7 @@ def _wsb_receiver_thread(config: dict) -> None:
                                         logger.debug(
                                             f"WebSub: {ne_ch}: {ne.get('title', ne_vid)!r}"
                                             f" ({ne_vid}) already processed"
-                                            f" — ignoring duplicate push"
+                                            " — ignoring duplicate push"
                                         )
                                         continue
                                 if ne_vid in by_vid:
@@ -3176,7 +3175,7 @@ def _wsb_processor_thread(config: dict) -> None:
             if ai_in_backoff:
                 remaining = int(_ai_backoff_until - time.time())
                 logger.info(
-                    f"WebSub: Gemini backoff active — skipping AI for "
+                    "WebSub: Gemini backoff active — skipping AI for "
                     f"this cycle ({remaining}s remaining)"
                 )
             ai_event = threading.Event()
@@ -3721,10 +3720,10 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
         title_escaped = _html.escape(s["title"])
         channel_escaped = _html.escape(s["channel_name"])
         story_items.append(
-            f'<li style="margin-bottom:0.5em">'
+            '<li style="margin-bottom:0.5em">'
             f'<a href="{href}" style="color:#1a73e8;text-decoration:none">{title_escaped}</a>'
             f' <span style="color:#666;font-size:0.9em">— {channel_escaped}</span>'
-            f"</li>"
+            "</li>"
         )
     items_html = "\n".join(story_items)
     story_count = len(stories)
@@ -3738,7 +3737,7 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
             f' <a href="{account_url}" style="color:#888">Manage preferences</a>.'
         )
     footer += "</p>"
-    return f"""<!DOCTYPE html>
+    return """<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family:Georgia,serif;max-width:600px;margin:0 auto;padding:1.5em;color:#111">
@@ -3902,7 +3901,7 @@ def _generate_podcast_script(
         date_human = date_str
 
     prompt = (
-        f"You are a professional news podcast host. Write a natural, conversational "
+        "You are a professional news podcast host. Write a natural, conversational "
         f"10-minute podcast script (approximately {_PODCAST_TARGET_WORDS} words) for "
         f"{user_name}'s TubeNews briefing on {date_human}.\n\n"
         "Format: brief 1-sentence welcome \u2192 one segment per story (introduce with a "
@@ -3914,7 +3913,7 @@ def _generate_podcast_script(
     )
 
     api_url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{model}:generateContent?key={api_key}"
     )
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
