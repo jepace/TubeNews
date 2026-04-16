@@ -3728,11 +3728,12 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
             f' <a href="{account_url}" style="color:#888">Manage preferences</a>.'
         )
     footer += "</p>"
-    return """<!DOCTYPE html>
+    name_escaped = _html.escape(name)
+    return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family:Georgia,serif;max-width:600px;margin:0 auto;padding:1.5em;color:#111">
-  <p>Hi {_html.escape(name)}, here are your {story_count} new {story_word} from TubeNews:</p>
+  <p>Hi {name_escaped}, here are your {story_count} new {story_word} from TubeNews:</p>
   <ul style="padding-left:1.2em;line-height:1.7">
 {items_html}
   </ul>
