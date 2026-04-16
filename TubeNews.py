@@ -1003,8 +1003,33 @@ def call_gemini_api(
                 return None
 
         elif response.status_code == 429:
-            logger.warning(f"{prefix}Gemini: Rate limit hit (429) — AI disabled for this cycle")
-            return False
+            try:
+                err_msg = response.json().get("error", {}).get(
+                    "message", "Rate limit exceeded"
+                )
+            except Exception:
+                err_msg = "Rate limit exceeded"
+
+            # Try to infer which limit: RPD (daily quota) vs RPM (per-minute)
+            # RPD = "Resource has been exhausted" or "quota"
+            # RPM = "Too many requests" or similar
+            is_daily_quota = (
+                "exhausted" in err_msg.lower() or
+                "quota" in err_msg.lower() or
+                "resource" in err_msg.lower()
+            )
+
+            if is_daily_quota:
+                limit_type = "daily quota (RPD)"
+                return_val = "quota_exhausted_daily"  # Special return for daily quota
+            else:
+                limit_type = "rate limit (RPM)"
+                return_val = False  # Standard rate limit
+
+            logger.warning(
+                f"{prefix}Gemini: 429 {limit_type}: {err_msg} — backing off"
+            )
+            return return_val
         elif response.status_code == 503:
             try:
                 err_msg = response.json().get("error", {}).get(
@@ -1873,8 +1898,11 @@ def process_video(
             call_delay=_safe_float(config.get("gemini_call_delay", 8), 8),
         )
         if result is False:
-            # 429: quota exhausted
+            # 429 (RPM): rate-limited (per-minute)
             return "ai_rate_limited", 0
+        if result == "quota_exhausted_daily":
+            # 429 (RPD): daily quota exhausted
+            return "quota_exhausted_daily", 0
         if result == "service_unavailable":
             # 503: service temporarily down
             return "service_unavailable", 0
@@ -1964,8 +1992,8 @@ def process_feed(
         A ``(content_changed, error_type, stories_written)`` tuple.
         *content_changed* is True if any new stories were written (i.e., the
         RSS feed needs to be rebuilt).
-        *error_type* is "" (no error), "ai_rate_limited" (429), or
-        "service_unavailable" (503) if Gemini hit a quota or service issue.
+        *error_type* is "" (no error), "ai_rate_limited" (429 RPM), "quota_exhausted_daily" (429 RPD),
+        or "service_unavailable" (503) if Gemini hit a quota or service issue.
         *stories_written* is the total count of story files created.
     """
     # Validate channel_id to prevent directory traversal attacks
@@ -2035,6 +2063,10 @@ def process_feed(
                 stories_written += n
             elif result == "ai_rate_limited":
                 error_type = "ai_rate_limited"
+                if ai_rate_limit_event is not None:
+                    ai_rate_limit_event.set()
+            elif result == "quota_exhausted_daily":
+                error_type = "quota_exhausted_daily"
                 if ai_rate_limit_event is not None:
                     ai_rate_limit_event.set()
             elif result == "service_unavailable":
@@ -2131,6 +2163,10 @@ def process_feed(
             stories_written += n
         elif result == "ai_rate_limited":
             error_type = "ai_rate_limited"
+            if ai_rate_limit_event is not None:
+                ai_rate_limit_event.set()
+        elif result == "quota_exhausted_daily":
+            error_type = "quota_exhausted_daily"
             if ai_rate_limit_event is not None:
                 ai_rate_limit_event.set()
         elif result == "service_unavailable":
@@ -3314,9 +3350,13 @@ def _wsb_processor_thread(config: dict) -> None:
                     if error_type == "service_unavailable":
                         backoff_secs = _AI_BACKOFF_SERVICE
                         msg = "service unavailable (503)"
-                    else:  # "ai_rate_limited"
+                    elif error_type == "quota_exhausted_daily":
+                        # Daily quota hit; back off until tomorrow
+                        backoff_secs = 86400  # 24 hours
+                        msg = "daily quota exhausted (429 RPD) — backing off until tomorrow"
+                    else:  # "ai_rate_limited" (RPM)
                         backoff_secs = _AI_BACKOFF_QUOTA
-                        msg = "quota exhausted (429)"
+                        msg = "per-minute rate limited (429 RPM)"
                     _ai_backoff_until = time.time() + backoff_secs
                     logger.warning(
                         f"WebSub processor: Gemini {msg} — backing off "
