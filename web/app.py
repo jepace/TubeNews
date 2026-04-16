@@ -1873,16 +1873,7 @@ def admin_user_subscriptions(uid: str):
     if not user:
         abort(404)
     channels = _load_channels()
-    valid_ids = {ch["channel_id"] for ch in channels}
-    new_ids = sorted(set(request.form.getlist("channel_ids")) & valid_ids)
-    channels_data = {}
-    for ch_id in new_ids:
-        raw = request.form.get(f"focus_{ch_id}", "")
-        lines = [_sanitize_focus(ln) for ln in raw.splitlines() if ln.strip()][:3]
-        lines = [ln for ln in lines if ln]
-        channels_data[ch_id] = lines
-    user._data["channels"] = channels_data
-    user._save()
+    _save_user_subscriptions(user, request.form, channels)
     flash("Subscriptions updated.", "success")
     return redirect(url_for("admin_user", uid=uid))
 
