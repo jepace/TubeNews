@@ -777,13 +777,8 @@ def fetch_transcript(
         False — permanent no-transcript (Supadata confirmed the video has no captions);
                 caller should write ``status: "no_transcript_available"`` and stop retrying.
     """
-    # Format: "channel_name: video_title (video_id):" or "[video_id]:" if no title
-    prefix_parts = [p for p in [feed_name, video_title] if p]
-    if prefix_parts:
-        title_part = ": ".join(prefix_parts)
-        prefix = f"{title_part} ({video_id}): "
-    else:
-        prefix = f"[{video_id}]: "
+    # Format metadata as: VideoID: Channel: Title
+    metadata = _format_video_metadata(video_id, feed_name, video_title)
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
@@ -792,20 +787,20 @@ def fetch_transcript(
             segments = transcript_response.content
             lang_received = getattr(transcript_response, "lang", "") or ""
             if lang_received and lang_received != "en":
-                logger.warning(f"Supadata: {prefix}Requested English transcript but received '{lang_received}'")
+                logger.warning(f"Supadata: Requested English transcript but received '{lang_received}' - {metadata}")
             else:
-                logger.debug(f"Supadata: {prefix}Language: {lang_received or 'unknown'}")
+                logger.debug(f"Supadata: Language: {lang_received or 'unknown'} - {metadata}")
             lines = [
                 f"{int(getattr(seg, 'offset', 0) / 1000)}s --> {getattr(seg, 'text', '')}"
                 for seg in segments
             ]
             transcript_text = "\n".join(lines)
             logger.info(
-                f"Supadata: {prefix}Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars"
+                f"Supadata: Transcript ready — {len(segments)} segments, {len(transcript_text):,} chars - {metadata}"
             )
             return transcript_text
         # API returned a response but no transcript content — video has no captions.
-        logger.info(f"Supadata: {prefix}No transcript content returned")
+        logger.info(f"Supadata: No transcript content returned - {metadata}")
         if failure_reason is not None:
             failure_reason.append("no_captions")
         return False
@@ -831,8 +826,8 @@ def fetch_transcript(
 
         if is_quota_error:
             logger.error(
-                f"Supadata: {prefix}Quota exhausted — no credits remaining. "
-                "Halting transcript fetches for this cycle."
+                f"Supadata: Quota exhausted — no credits remaining. "
+                f"Halting transcript fetches for this cycle - {metadata}"
             )
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
@@ -844,16 +839,16 @@ def fetch_transcript(
                 reason = "video_not_found"
             else:
                 reason = "no_captions"
-            logger.info(f"Supadata: {prefix}No transcript available ({reason})")
+            logger.info(f"Supadata: No transcript available ({reason}) - {metadata}")
             if failure_reason is not None:
                 failure_reason.append(reason)
             return False
         elif "live streaming" in exc_str:
-            logger.warning(f"Supadata: {prefix}Live stream — transcript unavailable, will retry later")
+            logger.warning(f"Supadata: Live stream — transcript unavailable, will retry later - {metadata}")
             if livestream_error is not None:
                 livestream_error.append(True)
         else:
-            logger.error(f"Supadata: {prefix}Call failed: {exc}")
+            logger.error(f"Supadata: Call failed - {metadata}: {exc}")
 
     return None
 
