@@ -3060,7 +3060,7 @@ def _wsb_processor_thread(config: dict) -> None:
     try:
         _recover_orphaned_videos()
     except Exception as exc:
-        logger.warning(f"WebSub: orphan recovery failed: {exc}")
+        logger.warning(f"WebSub: Orphan recovery failed - {exc}")
     _last_orphan_recovery: float = time.time()
     _last_digest_check: float = 0.0
     _last_podcast_check: float = 0.0
@@ -3092,7 +3092,7 @@ def _wsb_processor_thread(config: dict) -> None:
             try:
                 subs: dict = json.loads(subs_path.read_text())
             except Exception as exc:
-                logger.warning(f"WebSub: subscriptions.json is corrupted, resetting: {exc}")
+                logger.warning(f"WebSub: Subscriptions.json corrupted, resetting - {exc}")
                 subs = {}
             channels = _read_channels()
             channel_by_id = {ch["channel_id"]: ch["channel_name"] for ch in channels}
@@ -3109,16 +3109,15 @@ def _wsb_processor_thread(config: dict) -> None:
 
                     ch_name = channel_by_id.get(cid, "?")
                     if should_retry:
+                        expires_in = int(expires - now_ts)
                         logger.debug(
-                            f"WebSub: attempting renewal for {ch_name} ({cid}); "
-                            f"expires in {int(expires - now_ts)}s"
+                            f"WebSub: Attempting renewal ({ch_name} / {cid}); expires in {expires_in}s"
                         )
                         _wsb_subscribe(cid, current_config)
                     else:
                         remaining_cooldown = int(_WSB_RENEWAL_RETRY_COOLDOWN - time_since_attempt)
                         logger.debug(
-                            f"WebSub: deferring renewal for {ch_name} ({cid}); "
-                            f"will retry in {remaining_cooldown}s"
+                            f"WebSub: Deferring renewal ({ch_name} / {cid}); will retry in {remaining_cooldown}s"
                         )
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
@@ -3126,7 +3125,7 @@ def _wsb_processor_thread(config: dict) -> None:
             try:
                 _recover_orphaned_videos()
             except Exception as exc:
-                logger.warning(f"WebSub: orphan recovery failed: {exc}")
+                logger.warning(f"WebSub: Orphan recovery failed - {exc}")
             _last_orphan_recovery = time.time()
 
         # -- Daily email digest -----------------------------------------------
@@ -3156,7 +3155,7 @@ def _wsb_processor_thread(config: dict) -> None:
             continue
 
         if not _acquire_lock():
-            logger.debug("WebSub: lock held by another process — skipping this cycle")
+            logger.debug("WebSub: Lock held by another process, skipping cycle")
             time.sleep(interval)
             continue
 
@@ -3173,8 +3172,7 @@ def _wsb_processor_thread(config: dict) -> None:
             if ai_in_backoff:
                 remaining = int(_ai_backoff_until - time.time())
                 logger.info(
-                    "WebSub: Gemini backoff active — skipping AI for "
-                    f"this cycle ({remaining}s remaining)"
+                    f"WebSub: Gemini backoff active — skipping AI this cycle ({remaining}s remaining)"
                 )
             ai_event = threading.Event()
             if ai_in_backoff:
@@ -3234,10 +3232,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     transcript_ready.append(entry)
 
                 elif fetch_result == "quota_exhausted":
-                    logger.warning(
-                        "WebSub: Supadata quota exhausted — "
-                        "halting transcript fetches this cycle"
-                    )
+                    logger.warning("WebSub: Supadata quota exhausted — halting transcript fetches")
                     break  # Leave remaining entries in queue unchanged
 
                 elif fetch_result == "livestream":
@@ -3272,8 +3267,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     )
                     ch_name = feed_cfg.get("channel_name", "?")
                     logger.info(
-                        f"WebSub: {ch_name}: {title} ({vid}) — "
-                        f"livestream detected, re-queued for {next_try_at}"
+                        f"WebSub: Livestream detected, re-queued for {next_try_at} - {vid}: {ch_name}: {title}"
                     )
 
                 elif fetch_result == "permanent":
@@ -3287,10 +3281,9 @@ def _wsb_processor_thread(config: dict) -> None:
                     if attempts >= _TRANSCRIPT_MAX_ATTEMPTS or not queued_at_str:
                         title = entry.get("title", "?")
                         ch_name = feed_cfg.get("channel_name", "?")
-                        logger.warning(
-                            f"WebSub: {ch_name}: {title} ({vid}) — "
-                            f"no transcript after {_TRANSCRIPT_MAX_ATTEMPTS} attempts, marking permanent"
-                        )
+                        metadata_fmt = f"{vid}: {ch_name}: {title}"
+                        msg = f"No transcript after {_TRANSCRIPT_MAX_ATTEMPTS} attempts, marking permanent"
+                        logger.warning(f"WebSub: {msg} - {metadata_fmt}")
                         video_date = date_str[:10]
                         _write_no_transcript_metadata(
                             vid, feed_dir, video_date, entry.get("title", ""),
@@ -3307,10 +3300,10 @@ def _wsb_processor_thread(config: dict) -> None:
                         })
                         title = entry.get("title", "?")
                         ch_name = feed_cfg.get("channel_name", "?")
+                        metadata_fmt = f"{vid}: {ch_name}: {title}"
                         logger.debug(
-                            f"WebSub: {ch_name}: {title} ({vid}) — "
-                            f"transcript not ready (attempt {attempts}/{_TRANSCRIPT_MAX_ATTEMPTS}), "
-                            f"next try at {next_nta}"
+                            f"WebSub: Transcript not ready (attempt {attempts}/{_TRANSCRIPT_MAX_ATTEMPTS}), "
+                            f"next try at {next_nta} - {metadata_fmt}"
                         )
 
             # ----------------------------------------------------------------
@@ -3323,11 +3316,9 @@ def _wsb_processor_thread(config: dict) -> None:
                 channels_for_gemini.setdefault(entry["channel_id"], []).append(entry)
 
             if channels_for_gemini:
-                logger.info(
-                    f"WebSub: {len(transcript_ready)} transcript-ready video(s) "
-                    f"across {len(channels_for_gemini)} channel(s); "
-                    f"Gemini cap: {max_per_cycle}/cycle"
-                )
+                n_videos = len(transcript_ready)
+                n_channels = len(channels_for_gemini)
+                logger.info(f"WebSub: {n_videos} transcript-ready video(s) across {n_channels} channel(s)")
 
             gemini_count = 0
             any_changed = False
@@ -3375,8 +3366,7 @@ def _wsb_processor_thread(config: dict) -> None:
                         msg = "per-minute rate limited (429 RPM)"
                     _ai_backoff_until = time.time() + backoff_secs
                     logger.warning(
-                        f"WebSub: Gemini {msg} — backing off "
-                        f"AI calls for {backoff_secs // 60}m {backoff_secs % 60}s"
+                        f"WebSub: Gemini {msg} — backing off AI for {backoff_secs // 60}m {backoff_secs % 60}s"
                     )
                     # Stop processing more channels once we hit an error.
                     # Remaining channels' entries stay in the queue for next cycle.
@@ -3400,8 +3390,7 @@ def _wsb_processor_thread(config: dict) -> None:
                         rc = entry.get("retry_count", 0) + 1
                         if rc > _QUEUE_MAX_RETRIES:
                             logger.warning(
-                                f"WebSub: dropping {evid} after "
-                                f"{_QUEUE_MAX_RETRIES} Gemini-phase retries"
+                                f"WebSub: Dropping video after {_QUEUE_MAX_RETRIES} Gemini-phase retries - {evid}"
                             )
                             resolved_ids.add(evid)
                         else:
@@ -3414,7 +3403,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     rebuild_aggregate_feed(base_url=base_url)
                 except Exception as exc:
                     logger.error(
-                        f"WebSub: aggregate feed rebuild failed: {exc}",
+                        f"WebSub: Aggregate feed rebuild failed - {exc}",
                         exc_info=True,
                     )
 
@@ -3423,13 +3412,13 @@ def _wsb_processor_thread(config: dict) -> None:
                 _update_queue_entries(retry_updates)
             kept = len(retry_updates)
             done = len(resolved_ids)
-            logger.info(
-                f"WebSub: resolved {done} video(s)"
-                + (f", kept {kept} for retry" if kept else "")
-            )
+            if kept:
+                logger.info(f"WebSub: Resolved {done} video(s), kept {kept} for retry")
+            else:
+                logger.info(f"WebSub: Resolved {done} video(s)")
 
         except Exception as exc:
-            logger.error(f"WebSub cycle failed: {exc}", exc_info=True)
+            logger.error(f"WebSub: Cycle failed - {exc}", exc_info=True)
         finally:
             _release_lock()
 
