@@ -1046,7 +1046,15 @@ def call_gemini_api(
                 err_msg = response.json().get("error", {}).get("message", response.text[:120])
             except Exception:
                 err_msg = response.text[:120]
-            logger.error(f"{prefix}Gemini: HTTP {response.status_code}: {err_msg}")
+
+            # Detect config errors (invalid model name) vs other errors
+            if response.status_code == 404 and "models/" in err_msg and "is not found" in err_msg:
+                logger.error(
+                    f"{prefix}Gemini: CONFIG ERROR — invalid gemini_model in TubeNews.json. "
+                    f"{err_msg}"
+                )
+            else:
+                logger.error(f"{prefix}Gemini: HTTP {response.status_code}: {err_msg}")
             return None
 
     except requests.RequestException as exc:
