@@ -1020,16 +1020,15 @@ def call_gemini_api(
             )
 
             if is_daily_quota:
-                limit_type = "daily quota (RPD)"
-                return_val = "quota_exhausted_daily"  # Special return for daily quota
+                logger.warning(
+                    f"{prefix}Gemini: 429 daily quota (RPD): {err_msg} — backing off"
+                )
+                return "quota_exhausted_daily"
             else:
-                limit_type = "rate limit (RPM)"
-                return_val = False  # Standard rate limit
-
-            logger.warning(
-                f"{prefix}Gemini: 429 {limit_type}: {err_msg} — backing off"
-            )
-            return return_val
+                logger.warning(
+                    f"{prefix}Gemini: 429 per-minute rate limited (RPM): {err_msg} — backing off"
+                )
+                return False
         elif response.status_code == 503:
             try:
                 err_msg = response.json().get("error", {}).get(
@@ -1916,20 +1915,22 @@ def process_video(
             return "service_unavailable", 0
         if result is None:
             gemini_transient_error = True
-        for story in (result or []):  # type: ignore[union-attr]
-            title = story.get("title", "")
-            if title in seen_titles:
-                # Merge user_ids: unrestricted (feed-level) always wins
-                existing = all_stories[seen_titles[title]]
-                existing_uids: list[str] = existing.get("_user_ids", [])
-                if not existing_uids or not user_ids:
-                    existing["_user_ids"] = []  # unrestricted wins
+        elif isinstance(result, list):
+            # Process stories returned by Gemini
+            for story in result:
+                title = story.get("title", "")
+                if title in seen_titles:
+                    # Merge user_ids: unrestricted (feed-level) always wins
+                    existing = all_stories[seen_titles[title]]
+                    existing_uids: list[str] = existing.get("_user_ids", [])
+                    if not existing_uids or not user_ids:
+                        existing["_user_ids"] = []  # unrestricted wins
+                    else:
+                        existing["_user_ids"] = sorted(set(existing_uids) | set(user_ids))
                 else:
-                    existing["_user_ids"] = sorted(set(existing_uids) | set(user_ids))
-            else:
-                story["_user_ids"] = list(user_ids)
-                seen_titles[title] = len(all_stories)
-                all_stories.append(story)
+                    story["_user_ids"] = list(user_ids)
+                    seen_titles[title] = len(all_stories)
+                    all_stories.append(story)
 
     # If Gemini hit a transient error, skip metadata write to allow retry.
     if gemini_transient_error:
