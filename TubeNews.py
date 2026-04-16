@@ -687,6 +687,11 @@ def _is_youtube_short(video_id: str, feed_name: str = "") -> bool:
         return False
 
 
+def _format_video_metadata(video_id: str, feed_name: str, video_title: str) -> str:
+    """Format video metadata for logging: VideoID: Channel: Title"""
+    return f"{video_id}: {feed_name}: {video_title}"
+
+
 def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
     """Fetch channel videos from YouTube's official Atom RSS feed.
 
@@ -881,6 +886,9 @@ def call_gemini_api(
         "service_unavailable" – API returned HTTP 503 (service down); caller should back off longer.
         None  – any other failure; the caller should skip this video.
     """
+    # Format metadata as: VideoID: Channel: Title
+    metadata = _format_video_metadata(video_id, feed_name, video_title)
+
     # Sanitize user input to prevent prompt injection
     focus = _sanitize_focus(focus)
     global _gemini_last_call_time
@@ -919,14 +927,6 @@ def call_gemini_api(
         ]
     }
 
-    # Format: "channel_name: video_title (video_id):" or "[video_id]:" if no title
-    prefix_parts = [p for p in [feed_name, video_title] if p]
-    if prefix_parts:
-        title_part = ": ".join(prefix_parts)
-        prefix = f"{title_part} ({video_id}): " if video_id else f"{title_part}: "
-    else:
-        prefix = f"[{video_id}]: " if video_id else ""
-
     try:
         response = requests.post(api_url, json=payload, timeout=_GEMINI_TIMEOUT)
         if response.status_code == 200:
@@ -935,29 +935,29 @@ def call_gemini_api(
                 resp_json = response.json()
                 if not isinstance(resp_json, dict):
                     logger.error(
-                        f"Gemini: {prefix}Invalid response format"
+                        f"Gemini: Invalid response format - {metadata}"
                         f" (expected dict, got {type(resp_json).__name__})"
                     )
                     return None
 
                 candidates = resp_json.get("candidates")
                 if not isinstance(candidates, list) or len(candidates) == 0:
-                    logger.error(f"Gemini: {prefix}Invalid response: 'candidates' missing or empty")
+                    logger.error(f"Gemini: Invalid response: \'candidates\' missing or empty - {metadata}")
                     return None
 
                 first_candidate = candidates[0]
                 if not isinstance(first_candidate, dict):
-                    logger.error(f"Gemini: {prefix}Invalid response: candidate is not a dict")
+                    logger.error(f"Gemini: Invalid response: candidate is not a dict - {metadata}")
                     return None
 
                 content = first_candidate.get("content")
                 if not isinstance(content, dict):
-                    logger.error(f"Gemini: {prefix}Invalid response: 'content' missing or not a dict")
+                    logger.error(f"Gemini: Invalid response: \'content\' missing or not a dict - {metadata}")
                     return None
 
                 parts = content.get("parts")
                 if not isinstance(parts, list) or len(parts) == 0:
-                    logger.error(f"Gemini: {prefix}Invalid response: 'parts' missing or empty")
+                    logger.error(f"Gemini: Invalid response: \'parts\' missing or empty - {metadata}")
                     return None
 
                 # Find the part with "text" (may not be first in multi-part responses)
@@ -970,11 +970,11 @@ def call_gemini_api(
                         break
 
                 if raw_text is None:
-                    logger.error(f"Gemini: {prefix}Invalid response: 'text' missing or not a string in any part")
+                    logger.error(f"Gemini: Invalid response: \'text\' missing or not a string in any part - {metadata}")
                     return None
 
             except (KeyError, TypeError, AttributeError) as exc:
-                logger.error(f"Gemini: {prefix}Failed to parse response structure: {exc}")
+                logger.error(f"Gemini: Failed to parse response structure: {exc}")
                 return None
 
             # Strip markdown code blocks (Gemma and some LLMs wrap JSON in ```json ... ```)
@@ -983,18 +983,18 @@ def call_gemini_api(
 
             json_match = re.search(r"\[\s*{.*}\s*\]", raw_text, re.DOTALL)
             if not json_match:
-                logger.info(f"Gemini: {prefix}No stories returned (no JSON in response)")
+                logger.info(f"Gemini: No stories returned (no JSON in response) - {metadata}")
                 return []
 
             try:
                 stories = json.loads(json_match.group(0))
                 if not isinstance(stories, list):
-                    logger.error(f"Gemini: {prefix}JSON parse result is not a list (got {type(stories).__name__})")
+                    logger.error(f"Gemini: JSON parse result is not a list (got {type(stories).__name__})")
                     return None
-                logger.info(f"Gemini: {prefix}{len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
+                logger.info(f"Gemini: {len(stories)} stor{'y' if len(stories) == 1 else 'ies'} generated")
                 return stories
             except json.JSONDecodeError as exc:
-                logger.error(f"Gemini: {prefix}Failed to parse JSON from response: {exc}")
+                logger.error(f"Gemini: Failed to parse JSON from response: {exc}")
                 return None
 
         elif response.status_code == 429:
@@ -1016,11 +1016,11 @@ def call_gemini_api(
 
             if is_daily_quota:
                 logger.warning(
-                    f"Gemini: {prefix}429 daily quota (RPD): {err_msg} — backing off"
+                    f"Gemini: 429 daily quota (RPD): {err_msg} — backing off - {metadata}"
                 )
                 return "quota_exhausted_daily"
             logger.warning(
-                f"Gemini: {prefix}429 per-minute rate limited (RPM): {err_msg} — backing off"
+                f"Gemini: 429 per-minute rate limited (RPM): {err_msg} — backing off - {metadata}"
             )
             return False
         elif response.status_code == 503:
@@ -1031,7 +1031,7 @@ def call_gemini_api(
             except Exception:
                 err_msg = "Service temporarily unavailable"
             logger.warning(
-                f"Gemini: {prefix}Unavailable (503): {err_msg} — backing off (service recovering)"
+                f"Gemini: Unavailable (503): {err_msg} — backing off (service recovering) - {metadata}"
             )
             return "service_unavailable"
         else:
@@ -1043,18 +1043,17 @@ def call_gemini_api(
             # Detect config errors (invalid model name) vs other errors
             if response.status_code == 404 and "models/" in err_msg and "is not found" in err_msg:
                 logger.error(
-                    f"Gemini: {prefix}CONFIG ERROR — invalid gemini_model in TubeNews.json. "
-                    f"{err_msg}"
+                    f"Gemini: CONFIG ERROR — invalid gemini_model in TubeNews.json. {err_msg} - {metadata}"
                 )
             else:
-                logger.error(f"Gemini: {prefix}HTTP {response.status_code}: {err_msg}")
+                logger.error(f"Gemini: HTTP {response.status_code}: {err_msg}")
             return None
 
     except requests.RequestException as exc:
-        logger.error(f"Gemini: {prefix}Network error: {exc}")
+        logger.error(f"Gemini: Network error: {exc}")
         return None
     except Exception as exc:
-        logger.error(f"Gemini: {prefix}Unexpected error: {exc}", exc_info=True)
+        logger.error(f"Gemini: Unexpected error: {exc}", exc_info=True)
         return None
 
 
