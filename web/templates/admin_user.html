@@ -152,6 +152,16 @@
                {% if u._data.get('preferences', {}).get('dark_mode') %}checked{% endif %}>
         Dark mode
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="digest_email_enabled"
+               {% if u._data.get('preferences', {}).get('digest_email_enabled') %}checked{% endif %}>
+        Receive daily email digest
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="podcast_enabled"
+               {% if u._data.get('preferences', {}).get('podcast_enabled') %}checked{% endif %}>
+        Generate daily podcast episodes
+      </label>
       <div class="form-row" style="margin-top:1rem;">
         <label for="timezone">Timezone</label>
         <select name="timezone" id="timezone" style="max-width: 300px;">

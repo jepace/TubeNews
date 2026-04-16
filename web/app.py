@@ -1898,7 +1898,11 @@ def admin_user_prefs(uid: str):
     if timezone and timezone not in pytz.all_timezones:
         flash("Invalid timezone.", "error")
         return redirect(url_for("admin_user", uid=uid))
-    user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode}
+    digest_email_enabled = "digest_email_enabled" in request.form
+    podcast_enabled = "podcast_enabled" in request.form
+    user._data["preferences"] = {"font_size": font_size, "dark_mode": dark_mode,
+                                 "digest_email_enabled": digest_email_enabled,
+                                 "podcast_enabled": podcast_enabled}
     if timezone:
         user._data["preferences"]["timezone"] = timezone
     user._save()
