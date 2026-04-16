@@ -3267,7 +3267,11 @@ def _wsb_processor_thread(config: dict) -> None:
                         raw_entry_xml=entry.get("raw_entry_xml", ""),
                     )
                     resolved_ids.add(vid)
-                    title = entry.get("title", "?")
+                    title = (
+                        entry.get("title", "")
+                        or _title_from_raw_xml(entry.get("raw_entry_xml", ""))
+                        or "[title unknown]"
+                    )
                     ch_name = feed_cfg.get("channel_name", "?")
                     logger.info(
                         f"WebSub: {ch_name}: {title} ({vid}) — "
