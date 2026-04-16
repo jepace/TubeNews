@@ -1747,13 +1747,10 @@ def process_video(
 
     channel_name = feed["channel_name"]
 
-    # Standardized log format: "channel: video_title (video_id):"
-    log_prefix = f"{channel_name}: {video_title} ({video_id}):"
-
     # --- Load or fetch transcript ---
     if existing_dir and (existing_dir / "transcript.txt").exists():
         # Re-use cached transcript; only the AI step needs to re-run (if not disabled).
-        logger.info(f"{log_prefix} TubeNews: Found cached transcript")
+        logger.info(f"TubeNews: Found cached transcript - {video_id}: {channel_name}: {video_title}")
         transcript_text = (existing_dir / "transcript.txt").read_text(encoding="utf-8")
         meeting_dir = existing_dir
     else:
@@ -1761,9 +1758,9 @@ def process_video(
         if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
             return "transcript_quota_exhausted", 0
         counter = f" ({video_num}/{total_videos})" if total_videos else ""
-        logger.info(f"{log_prefix} TubeNews: Processing new video{counter}")
+        logger.info(f"TubeNews: Processing new video{counter} - {video_id}: {channel_name}: {video_title}")
         if _is_youtube_short(video_id, feed_name=channel_name):
-            logger.info(f"{log_prefix} TubeNews: YouTube Short — skipping permanently")
+            logger.info(f"TubeNews: YouTube Short — skipping permanently - {video_id}: {channel_name}: {video_title}")
             short_dir = feed_dir / video_id
             short_dir.mkdir(exist_ok=True)
             (short_dir / "metadata.json").write_text(json.dumps({
@@ -1775,7 +1772,7 @@ def process_video(
                 "processed_at": now_utc_iso(),
             }))
             return "skipped", 0
-        logger.info(f"{log_prefix} Supadata: Fetching transcript")
+        logger.info(f"Supadata: Fetching transcript - {video_id}: {channel_name}: {video_title}")
         _transcript_failure_reason: list[str] = []
         _livestream_error: list[bool] = []
         transcript_text = fetch_transcript(  # type: ignore[assignment]
@@ -1806,17 +1803,19 @@ def process_video(
                         pub_dt = _dt.strptime(video_date, "%Y-%m-%d")
                         age_hours = (_dt.now() - pub_dt).total_seconds() / _SECONDS_PER_HOUR
                 except Exception as exc:
-                    logger.debug(f"{log_prefix} Failed to parse video publish time: {exc}")
+                    metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+                    logger.debug(f"TubeNews: Failed to parse video publish time: {exc} - {metadata_fmt}")
                     age_hours = float("inf")
             if age_hours < 48:
+                metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
                 logger.info(
-                    f"{log_prefix} TubeNews: "
-                    f"No transcript yet — video is only {age_hours:.0f}h old, will retry"
+                    f"TubeNews: No transcript yet — video is only {age_hours:.0f}h old, will retry - {metadata_fmt}"
                 )
                 return "skipped", 0
             # Old enough — permanent.
             if not _validate_iso_date(video_date):
-                logger.error(f"{log_prefix} Invalid video_date '{video_date}' — skipping")
+                metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+                logger.error(f"TubeNews: Invalid video_date '{video_date}' — skipping - {metadata_fmt}")
                 return "skipped", 0
             meeting_dir = feed_dir / video_id
             meeting_dir.mkdir(exist_ok=True)
@@ -1831,7 +1830,8 @@ def process_video(
                 "processed_at": now_utc_iso(),
             }
             (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-            logger.info(f"{log_prefix} TubeNews: No transcript available — marked permanent, will not retry")
+            metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+            logger.info(f"TubeNews: No transcript available — marked permanent, will not retry - {metadata_fmt}")
             return "skipped", 0
         if not transcript_text:
             # Transient failure — quota exhausted, livestream, or network error.
@@ -1858,15 +1858,18 @@ def process_video(
                     next_try_at=retry_next_try_at,
                     raw_entry_xml=raw_entry_xml,
                 )
-                logger.info(f"{log_prefix} TubeNews: Livestream detected — re-queued for {retry_next_try_at}")
+                metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+                logger.info(f"TubeNews: Livestream detected — re-queued for {retry_next_try_at} - {metadata_fmt}")
                 return "skipped", 0
             if transcript_rate_limit_event is not None and transcript_rate_limit_event.is_set():
                 return "transcript_quota_exhausted", 0
-            logger.info(f"{log_prefix} Supadata: Fetch failed — will retry later")
+            metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+            logger.info(f"Supadata: Fetch failed — will retry later - {metadata_fmt}")
             return "skipped", 0
 
         if not _validate_iso_date(video_date):
-            logger.error(f"{channel_name}: [{video_id}] Invalid video_date '{video_date}' — skipping")
+            metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+            logger.error(f"TubeNews: Invalid video_date '{video_date}' — skipping - {metadata_fmt}")
             return "skipped", 0
         meeting_dir = feed_dir / video_id
         meeting_dir.mkdir(exist_ok=True)
@@ -1885,7 +1888,7 @@ def process_video(
     gemini_transient_error = False
     for focus, user_ids in focuses:
         label = f" (focus: {focus!r})" if len(focuses) > 1 else ""
-        logger.info(f"Gemini: {channel_name}: {video_title} ({video_id}): Generating stories{label}")
+        logger.info(f"Gemini: Generating stories{label} - {video_id}: {channel_name}: {video_title}")
         result = call_gemini_api(
             transcript_text=transcript_text,
             focus=focus,
@@ -1927,7 +1930,7 @@ def process_video(
 
     # If Gemini hit a transient error, skip metadata write to allow retry.
     if gemini_transient_error:
-        logger.info(f"{log_prefix} Gemini: Transient error — will retry later")
+        logger.info(f"Gemini: Transient error — will retry later - {video_id}: {channel_name}: {video_title}")
         return "skipped", 0
 
     if all_stories:
@@ -1944,7 +1947,9 @@ def process_video(
         }
         (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
         n = len(all_stories)
-        logger.info(f"{log_prefix} Done — {n} stor{'y' if n == 1 else 'ies'} written")
+        metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
+        story_word = 'y' if n == 1 else 'ies'
+        logger.info(f"TubeNews: Done — {n} stor{story_word} written - {metadata_fmt}")
         return "content_written", n
 
     # Gemini returned no stories for any focus.
@@ -1958,7 +1963,7 @@ def process_video(
         "processed_focuses": sorted(f for f, _ in focuses),
     }
     (meeting_dir / "metadata.json").write_text(json.dumps(metadata))
-    logger.info(f"{log_prefix} Done — no relevant stories found")
+    logger.info(f"TubeNews: Done — no relevant stories found - {video_id}: {channel_name}: {video_title}")
     return "skipped", 0
 
 
