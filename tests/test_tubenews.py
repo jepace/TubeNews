@@ -3643,6 +3643,32 @@ def test_build_digest_html_escapes_html_in_title():
     assert "&lt;script&gt;" in html
 
 
+def test_build_digest_html_interpolates_name_and_counts():
+    """Regression: template must be an f-string so variables are substituted."""
+    stories = [
+        {"title": "Story One", "channel_name": "Channel", "video_id": "VID1", "start_seconds": 0},
+        {"title": "Story Two", "channel_name": "Channel", "video_id": "VID2", "start_seconds": 10},
+    ]
+    html = _tn_digest._build_digest_html("Bob", "bob@example.com", stories,
+                                         "https://example.com/feed/tok.html",
+                                         "https://example.com")
+    assert "Hi Bob" in html, "name must be interpolated (not literal {name})"
+    assert "2 new stories" in html, "story count must be interpolated"
+    assert "{story_count}" not in html
+    assert "{_html.escape(name)}" not in html
+    assert "{items_html}" not in html
+
+
+def test_build_digest_html_escapes_name():
+    """Names with HTML special characters are escaped to prevent XSS."""
+    stories = [{"title": "Story", "channel_name": "Chan", "video_id": "VID1", "start_seconds": 0}]
+    html = _tn_digest._build_digest_html("<b>Eve</b>", "eve@example.com", stories,
+                                         "https://example.com/feed/tok.html",
+                                         "https://example.com")
+    assert "<b>Eve</b>" not in html
+    assert "&lt;b&gt;Eve&lt;/b&gt;" in html
+
+
 # -- _send_daily_digests --
 
 def test_send_daily_digests_skips_when_no_api_key(tmp_path, monkeypatch):
