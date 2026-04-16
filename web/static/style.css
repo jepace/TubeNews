@@ -924,31 +924,25 @@ main:has(.feed-layout) {
 
 /* Sidebar drag-resize handle */
 .sidebar-resize {
-  width: 12px;
+  width: 16px;
   flex-shrink: 0;
   cursor: col-resize;
   position: relative;
   touch-action: none;
   user-select: none;
-  padding: 0 1.5px;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: linear-gradient(90deg, transparent 40%, var(--border) 45%, var(--border) 55%, transparent 60%);
+  background-repeat: repeat-y;
+  background-size: 100% 4px;
+  transition: background-color 0.15s;
 }
-.sidebar-resize::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--border);
-  border-radius: 1px;
-  transition: width 0.15s, background 0.15s;
+.sidebar-resize:hover {
+  background: linear-gradient(90deg, transparent 35%, var(--accent) 40%, var(--accent) 60%, transparent 65%);
 }
-.sidebar-resize:hover::after,
-.sidebar-resize.is-dragging::after {
-  width: 4px;
-  background: var(--accent);
+.sidebar-resize.is-dragging {
+  background: linear-gradient(90deg, transparent 30%, var(--accent) 35%, var(--accent) 65%, transparent 70%);
 }
 
 /* Persistent sidebar: hidden state (desktop only — mobile uses overlay) */
