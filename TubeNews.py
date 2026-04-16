@@ -3202,10 +3202,14 @@ def _wsb_processor_thread(config: dict) -> None:
                     try:
                         pub_time = datetime.fromisoformat(date_str.replace("Z", "+00:00")).timestamp()
                         if pub_time > time.time():
-                            logger.debug(
-                                f"WebSub processor: {vid} publish date is in future; "
-                                f"skipping until {date_str}"
-                            )
+                            # Defer this entry until after its publish date
+                            retry_dt = datetime.fromtimestamp(pub_time, tz=timezone.utc) + timedelta(minutes=5)
+                            next_try_at = retry_dt.isoformat(timespec="seconds").replace("+00:00", "Z")
+                            retry_updates.append({
+                                **entry,
+                                "next_try_at": next_try_at,
+                            })
+                            resolved_ids.add(vid)
                             continue
                     except (ValueError, TypeError):
                         pass  # Malformed date — proceed
