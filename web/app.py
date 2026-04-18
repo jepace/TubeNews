@@ -598,6 +598,28 @@ def format_datetime(ts: int | str | None) -> str:
         return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+@app.template_filter("relative_date")
+def relative_date(date_str: str | None) -> str:
+    """Convert YYYY-MM-DD date to 'Today', 'Yesterday', or the date string."""
+    if not date_str:
+        return "—"
+    try:
+        tz_name = _get_user_timezone(current_user)
+        tz = pytz.timezone(tz_name)
+        today = datetime.now(tz=tz).date()
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+
+        if date_obj == today:
+            return "Today"
+        elif date_obj == today - __import__('datetime').timedelta(days=1):
+            return "Yesterday"
+        else:
+            return date_str
+    except Exception:
+        return date_str
+
+
+
 # Canonical implementation lives in tubenews_utils.sanitize_focus (imported
 # via TubeNews).  Alias preserves private naming used throughout this file and
 # in existing test imports (from web.app import _sanitize_focus).
