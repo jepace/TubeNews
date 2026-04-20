@@ -919,6 +919,17 @@
       window.location.reload();
     }
   });
+
+  // Scroll to story anchor on page load (e.g., from email links with #sVideoID-Seconds)
+  if (window.location.hash) {
+    setTimeout(function() {
+      var hash = window.location.hash.slice(1); // Remove the # prefix
+      var el = document.getElementById(hash);
+      if (el && el.classList.contains('story')) {
+        scrollToStory(el);
+      }
+    }, 100);
+  }
 })();
 (function () {
   var btn = document.getElementById('sidebar-toggle');
