@@ -257,6 +257,14 @@
   }
 
   function articleLink(anchor) {
+    // Parse anchor: "sVideoID-Seconds" → video_id, start_seconds for public article URL
+    var match = anchor.match(/^s([a-zA-Z0-9_-]+)-(\d+)$/);
+    if (match) {
+      var videoId = match[1];
+      var seconds = match[2];
+      return window.location.origin + '/article/' + videoId + '/' + seconds;
+    }
+    // Fallback: return current feed URL with anchor (shouldn't happen)
     return window.location.href.split('#')[0] + '#' + anchor;
   }
 
