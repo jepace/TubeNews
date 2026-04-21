@@ -161,6 +161,13 @@
         {% endif %}
       </p>
       <div class="story-body">{{ story.body_html | safe }}</div>
+      <div class="story-votes"
+           data-channel-slug="{{ story.channel_slug }}"
+           data-meeting-id="{{ story.meeting_id }}"
+           data-basename="{{ story.story_filename[:-3] if story.story_filename else '' }}">
+        <button type="button" class="vote-btn vote-up" title="Thumbs up">👍 <span class="vote-count">0</span></button>
+        <button type="button" class="vote-btn vote-down" title="Thumbs down">👎 <span class="vote-count">0</span></button>
+      </div>
       <div class="story-toolbar"
            data-title="{{ story.title | e }}"
            data-dateline="{{ story.video_date | e }}"
@@ -927,6 +934,80 @@
       window.location.reload();
     }
   });
+
+  // Voting system (thumbs up/down)
+  (function () {
+    function loadVotes(section) {
+      var channelSlug = section.dataset.channelSlug;
+      var meetingId = section.dataset.meetingId;
+      var basename = section.dataset.basename;
+      if (!channelSlug || !meetingId || !basename) return;
+
+      fetch('/votes/' + channelSlug + '/' + meetingId + '/' + basename)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          section.querySelector('.vote-up .vote-count').textContent = data.up;
+          section.querySelector('.vote-down .vote-count').textContent = data.down;
+
+          // Highlight user's current vote
+          section.querySelectorAll('.vote-btn').forEach(function (btn) {
+            btn.classList.remove('voted');
+          });
+          if (data.user_vote === 'up') {
+            section.querySelector('.vote-up').classList.add('voted');
+          } else if (data.user_vote === 'down') {
+            section.querySelector('.vote-down').classList.add('voted');
+          }
+        })
+        .catch(function (err) {
+          console.error('Failed to load votes:', err);
+        });
+    }
+
+    function attachVoteHandlers(section) {
+      var channelSlug = section.dataset.channelSlug;
+      var meetingId = section.dataset.meetingId;
+      var basename = section.dataset.basename;
+      if (!channelSlug || !meetingId || !basename) return;
+
+      section.querySelectorAll('.vote-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          var direction = btn.classList.contains('vote-up') ? 'up' : 'down';
+          fetch('/vote/' + channelSlug + '/' + meetingId + '/' + basename + '/' + direction, {
+            method: 'POST'
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+              if (data.ok) {
+                // Update counts
+                section.querySelector('.vote-up .vote-count').textContent = data.up;
+                section.querySelector('.vote-down .vote-count').textContent = data.down;
+
+                // Update highlight
+                section.querySelectorAll('.vote-btn').forEach(function (b) {
+                  b.classList.remove('voted');
+                });
+                if (data.user_vote === 'up') {
+                  section.querySelector('.vote-up').classList.add('voted');
+                } else if (data.user_vote === 'down') {
+                  section.querySelector('.vote-down').classList.add('voted');
+                }
+              }
+            })
+            .catch(function (err) {
+              console.error('Failed to vote:', err);
+            });
+        });
+      });
+    }
+
+    // Load votes for all stories and attach handlers
+    document.querySelectorAll('.story-votes').forEach(function (section) {
+      loadVotes(section);
+      attachVoteHandlers(section);
+    });
+  })();
 
   // Scroll to story anchor on page load (e.g., from email links with #sVideoID-Seconds)
   if (window.location.hash) {

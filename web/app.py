@@ -40,6 +40,7 @@ from flask import (
     request,
     send_file,
     send_from_directory,
+    session,
     url_for,
 )
 from flask_limiter import Limiter
@@ -1905,6 +1906,132 @@ def comment_edit():
     tmp.write_text(json.dumps(comments, indent=2), encoding="utf-8")
     tmp.rename(comment_path)
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Voting system (thumbs up/down)
+# ---------------------------------------------------------------------------
+
+
+def _get_story_votes(story_path: pathlib.Path) -> dict:
+    """Load vote data for a story. Returns {counts: {up: int, down: int}, votes: {up: [...], down: [...]}}."""
+    votes_path = story_path.with_suffix(".votes.json")
+    if not votes_path.exists():
+        return {"counts": {"up": 0, "down": 0}, "votes": {"up": [], "down": []}}
+    try:
+        return json.loads(votes_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.error(f"Failed to read votes {votes_path}: {exc}")
+        return {"counts": {"up": 0, "down": 0}, "votes": {"up": [], "down": []}}
+
+
+def _save_story_votes(story_path: pathlib.Path, votes: dict) -> None:
+    """Save vote data for a story. Uses atomic write."""
+    votes_path = story_path.with_suffix(".votes.json")
+    tmp = votes_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(votes, indent=2), encoding="utf-8")
+    tmp.rename(votes_path)
+
+
+def _get_voter_id() -> str:
+    """Get voter identifier: user_id if logged in, else session-based cookie."""
+    if current_user.is_authenticated:
+        return current_user.get_id()
+    # For anonymous users, use session cookie as voter ID
+    voter_id = session.get("vote_session_id")
+    if not voter_id:
+        voter_id = f"anon-{uuid.uuid4().hex[:16]}"
+        session["vote_session_id"] = voter_id
+    return voter_id
+
+
+@app.route("/votes/<channel_slug>/<meeting_id>/<basename>")
+def get_votes(channel_slug: str, meeting_id: str, basename: str):
+    """Get vote counts and current user's vote for a story."""
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _STORY_FILE_RE.match(basename + ".md")):
+        abort(400)
+
+    story_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}.md"
+    if not story_path.exists():
+        abort(404)
+
+    votes = _get_story_votes(story_path)
+    voter_id = _get_voter_id()
+
+    # Determine this user's vote (if any)
+    user_vote = None
+    if voter_id in votes["votes"].get("up", []):
+        user_vote = "up"
+    elif voter_id in votes["votes"].get("down", []):
+        user_vote = "down"
+
+    return jsonify({
+        "up": votes["counts"]["up"],
+        "down": votes["counts"]["down"],
+        "user_vote": user_vote
+    })
+
+
+@app.route("/vote/<channel_slug>/<meeting_id>/<basename>/<direction>", methods=["POST"])
+def post_vote(channel_slug: str, meeting_id: str, basename: str, direction: str):
+    """Cast or toggle a vote (up or down) on a story."""
+    if direction not in ["up", "down"]:
+        abort(400)
+
+    if (not _SAFE_SLUG_RE.match(channel_slug) or
+            not _SAFE_SLUG_RE.match(meeting_id) or
+            not _STORY_FILE_RE.match(basename + ".md")):
+        abort(400)
+
+    story_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}.md"
+    if not story_path.exists():
+        abort(404)
+
+    voter_id = _get_voter_id()
+    votes = _get_story_votes(story_path)
+
+    # Ensure vote lists exist
+    if "up" not in votes["votes"]:
+        votes["votes"]["up"] = []
+    if "down" not in votes["votes"]:
+        votes["votes"]["down"] = []
+
+    # Determine new vote state
+    other_direction = "down" if direction == "up" else "up"
+
+    if voter_id in votes["votes"][direction]:
+        # Already voted this way: toggle OFF
+        votes["votes"][direction].remove(voter_id)
+    else:
+        # Not voted this way yet
+        # Remove from opposite direction if present
+        if voter_id in votes["votes"][other_direction]:
+            votes["votes"][other_direction].remove(voter_id)
+        # Add to requested direction
+        votes["votes"][direction].append(voter_id)
+
+    # Recalculate counts
+    votes["counts"]["up"] = len(votes["votes"]["up"])
+    votes["counts"]["down"] = len(votes["votes"]["down"])
+
+    # Save
+    _save_story_votes(story_path, votes)
+
+    # Determine user's current vote
+    user_vote = None
+    if voter_id in votes["votes"]["up"]:
+        user_vote = "up"
+    elif voter_id in votes["votes"]["down"]:
+        user_vote = "down"
+
+    return jsonify({
+        "ok": True,
+        "up": votes["counts"]["up"],
+        "down": votes["counts"]["down"],
+        "user_vote": user_vote
+    })
 
 
 # ---------------------------------------------------------------------------

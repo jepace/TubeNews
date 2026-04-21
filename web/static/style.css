@@ -1053,6 +1053,48 @@ main:has(.feed-layout) {
 .story-watch:hover,
 .story-transcript:hover { text-decoration: underline; }
 
+.story-votes {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.vote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+  font-size: inherit;
+}
+
+.vote-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--text-muted);
+}
+
+.vote-btn.voted {
+  background-color: var(--primary-soft, rgba(26, 115, 232, 0.1));
+  border-color: var(--primary, #1a73e8);
+  color: var(--primary, #1a73e8);
+}
+
+.vote-count {
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.vote-btn.voted .vote-count {
+  color: var(--primary, #1a73e8);
+}
+
 .story-toolbar {
   display: flex;
   align-items: center;
