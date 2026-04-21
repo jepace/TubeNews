@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Verification Link Expired — TubeNews{% endblock %}
+{% block header_title %}TubeNews{% endblock %}
+
+{% block content %}
+<div style="max-width: 500px; margin: 2rem auto; padding: 1.5rem; border: 1px solid var(--border); border-radius: 8px;">
+  <h1 style="margin-top: 0; color: var(--danger);">⏰ Link Expired</h1>
+
+  <p style="font-size: 1.1rem; line-height: 1.6;">
+    Your verification link has expired. Verification links are only valid for 24 hours.
+  </p>
+
+  <p style="margin: 1.5rem 0;">
+    Request a new verification email below:
+  </p>
+
+  <form method="post" action="{{ url_for('resend_verification_email') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="margin-bottom: 1rem;">
+      <label for="email" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Email Address</label>
+      <input type="email" id="email" name="email" placeholder="your@email.com" required style="width: 100%; padding: 0.5rem; box-sizing: border-box;">
+    </div>
+    <button type="submit" class="btn">Send New Verification Email</button>
+  </form>
+
+  <hr style="border: none; border-top: 1px solid var(--border); margin: 2rem 0;">
+
+  <p style="text-align: center;">
+    <a href="{{ url_for('login') }}">Back to login</a> •
+    <a href="{{ url_for('register') }}">Create new account</a>
+  </p>
+</div>
+{% endblock %}

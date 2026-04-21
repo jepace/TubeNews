@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Check Your Email — TubeNews{% endblock %}
+{% block header_title %}TubeNews{% endblock %}
+
+{% block content %}
+<div style="max-width: 500px; margin: 2rem auto; padding: 1.5rem; border: 1px solid var(--border); border-radius: 8px;">
+  <h1 style="margin-top: 0;">Check Your Email</h1>
+
+  <p style="font-size: 1.1rem; line-height: 1.6;">
+    We've sent a verification link to your email address. Click the link to verify your email and activate your account.
+  </p>
+
+  <div style="background-color: var(--bg-secondary); padding: 1rem; border-radius: 4px; margin: 1.5rem 0;">
+    <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">
+      The verification link expires in 24 hours. If you don't see the email, check your spam folder or request a new one below.
+    </p>
+  </div>
+
+  <hr style="border: none; border-top: 1px solid var(--border); margin: 2rem 0;">
+
+  <h3>Didn't receive the email?</h3>
+  <form method="post" action="{{ url_for('resend_verification_email') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="email" name="email" placeholder="your@email.com" required style="width: 100%; padding: 0.5rem; margin-bottom: 0.5rem; box-sizing: border-box;">
+    <button type="submit" class="btn">Resend Verification Email</button>
+  </form>
+
+  <p style="text-align: center; margin-top: 2rem;">
+    <a href="{{ url_for('login') }}">Back to login</a>
+  </p>
+</div>
+{% endblock %}
