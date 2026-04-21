@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -167,6 +168,11 @@ class User(UserMixin):
         return bool(self._data.get("locked", False))
 
     @property
+    def is_verified(self) -> bool:
+        """Email verification status. Defaults to True for backward compatibility."""
+        return self._data.get("email_verified", True)
+
+    @property
     def is_admin(self) -> bool:
         try:
             cfg = json.loads(CONFIG_FILE.read_text())
@@ -174,10 +180,10 @@ class User(UserMixin):
         except Exception:
             return False
 
-    # flask-login: locked accounts are treated as inactive
+    # flask-login: inactive if locked OR email not verified
     @property
     def is_active(self) -> bool:
-        return not self.is_locked
+        return not self.is_locked and self.is_verified
 
     def _save(self) -> None:
         tmp = self._dir / "user.json.tmp"
@@ -303,6 +309,47 @@ def _find_user_by_id(user_id: str) -> User | None:
         return User(user_json.parent, json.loads(user_json.read_text()))
     except Exception:
         return None
+
+
+def _send_verification_email(email: str, token: str, base_url: str) -> bool:
+    """Send email verification link via Resend. Returns True on success, False on failure."""
+    try:
+        import resend
+        cfg = json.loads(CONFIG_FILE.read_text())
+        api_key = cfg.get("resend_api_key")
+        from_email = cfg.get("resend_from_email", "noreply@tubenews.local")
+
+        if not api_key:
+            logger.error("resend_api_key not configured")
+            return False
+
+        resend.api_key = api_key
+        verify_url = f"{base_url.rstrip('/')}/verify-email/{token}"
+
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Georgia,serif;max-width:600px;margin:0 auto;padding:1.5em;color:#111">
+  <h2>Verify your TubeNews email</h2>
+  <p>Thanks for signing up! Click the button below to verify your email address and activate your account.</p>
+  <p>
+    <a href="{verify_url}" style="display:inline-block;background-color:#1a73e8;color:white;padding:0.75em 1.5em;text-decoration:none;border-radius:4px;font-weight:bold">Verify Email</a>
+  </p>
+  <p style="color:#666;font-size:0.9em">Or copy this link: <a href="{verify_url}">{verify_url}</a></p>
+  <p style="color:#999;font-size:0.85em;margin-top:2em">This link expires in 24 hours. If you didn't create a TubeNews account, you can ignore this email.</p>
+</body>
+</html>"""
+
+        resend.Emails.send({
+            "from": from_email,
+            "to": [email],
+            "subject": "Verify your TubeNews email",
+            "html": html_body,
+        })
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to send verification email to {email}: {exc}")
+        return False
 
 
 def _all_users() -> list[User]:
@@ -1136,24 +1183,46 @@ def register():
         elif _find_user_by_email(email):
             flash("An account with that email already exists.", "error")
         else:
-            user_uuid = str(uuid.uuid4())
-            user_dir = USERS_ROOT / user_uuid
-            user_dir.mkdir(parents=True, exist_ok=True)
-            data = {
-                "name": name,
-                "email": email,
-                "password_hash": generate_password_hash(password),
-                "channels": {},
-                "feed_token": str(uuid.uuid4()),
-                "created_at": now_utc_iso(),
-                "last_accessed": now_utc_iso(),
-            }
-            (user_dir / "user.json").write_text(json.dumps(data, indent=2))
-            _index_add(email, user_uuid)
-            login_user(User(user_dir, data))
-            _web_ntfy("TubeNews: new user", f"{name} ({email}) registered.")
-            flash("Account created! Choose the channels you'd like to follow below.", "success")
-            return redirect(url_for("account"))
+            # Load config to get base_url for verification emails
+            cfg = json.loads(CONFIG_FILE.read_text())
+            base_url = cfg.get("base_url", "").strip()
+            resend_api_key = cfg.get("resend_api_key", "").strip()
+
+            if not base_url or not resend_api_key:
+                flash("Email configuration incomplete. Contact administrator.", "error")
+            else:
+                user_uuid = str(uuid.uuid4())
+                user_dir = USERS_ROOT / user_uuid
+                user_dir.mkdir(parents=True, exist_ok=True)
+
+                # Generate verification token
+                verification_token = secrets.token_hex(16)
+
+                data = {
+                    "name": name,
+                    "email": email,
+                    "password_hash": generate_password_hash(password),
+                    "channels": {},
+                    "feed_token": str(uuid.uuid4()),
+                    "created_at": now_utc_iso(),
+                    "last_accessed": now_utc_iso(),
+                    "email_verified": False,
+                    "email_verification_token": verification_token,
+                    "email_verification_sent_at": now_utc_iso(),
+                }
+                (user_dir / "user.json").write_text(json.dumps(data, indent=2))
+                _index_add(email, user_uuid)
+
+                # Send verification email
+                if _send_verification_email(email, verification_token, base_url):
+                    _web_ntfy("TubeNews: new user", f"{name} ({email}) registered. Awaiting email verification.")
+                    flash("Account created! Check your email to verify and activate your account.", "success")
+                    return redirect(url_for("verify_email_pending"))
+                else:
+                    # Email send failed; delete the account
+                    shutil.rmtree(user_dir, ignore_errors=True)
+                    _index_remove(email)
+                    flash("Failed to send verification email. Please try again.", "error")
 
     return render_template("register.html")
 
@@ -1164,6 +1233,99 @@ def logout():
     logout_user()
     flash("You have been logged out.", "success")
     return redirect(url_for("login"))
+
+
+@app.route("/verify-email/pending")
+def verify_email_pending():
+    """Show pending verification page after registration."""
+    return render_template("verify_email_pending.html")
+
+
+@app.route("/verify-email/expired")
+def verify_email_expired():
+    """Show expired token page."""
+    return render_template("verify_email_expired.html")
+
+
+@app.route("/verify-email/<token>")
+def verify_email(token: str):
+    """Verify email address via token link."""
+    if not USERS_ROOT.is_dir():
+        abort(404)
+
+    # Find user with matching verification token
+    user = None
+    for user_json in USERS_ROOT.glob("*/user.json"):
+        try:
+            data = json.loads(user_json.read_text())
+            if data.get("email_verification_token") == token:
+                user = User(user_json.parent, data)
+                break
+        except Exception:
+            continue
+
+    if not user:
+        abort(404)
+
+    # Check if token is expired (24 hours)
+    sent_at_str = user._data.get("email_verification_sent_at")
+    if sent_at_str:
+        try:
+            sent_at = datetime.fromisoformat(sent_at_str.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            elapsed = now - sent_at
+            if elapsed.total_seconds() > 86400:  # 24 hours
+                return redirect(url_for("verify_email_expired"))
+        except Exception as exc:
+            logger.error(f"Failed to check token expiry: {exc}")
+
+    # Token is valid; mark email as verified
+    user._data["email_verified"] = True
+    user._data.pop("email_verification_token", None)
+    user._data.pop("email_verification_sent_at", None)
+    user._save()
+
+    flash("Email verified! Log in to continue.", "success")
+    return redirect(url_for("login"))
+
+
+@app.route("/resend-verification-email", methods=["POST"])
+@limiter.limit("3 per hour")
+def resend_verification_email():
+    """Resend verification email for unverified accounts."""
+    email = request.form.get("email", "").strip().lower()
+
+    if not email:
+        flash("Please enter your email address.", "error")
+        return redirect(url_for("verify_email_expired"))
+
+    # Find user with this email and unverified status
+    user = _find_user_by_email(email)
+    if not user or user.is_verified:
+        # Be vague for security
+        flash("If that account exists and is unverified, we've sent a new verification email.", "success")
+        return redirect(url_for("verify_email_pending"))
+
+    # Load config
+    cfg = json.loads(CONFIG_FILE.read_text())
+    base_url = cfg.get("base_url", "").strip()
+
+    if not base_url:
+        flash("Email configuration incomplete. Contact administrator.", "error")
+        return redirect(url_for("verify_email_expired"))
+
+    # Generate new token and send
+    verification_token = secrets.token_hex(16)
+    user._data["email_verification_token"] = verification_token
+    user._data["email_verification_sent_at"] = now_utc_iso()
+    user._save()
+
+    if _send_verification_email(email, verification_token, base_url):
+        flash("Verification email sent! Check your inbox.", "success")
+        return redirect(url_for("verify_email_pending"))
+    else:
+        flash("Failed to send verification email. Please try again.", "error")
+        return redirect(url_for("verify_email_expired"))
 
 
 @app.route("/feed/<token>.xml")

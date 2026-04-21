@@ -492,6 +492,7 @@ state/users/
   "feed_token": "550e8400-e29b-41d4-a716-446655440000",
   "created_at": "2026-04-07T00:14:36Z",
   "last_accessed": "2026-04-07T00:14:36Z",
+  "email_verified": true,
   "locked": false,
   "feed_name": "Alice's Local News",
   "preferences": {"dark_mode": false, "font_size": "normal", "timezone": "America/Los_Angeles", "digest_email_enabled": true},
@@ -506,6 +507,7 @@ state/users/
 - `channels` — merged subscription + focus dict. Keys are subscribed channel IDs; values are **lists of focus strings** (one per focus line, up to 3). An empty list means no filter (show all stories from that channel). Every subscribed channel must appear as a key, even with an empty focus list. `_collect_channel_focuses` reads this at processing time to determine which Gemini calls to make for each channel.
 - `created_at` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format (e.g., `"2026-04-07T00:14:36Z"`) when the user account was created. Supports backward compatibility with legacy Unix timestamp format.
 - `last_accessed` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format of the user's most recent authenticated page view. Updated by the `inject_body_classes` context processor with a 5-minute debounce (at most one disk write per 5 minutes per user). Key absent on accounts created before this field was added. Supports backward compatibility with legacy Unix timestamp format.
+- `email_verified` — boolean; when `false` the account is inactive and rejected by flask-login (user cannot log in). Set to `true` when the user clicks the verification link in their signup email. Key absent defaults to `true` for backward compatibility with existing accounts. Generated during `POST /register` as `false` and verification tokens are created; marked `true` by `GET /verify-email/<token>` after token validation.
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
 - `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
