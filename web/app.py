@@ -2075,7 +2075,7 @@ def comment_edit():
 # ---------------------------------------------------------------------------
 
 
-def _get_story_votes(story_path: pathlib.Path) -> dict:
+def _get_story_votes(story_path: Path) -> dict:
     """Load vote data for a story. Returns {counts: {up: int, down: int}, votes: {up: [...], down: [...]}}."""
     votes_path = story_path.with_suffix(".votes.json")
     if not votes_path.exists():
@@ -2087,7 +2087,7 @@ def _get_story_votes(story_path: pathlib.Path) -> dict:
         return {"counts": {"up": 0, "down": 0}, "votes": {"up": [], "down": []}}
 
 
-def _save_story_votes(story_path: pathlib.Path, votes: dict) -> None:
+def _save_story_votes(story_path: Path, votes: dict) -> None:
     """Save vote data for a story. Uses atomic write."""
     votes_path = story_path.with_suffix(".votes.json")
     tmp = votes_path.with_suffix(".tmp")
