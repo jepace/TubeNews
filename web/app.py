@@ -2136,11 +2136,12 @@ def _get_voter_id() -> str:
 @app.route("/votes/<channel_slug>/<meeting_id>/<basename>")
 def get_votes(channel_slug: str, meeting_id: str, basename: str):
     """Get vote counts and current user's vote for a story."""
+    # Validate slugs are safe (basic sanity check)
     if (not _SAFE_SLUG_RE.match(channel_slug) or
-            not _SAFE_SLUG_RE.match(meeting_id) or
-            not _STORY_FILE_RE.match(basename + ".md")):
+            not _SAFE_SLUG_RE.match(meeting_id)):
         abort(400)
 
+    # The real validation: the story file must actually exist
     story_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}.md"
     if not story_path.exists():
         abort(404)
@@ -2168,11 +2169,12 @@ def post_vote(channel_slug: str, meeting_id: str, basename: str, direction: str)
     if direction not in ["up", "down"]:
         abort(400)
 
+    # Validate slugs are safe (basic sanity check)
     if (not _SAFE_SLUG_RE.match(channel_slug) or
-            not _SAFE_SLUG_RE.match(meeting_id) or
-            not _STORY_FILE_RE.match(basename + ".md")):
+            not _SAFE_SLUG_RE.match(meeting_id)):
         abort(400)
 
+    # The real validation: the story file must actually exist
     story_path = STORAGE_ROOT / channel_slug / meeting_id / f"{basename}.md"
     if not story_path.exists():
         abort(404)
