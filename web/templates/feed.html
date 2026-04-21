@@ -147,7 +147,7 @@
   {% if stories %}
     {% for story in stories %}
     <article class="story" id="s{{ story.video_id }}-{{ story.start_seconds }}" data-channel-id="{{ story.channel_id }}">
-      <h2>{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</h2>
+      <h2><a href="/article/{{ story.video_id }}/{{ story.start_seconds }}">{% if query is defined and query %}{{ story.title | highlight(query) | safe }}{% else %}{{ story.title }}{% endif %}</a></h2>
       {% if story.video_date %}<p class="story-dateline"><em>{{ story.video_date | relative_date }}</em></p>{% endif %}
       {% if story.published %}<p class="story-published"><em>Published {{ story.published | relative_date }}</em></p>{% endif %}
       <p class="story-source">
