@@ -941,13 +941,21 @@
       var channelSlug = section.dataset.channelSlug;
       var meetingId = section.dataset.meetingId;
       var basename = section.dataset.basename;
-      if (!channelSlug || !meetingId || !basename) return;
+      console.log('loadVotes: slug=' + channelSlug + ', meeting=' + meetingId + ', basename=' + basename);
+      if (!channelSlug || !meetingId || !basename) {
+        console.warn('Vote data attributes missing');
+        return;
+      }
 
       fetch('/votes/' + channelSlug + '/' + meetingId + '/' + basename, {
         credentials: 'include'
       })
-        .then(function (r) { return r.json(); })
+        .then(function (r) {
+          console.log('Vote load response:', r.status);
+          return r.json();
+        })
         .then(function (data) {
+          console.log('Vote data:', data);
           section.querySelector('.vote-up .vote-count').textContent = data.up;
           section.querySelector('.vote-down .vote-count').textContent = data.down;
 
@@ -970,18 +978,27 @@
       var channelSlug = section.dataset.channelSlug;
       var meetingId = section.dataset.meetingId;
       var basename = section.dataset.basename;
-      if (!channelSlug || !meetingId || !basename) return;
+      console.log('attachVoteHandlers: slug=' + channelSlug + ', meeting=' + meetingId + ', basename=' + basename);
+      if (!channelSlug || !meetingId || !basename) {
+        console.warn('Vote data attributes missing for handlers');
+        return;
+      }
 
       section.querySelectorAll('.vote-btn').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.preventDefault();
           var direction = btn.classList.contains('vote-up') ? 'up' : 'down';
+          console.log('Voting:', direction, 'on', channelSlug, meetingId, basename);
           fetch('/vote/' + channelSlug + '/' + meetingId + '/' + basename + '/' + direction, {
             method: 'POST',
             credentials: 'include'
           })
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+              console.log('Vote POST response:', r.status);
+              return r.json();
+            })
             .then(function (data) {
+              console.log('Vote result:', data);
               if (data.ok) {
                 // Update counts
                 section.querySelector('.vote-up .vote-count').textContent = data.up;
@@ -996,6 +1013,8 @@
                 } else if (data.user_vote === 'down') {
                   section.querySelector('.vote-down').classList.add('voted');
                 }
+              } else {
+                console.error('Vote failed:', data);
               }
             })
             .catch(function (err) {
@@ -1006,6 +1025,7 @@
     }
 
     // Load votes for all stories and attach handlers
+    console.log('Vote system initializing, found', document.querySelectorAll('.story-votes').length, 'vote sections');
     document.querySelectorAll('.story-votes').forEach(function (section) {
       loadVotes(section);
       attachVoteHandlers(section);
