@@ -1002,6 +1002,15 @@ main:has(.feed-layout) {
   margin-bottom: 0.25rem;
 }
 
+.story h2 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.story h2 a:hover {
+  text-decoration: underline;
+}
+
 .story-dateline {
   font-style: italic;
   color: var(--muted);
