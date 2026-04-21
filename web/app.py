@@ -681,11 +681,11 @@ def relative_date(date_str: str | None) -> str:
                 return date_str
 
         if date_obj == today:
-            # Replace the date part with "Today"
-            return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Today', date_str) if 'published' in date_str.lower() else "Today"
+            # Replace the date part with "Today" (preserves time if present)
+            return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Today', date_str)
         elif date_obj == today - timedelta(days=1):
-            # Replace the date part with "Yesterday"
-            return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Yesterday', date_str) if 'published' in date_str.lower() else "Yesterday"
+            # Replace the date part with "Yesterday" (preserves time if present)
+            return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Yesterday', date_str)
         else:
             return date_str
     except Exception as exc:
