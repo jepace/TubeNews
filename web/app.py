@@ -2136,6 +2136,7 @@ def _get_voter_id() -> str:
 
 
 @app.route("/votes/<channel_slug>/<meeting_id>/<basename>")
+@csrf.exempt
 def get_votes(channel_slug: str, meeting_id: str, basename: str):
     """Get vote counts and current user's vote for a story."""
     # Validate slugs are safe (basic sanity check)
@@ -2166,6 +2167,7 @@ def get_votes(channel_slug: str, meeting_id: str, basename: str):
 
 
 @app.route("/vote/<channel_slug>/<meeting_id>/<basename>/<direction>", methods=["POST"])
+@csrf.exempt
 def post_vote(channel_slug: str, meeting_id: str, basename: str, direction: str):
     """Cast or toggle a vote (up or down) on a story."""
     if direction not in ["up", "down"]:
