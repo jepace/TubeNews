@@ -3704,10 +3704,16 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
     """
     import html as _html
     account_url = base_url.rstrip("/") + "/account" if base_url else ""
+    # For email links, use public article URLs (don't require token or login)
+    site_root = base_url.rstrip("/") if base_url else ""
     story_items = []
     for s in stories:
-        anchor = f"s{s['video_id']}-{s['start_seconds']}"
-        href = f"{feed_url}#{anchor}"
+        # Generate public article URL: /article/{video_id}/{start_seconds}
+        if site_root:
+            href = f"{site_root}/article/{s['video_id']}/{s['start_seconds']}"
+        else:
+            # Fallback if no base_url: use relative path
+            href = f"/article/{s['video_id']}/{s['start_seconds']}"
         title_escaped = _html.escape(s["title"])
         channel_escaped = _html.escape(s["channel_name"])
         story_items.append(

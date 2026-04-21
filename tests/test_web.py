@@ -449,3 +449,81 @@ def test_admin_edit_user_feed_page_url_uses_configured_base_url(flask_env, tmp_p
     }))
     html = client.get(f"/admin/user/{target_id}").data.decode()
     assert "https://news.example.com/feed/target-feed-token-abc.html" in html
+
+
+def test_public_article_page_loads(flask_env):
+    """Public article page should load without login."""
+    client, tmp_path, _ = flask_env
+    # Create a minimal story file
+    storage = tmp_path / "content" / "test_channel" / "2024-04-21"
+    storage.mkdir(parents=True)
+
+    metadata = storage / "metadata.json"
+    metadata.write_text(json.dumps({
+        "video_id": "test_vid_123",
+        "video_title": "Test Video",
+        "channel_id": "UC_test",
+        "processed_at": "2024-04-21T10:00:00Z",
+        "status": "ok"
+    }))
+
+    story_file = storage / "01_Test_Story.md"
+    story_file.write_text("""# Test Article Title
+*April 21, 2024*
+**Source:** https://youtu.be/test_vid_123?t=120
+
+This is a test article body.
+
+---
+**Segment Start:** 120s
+**Topics:** test, demo
+Published 2024-04-21T10:00:00Z
+Video published 2024-04-21T10:00:00Z
+""")
+
+    # Request the public article page
+    resp = client.get("/article/test_vid_123/120")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "Test Article Title" in html
+    assert "This is a test article body" in html
+
+
+def test_public_article_404_on_missing_video(flask_env):
+    """Public article page should 404 if video_id doesn't exist."""
+    client, tmp_path, _ = flask_env
+    resp = client.get("/article/nonexistent_video/120")
+    assert resp.status_code == 404
+
+
+def test_public_article_404_on_missing_start_seconds(flask_env):
+    """Public article page should 404 if start_seconds doesn't match any story."""
+    client, tmp_path, _ = flask_env
+    # Create a story file
+    storage = tmp_path / "content" / "test_channel" / "2024-04-21"
+    storage.mkdir(parents=True)
+
+    metadata = storage / "metadata.json"
+    metadata.write_text(json.dumps({
+        "video_id": "test_vid_123",
+        "video_title": "Test Video",
+        "channel_id": "UC_test",
+        "processed_at": "2024-04-21T10:00:00Z",
+        "status": "ok"
+    }))
+
+    story_file = storage / "01_Test_Story.md"
+    story_file.write_text("""# Test Article
+*April 21, 2024*
+**Source:** https://youtu.be/test_vid_123?t=120
+
+Test body.
+
+---
+**Segment Start:** 120s
+Published 2024-04-21T10:00:00Z
+""")
+
+    # Request with matching video_id but different start_seconds
+    resp = client.get("/article/test_vid_123/999")
+    assert resp.status_code == 404

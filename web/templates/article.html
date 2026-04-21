@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}{{ story.title }}{% endblock %}
+{% block head_extra %}
+<meta property="og:title" content="{{ story.title }}">
+<meta property="og:description" content="{{ story.body_html | striptags | truncate(160) }}">
+<meta property="og:type" content="article">
+<meta name="twitter:card" content="summary">
+<meta name="description" content="{{ story.body_html | striptags | truncate(160) }}">
+{% endblock %}
+
+{% block header_title %}{{ story.channel_name }} — Article{% endblock %}
+
+{% block nav_extra %}
+<a href="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}" target="_blank" rel="noopener">Watch on YouTube</a>
+{% endblock %}
+
+{% block content %}
+<div class="article-container">
+  <article class="story article-page">
+    <h1>{{ story.title }}</h1>
+    {% if story.video_date %}<p class="story-dateline"><em>{{ story.video_date | relative_date }}</em></p>{% endif %}
+    {% if story.published %}<p class="story-published"><em>Published {{ story.published | relative_date }}</em></p>{% endif %}
+    <p class="story-source">
+      {{ story.channel_name }}{% if story.video_title %} &mdash; {{ story.video_title }}{% endif %}
+    </p>
+    <p class="story-links">
+      <a class="story-watch" href="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}" target="_blank" rel="noopener">&#9654; Watch source</a>
+      {% if story.channel_slug and story.meeting_id %}
+      <span class="story-links-sep">&middot;</span>
+      <a class="story-transcript" href="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}" target="_blank" rel="noopener">&#128221; Read transcript</a>
+      {% endif %}
+    </p>
+    <div class="story-body">{{ story.body_html | safe }}</div>
+  </article>
+
+  <!-- Comments section: always expanded on public articles -->
+  {% if story.channel_slug and story.meeting_id and story.story_filename %}
+  <div class="story-comments" data-channel-slug="{{ story.channel_slug }}" data-meeting-id="{{ story.meeting_id }}" data-filename="{{ story.story_filename }}" style="display:block">
+    <h3>&#128172; Comments{% if story.comment_count %} ({{ story.comment_count }}){% endif %}</h3>
+    <div class="sc-list"></div>
+    {% if current_user.is_authenticated %}
+    <form class="sc-form">
+      <textarea class="sc-input" placeholder="Add a comment&hellip;" rows="2"></textarea>
+      <button type="button" class="sc-submit">Post</button>
+    </form>
+    {% else %}
+    <p class="sc-login-prompt"><a href="{{ url_for('login') }}">Log in</a> to add a comment.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if current_user.is_authenticated %}
+<script>
+(function () {
+  var csrfToken     = {{ csrf_token() | tojson }};
+  var commentUrl    = {{ url_for('post_comment') | tojson }};
+  var delCommentUrl = {{ url_for('comment_delete') | tojson }};
+  var editCommentUrl = {{ url_for('comment_edit') | tojson }};
+  var isAdmin = {{ 'true' if current_user.is_admin else 'false' }};
+
+  function escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  }
+
+  function renderComments(section, comments) {
+    var list = section.querySelector('.sc-list');
+    if (!comments.length) {
+      list.innerHTML = '<p class="sc-empty">No comments yet. Be the first!</p>';
+      return;
+    }
+    list.innerHTML = comments.map(function (c) {
+      var canDelete = c.is_mine || isAdmin;
+      var canEdit   = c.is_mine;
+      return '<div class="sc-comment" data-idx="' + c.idx + '">' +
+        '<div class="sc-comment-meta">' +
+        '<span class="sc-author">' + escHtml(c.user_name) +
+        (c.is_mine ? ' <span class="sc-you">(you)</span>' : '') + '</span>' +
+        '<span class="sc-time">' + fmtTime(c.posted_at) + (c.edited_at ? ' (edited)' : '') + '</span>' +
+        (canEdit ? '<button class="btn-sm sc-edit" data-idx="' + c.idx + '">Edit</button>' : '') +
+        (canDelete ? '<button class="btn-sm sc-delete" data-idx="' + c.idx + '">Delete</button>' : '') +
+        '</div>' +
+        '<div class="sc-body">' + escHtml(c.body) + '</div>' +
+        '</div>';
+    }).join('');
+    list.querySelectorAll('.sc-delete').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!confirm('Delete this comment?')) return;
+        var fd = new FormData();
+        fd.append('csrf_token', csrfToken);
+        fd.append('channel_slug', section.dataset.channelSlug);
+        fd.append('meeting_id',   section.dataset.meetingId);
+        fd.append('filename',     section.dataset.filename);
+        fd.append('idx',          btn.dataset.idx);
+        fetch(delCommentUrl, { method: 'POST', body: fd })
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (res.ok) { loadComments(section); }
+            else { alert('Delete failed.'); }
+          })
+          .catch(function () { alert('Delete failed.'); });
+      });
+    });
+    list.querySelectorAll('.sc-edit').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var commentEl = btn.closest('.sc-comment');
+        var bodyEl    = commentEl.querySelector('.sc-body');
+        var existing  = bodyEl.innerText || bodyEl.textContent;
+        commentEl.querySelector('.sc-comment-meta').querySelectorAll('.sc-edit').forEach(function (b) { b.disabled = true; });
+        var ta = document.createElement('textarea');
+        ta.className = 'sc-input sc-edit-input';
+        ta.rows = 3;
+        ta.value = existing;
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'btn-sm sc-save';
+        saveBtn.textContent = 'Save';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-sm sc-cancel';
+        cancelBtn.textContent = 'Cancel';
+        bodyEl.replaceWith(ta);
+        commentEl.appendChild(saveBtn);
+        commentEl.appendChild(cancelBtn);
+        btn.disabled = true;
+        cancelBtn.addEventListener('click', function () { loadComments(section); });
+        saveBtn.addEventListener('click', function () {
+          var newBody = ta.value.trim();
+          if (!newBody) { ta.focus(); return; }
+          var fd = new FormData();
+          fd.append('csrf_token', csrfToken);
+          fd.append('channel_slug', section.dataset.channelSlug);
+          fd.append('meeting_id',   section.dataset.meetingId);
+          fd.append('filename',     section.dataset.filename);
+          fd.append('idx',          btn.dataset.idx);
+          fd.append('body',         newBody);
+          saveBtn.disabled = true;
+          fetch(editCommentUrl, { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (res.ok) { loadComments(section); }
+              else { alert(res.error || 'Edit failed.'); saveBtn.disabled = false; }
+            })
+            .catch(function () { alert('Edit failed.'); saveBtn.disabled = false; });
+        });
+      });
+    });
+  }
+
+  function updateToggle(section, count) {
+    var h3 = section.querySelector('h3');
+    if (h3) h3.innerHTML = '&#128172; Comments' + (count ? ' (' + count + ')' : '');
+  }
+
+  function loadComments(section) {
+    var slug = section.dataset.channelSlug;
+    var mid  = section.dataset.meetingId;
+    var base = section.dataset.filename.replace(/\.md$/, '');
+    section.querySelector('.sc-list').innerHTML = '<p class="sc-empty">Loading…</p>';
+    fetch('/comments/' + slug + '/' + mid + '/' + base)
+      .then(function (r) { return r.json(); })
+      .then(function (comments) {
+        renderComments(section, comments);
+        updateToggle(section, comments.length);
+      })
+      .catch(function () {
+        section.querySelector('.sc-list').innerHTML = '<p class="sc-empty">Could not load comments.</p>';
+      });
+  }
+
+  var section = document.querySelector('.story-comments');
+  if (section) {
+    loadComments(section);
+
+    var submitBtn = section.querySelector('.sc-submit');
+    if (submitBtn) {
+      submitBtn.addEventListener('click', function () {
+        var textarea = section.querySelector('.sc-input');
+        var body = textarea.value.trim();
+        if (!body) { textarea.focus(); return; }
+        var fd = new FormData();
+        fd.append('csrf_token', csrfToken);
+        fd.append('channel_slug', section.dataset.channelSlug);
+        fd.append('meeting_id',   section.dataset.meetingId);
+        fd.append('filename',     section.dataset.filename);
+        fd.append('body',         body);
+        submitBtn.disabled = true;
+        fetch(commentUrl, { method: 'POST', body: fd })
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (res.ok) { textarea.value = ''; loadComments(section); }
+            else { alert(res.error || 'Failed to post comment.'); }
+          })
+          .catch(function () { alert('Failed to post comment.'); })
+          .finally(function () { submitBtn.disabled = false; });
+      });
+    }
+  }
+})();
+</script>
+{% endif %}
+{% endblock %}

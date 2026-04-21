@@ -1205,6 +1205,72 @@ def serve_feed_public(token: str):
     abort(404)
 
 
+@app.route("/article/<video_id>/<int:start_seconds>")
+def serve_article(video_id: str, start_seconds: int):
+    """Render a public article page by video_id and start_seconds — no login required."""
+    if not STORAGE_ROOT.is_dir():
+        abort(404)
+
+    # Find the story matching video_id and start_seconds
+    story = None
+    story_path = None
+    channel_slug = None
+    meeting_id = None
+
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir()
+                        if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+        for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            meta_path = meeting_dir / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+                if meta.get("video_id") != video_id:
+                    continue
+                # Found the video; now find the story with matching start_seconds
+                for story_file in meeting_dir.glob("[0-9]*.md"):
+                    s = parse_story_file(story_file)
+                    if s.get("start_seconds") == start_seconds:
+                        story = s
+                        story_path = story_file
+                        channel_slug = channel_dir.name
+                        meeting_id = meeting_dir.name
+
+                        # Fetch channel info
+                        channel_info = _channel_info_for_dir(channel_dir)
+                        if channel_info:
+                            story["channel_name"] = channel_info.get("channel_name", channel_slug.replace("_", " "))
+                            story["channel_id"] = channel_info.get("channel_id", "")
+                        story["channel_slug"] = channel_slug
+                        story["meeting_id"] = meeting_id
+                        story["story_filename"] = story_file.name
+
+                        # Load comment count
+                        comment_file = story_path.parent / f"{story_path.stem}_comments.json"
+                        if comment_file.exists():
+                            try:
+                                comments = json.loads(comment_file.read_text())
+                                story["comment_count"] = len(comments)
+                            except Exception:
+                                story["comment_count"] = 0
+                        else:
+                            story["comment_count"] = 0
+
+                        break
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
+                continue
+
+        if story:
+            break
+
+    if not story:
+        abort(404)
+
+    # Render the article template
+    return render_template("article.html", story=story)
+
+
 @app.route("/feed/<token>/podcast.xml")
 def serve_podcast_feed(token: str) -> Response:
     """Serve a user's podcast RSS feed by feed token — no login required."""
