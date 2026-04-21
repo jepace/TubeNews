@@ -2137,8 +2137,9 @@ def _get_voter_id() -> str:
 def get_votes(channel_slug: str, meeting_id: str, basename: str):
     """Get vote counts and current user's vote for a story."""
     # Validate slugs are safe (basic sanity check)
-    if (not _SAFE_SLUG_RE.match(channel_slug) or
-            not _SAFE_SLUG_RE.match(meeting_id)):
+    slug_match = _SAFE_SLUG_RE.match(channel_slug) and _SAFE_SLUG_RE.match(meeting_id)
+    if not slug_match:
+        app.logger.error(f"Slug validation failed: channel={channel_slug}, meeting={meeting_id}")
         abort(400)
 
     # The real validation: the story file must actually exist
@@ -2170,8 +2171,9 @@ def post_vote(channel_slug: str, meeting_id: str, basename: str, direction: str)
         abort(400)
 
     # Validate slugs are safe (basic sanity check)
-    if (not _SAFE_SLUG_RE.match(channel_slug) or
-            not _SAFE_SLUG_RE.match(meeting_id)):
+    slug_match = _SAFE_SLUG_RE.match(channel_slug) and _SAFE_SLUG_RE.match(meeting_id)
+    if not slug_match:
+        app.logger.error(f"Slug validation failed: channel={channel_slug}, meeting={meeting_id}")
         abort(400)
 
     # The real validation: the story file must actually exist
