@@ -648,9 +648,14 @@ def format_datetime(ts: int | str | None) -> str:
 
 @app.template_filter("relative_date")
 def relative_date(date_str: str | None) -> str:
-    """Convert YYYY-MM-DD date to 'Today', 'Yesterday', or the date string."""
+    """Convert date to 'Today', 'Yesterday', or original string.
+
+    Handles both raw YYYY-MM-DD dates and already-formatted strings
+    (e.g. "Video published April 21, 2026").
+    """
     if not date_str:
         return "—"
+
     try:
         # Get user's timezone (or UTC if not authenticated)
         tz_name = "UTC"
@@ -659,12 +664,28 @@ def relative_date(date_str: str | None) -> str:
 
         tz = pytz.timezone(tz_name)
         today = datetime.now(tz=tz).date()
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+
+        # Try parsing as YYYY-MM-DD first
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            # If that fails, try to extract date from formatted string
+            # e.g. "Video published April 21, 2026 at 09:36 AM UTC"
+            # Use regex to find "Month Day, Year" pattern
+            match = re.search(r'(\w+)\s+(\d+),\s+(\d{4})', date_str)
+            if match:
+                month_str, day_str, year_str = match.groups()
+                date_str_clean = f"{year_str}-{month_str} {day_str}"
+                date_obj = datetime.strptime(date_str_clean, "%Y-%B %d").date()
+            else:
+                return date_str
 
         if date_obj == today:
-            return "Today"
+            # Replace the date part with "Today"
+            return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Today', date_str) if 'published' in date_str.lower() else "Today"
         elif date_obj == today - timedelta(days=1):
-            return "Yesterday"
+            # Replace the date part with "Yesterday"
+            return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Yesterday', date_str) if 'published' in date_str.lower() else "Yesterday"
         else:
             return date_str
     except Exception as exc:
