@@ -90,6 +90,8 @@ TUBENEWS_PY = BASE_DIR / "TubeNews.py"
 
 # Path-component validation for comment routes.
 _SAFE_SLUG_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+# YouTube video IDs can start with hyphens or underscores
+_VIDEO_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 _STORY_FILE_RE = re.compile(r'^\d{2}_[A-Za-z0-9_]+\.md$')
 
 # ---------------------------------------------------------------------------
@@ -2137,9 +2139,8 @@ def _get_voter_id() -> str:
 def get_votes(channel_slug: str, meeting_id: str, basename: str):
     """Get vote counts and current user's vote for a story."""
     # Validate slugs are safe (basic sanity check)
-    slug_match = _SAFE_SLUG_RE.match(channel_slug) and _SAFE_SLUG_RE.match(meeting_id)
-    if not slug_match:
-        app.logger.error(f"Slug validation failed: channel={channel_slug}, meeting={meeting_id}")
+    # Channel slug must start with alphanumeric; meeting_id (video ID) can start with hyphen
+    if not (_SAFE_SLUG_RE.match(channel_slug) and _VIDEO_ID_RE.match(meeting_id)):
         abort(400)
 
     # The real validation: the story file must actually exist
@@ -2171,9 +2172,8 @@ def post_vote(channel_slug: str, meeting_id: str, basename: str, direction: str)
         abort(400)
 
     # Validate slugs are safe (basic sanity check)
-    slug_match = _SAFE_SLUG_RE.match(channel_slug) and _SAFE_SLUG_RE.match(meeting_id)
-    if not slug_match:
-        app.logger.error(f"Slug validation failed: channel={channel_slug}, meeting={meeting_id}")
+    # Channel slug must start with alphanumeric; meeting_id (video ID) can start with hyphen
+    if not (_SAFE_SLUG_RE.match(channel_slug) and _VIDEO_ID_RE.match(meeting_id)):
         abort(400)
 
     # The real validation: the story file must actually exist
