@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import TypedDict
@@ -652,18 +652,23 @@ def relative_date(date_str: str | None) -> str:
     if not date_str:
         return "—"
     try:
-        tz_name = _get_user_timezone(current_user)
+        # Get user's timezone (or UTC if not authenticated)
+        tz_name = "UTC"
+        if current_user and current_user.is_authenticated:
+            tz_name = _get_user_timezone(current_user)
+
         tz = pytz.timezone(tz_name)
         today = datetime.now(tz=tz).date()
         date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
 
         if date_obj == today:
             return "Today"
-        elif date_obj == today - __import__('datetime').timedelta(days=1):
+        elif date_obj == today - timedelta(days=1):
             return "Yesterday"
         else:
             return date_str
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Failed to format relative date {date_str}: {exc}")
         return date_str
 
 
