@@ -66,7 +66,9 @@
     var basename = section.dataset.basename;
     if (!channelSlug || !meetingId || !basename) return;
 
-    fetch('/votes/' + channelSlug + '/' + meetingId + '/' + basename)
+    fetch('/votes/' + channelSlug + '/' + meetingId + '/' + basename, {
+      credentials: 'include'
+    })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         section.querySelector('.vote-up .vote-count').textContent = data.up;
@@ -98,7 +100,8 @@
         e.preventDefault();
         var direction = btn.classList.contains('vote-up') ? 'up' : 'down';
         fetch('/vote/' + channelSlug + '/' + meetingId + '/' + basename + '/' + direction, {
-          method: 'POST'
+          method: 'POST',
+          credentials: 'include'
         })
           .then(function (r) { return r.json(); })
           .then(function (data) {
