@@ -947,11 +947,17 @@
         return;
       }
 
-      fetch('/votes/' + channelSlug + '/' + meetingId + '/' + basename, {
+      var url = '/votes/' + channelSlug + '/' + meetingId + '/' + basename;
+      console.log('Fetching votes from:', url);
+      fetch(url, {
         credentials: 'include'
       })
         .then(function (r) {
           console.log('Vote load response:', r.status);
+          if (!r.ok) {
+            console.error('Vote fetch failed:', r.status, r.statusText);
+            return Promise.reject('HTTP ' + r.status);
+          }
           return r.json();
         })
         .then(function (data) {
@@ -995,6 +1001,10 @@
           })
             .then(function (r) {
               console.log('Vote POST response:', r.status);
+              if (!r.ok) {
+                console.error('Vote POST failed:', r.status, r.statusText);
+                return Promise.reject('HTTP ' + r.status);
+              }
               return r.json();
             })
             .then(function (data) {

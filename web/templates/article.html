@@ -69,7 +69,13 @@
     fetch('/votes/' + channelSlug + '/' + meetingId + '/' + basename, {
       credentials: 'include'
     })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) {
+          console.error('Vote fetch failed:', r.status, r.statusText);
+          return Promise.reject('HTTP ' + r.status);
+        }
+        return r.json();
+      })
       .then(function (data) {
         section.querySelector('.vote-up .vote-count').textContent = data.up;
         section.querySelector('.vote-down .vote-count').textContent = data.down;
@@ -103,7 +109,13 @@
           method: 'POST',
           credentials: 'include'
         })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) {
+              console.error('Vote POST failed:', r.status, r.statusText);
+              return Promise.reject('HTTP ' + r.status);
+            }
+            return r.json();
+          })
           .then(function (data) {
             if (data.ok) {
               // Update counts
