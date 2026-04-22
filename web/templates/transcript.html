@@ -222,6 +222,7 @@
 
       var text = textCell.textContent;
       var match;
+      regex.lastIndex = 0;
       while ((match = regex.exec(text)) !== null) {
         matches.push({
           row: row,
