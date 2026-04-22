@@ -213,22 +213,28 @@
       return;
     }
 
+    console.log('Search query:', JSON.stringify(query), 'length:', query.length, 'charCodes:', Array.from(query).map(c => c.charCodeAt(0)));
     var regex = new RegExp('(' + query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
     var rows = table.querySelectorAll('tr');
 
-    rows.forEach(function(row) {
+    rows.forEach(function(row, rowIdx) {
       var textCell = row.querySelector('td:nth-child(2)');
       if (!textCell) return;
 
       var text = textCell.textContent;
       var match;
       regex.lastIndex = 0;
+      var rowMatches = 0;
       while ((match = regex.exec(text)) !== null) {
+        rowMatches++;
         matches.push({
           row: row,
           index: match.index,
           length: match[0].length
         });
+      }
+      if (rowMatches > 0) {
+        console.log('Row', rowIdx, 'matched', rowMatches, 'times. Text sample:', JSON.stringify(text.substring(0, 100)));
       }
     });
 
