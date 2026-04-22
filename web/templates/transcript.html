@@ -51,6 +51,54 @@
   html.dark table.transcript tr:nth-child(even) td { background: #1f2937; }
   html.dark table.transcript tr:target td,
   html.dark table.transcript tr:nth-child(even):target td { background: #3b3200; }
+  .transcript-search {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .transcript-search input {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  .transcript-search input:focus {
+    outline: none;
+    border-color: var(--primary, #0066cc);
+  }
+  .transcript-search button {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .transcript-search button:hover {
+    background: var(--accent-bg, #f0f0f0);
+  }
+  .transcript-search button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .transcript-search .search-count {
+    font-size: 0.85rem;
+    color: var(--muted);
+    white-space: nowrap;
+    min-width: 60px;
+  }
+  mark.search-highlight {
+    background: #ffeb3b;
+    color: inherit;
+    padding: 1px 2px;
+  }
+  html.dark mark.search-highlight {
+    background: #9a8c00;
+  }
 </style>
 
 <div class="transcript-banner">
@@ -60,6 +108,12 @@
   </div>
   <div class="tb-row">
     <span class="tb-title">{{ video_title }}</span>
+    <div class="transcript-search">
+      <input type="text" id="search-input" placeholder="Search transcript..." aria-label="Search transcript">
+      <button id="search-prev" title="Previous match" aria-label="Previous match">↑</button>
+      <button id="search-next" title="Next match" aria-label="Next match">↓</button>
+      <span class="search-count"><span id="search-count">0</span> / <span id="search-total">0</span></span>
+    </div>
     {% if video_id %}
     <a class="tb-yt" id="tb-yt-link" href="https://youtu.be/{{ video_id }}" target="_blank" rel="noopener">&#9654; Watch on YouTube</a>
     {% endif %}
@@ -118,4 +172,153 @@
 })();
 </script>
 {% endif %}
+
+<!-- Transcript search functionality -->
+<script>
+(function() {
+  var searchInput = document.getElementById('search-input');
+  var searchPrev = document.getElementById('search-prev');
+  var searchNext = document.getElementById('search-next');
+  var searchCount = document.getElementById('search-count');
+  var searchTotal = document.getElementById('search-total');
+  var table = document.querySelector('table.transcript');
+
+  if (!searchInput || !table) return;
+
+  var matches = [];
+  var currentMatch = -1;
+
+  function clearHighlights() {
+    table.querySelectorAll('mark.search-highlight').forEach(function(mark) {
+      var parent = mark.parentNode;
+      while (mark.firstChild) {
+        parent.insertBefore(mark.firstChild, mark);
+      }
+      parent.removeChild(mark);
+      parent.normalize();
+    });
+  }
+
+  function performSearch() {
+    clearHighlights();
+    matches = [];
+    currentMatch = -1;
+
+    var query = searchInput.value.trim();
+    if (!query) {
+      searchCount.textContent = '0';
+      searchTotal.textContent = '0';
+      searchPrev.disabled = true;
+      searchNext.disabled = true;
+      return;
+    }
+
+    var regex = new RegExp('(' + query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    var rows = table.querySelectorAll('tr');
+
+    rows.forEach(function(row) {
+      var textCell = row.querySelector('td:nth-child(2)');
+      if (!textCell) return;
+
+      var text = textCell.textContent;
+      var match;
+      while ((match = regex.exec(text)) !== null) {
+        matches.push({
+          row: row,
+          index: match.index,
+          length: match[0].length
+        });
+      }
+    });
+
+    if (matches.length > 0) {
+      currentMatch = 0;
+      highlightMatches();
+      scrollToMatch(0);
+    }
+
+    searchTotal.textContent = matches.length;
+    searchCount.textContent = matches.length > 0 ? '1' : '0';
+    searchPrev.disabled = matches.length === 0;
+    searchNext.disabled = matches.length === 0;
+  }
+
+  function highlightMatches() {
+    clearHighlights();
+    matches.forEach(function(match, idx) {
+      var textCell = match.row.querySelector('td:nth-child(2)');
+      if (!textCell) return;
+
+      var walker = document.createTreeWalker(
+        textCell,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+      );
+
+      var node;
+      var offset = 0;
+      var query = searchInput.value.trim();
+      var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+
+      while ((node = walker.nextNode())) {
+        var text = node.textContent;
+        var matches = [];
+        var match;
+        regex.lastIndex = 0;
+        while ((match = regex.exec(text)) !== null) {
+          matches.push({ index: match.index, length: match[0].length });
+        }
+
+        if (matches.length > 0) {
+          var span = document.createElement('span');
+          var lastIndex = 0;
+          matches.forEach(function(m) {
+            span.appendChild(document.createTextNode(text.substring(lastIndex, m.index)));
+            var mark = document.createElement('mark');
+            mark.className = 'search-highlight';
+            mark.textContent = text.substring(m.index, m.index + m.length);
+            span.appendChild(mark);
+            lastIndex = m.index + m.length;
+          });
+          span.appendChild(document.createTextNode(text.substring(lastIndex)));
+          node.parentNode.replaceChild(span, node);
+        }
+      }
+    });
+  }
+
+  function scrollToMatch(idx) {
+    if (idx < 0 || idx >= matches.length) return;
+    var row = matches[idx].row;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('search-active');
+  }
+
+  function goToNext() {
+    if (matches.length === 0) return;
+    currentMatch = (currentMatch + 1) % matches.length;
+    searchCount.textContent = currentMatch + 1;
+    scrollToMatch(currentMatch);
+  }
+
+  function goToPrev() {
+    if (matches.length === 0) return;
+    currentMatch = (currentMatch - 1 + matches.length) % matches.length;
+    searchCount.textContent = currentMatch + 1;
+    scrollToMatch(currentMatch);
+  }
+
+  searchInput.addEventListener('input', performSearch);
+  searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      goToNext();
+    }
+  });
+
+  searchPrev.addEventListener('click', goToPrev);
+  searchNext.addEventListener('click', goToNext);
+})();
+</script>
 {% endblock %}
