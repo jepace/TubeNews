@@ -1089,7 +1089,7 @@
       var originalText = btn.textContent;
       btn.textContent = 'Joining...';
 
-      fetch('{{ url_for("account_subscribe") }}', {
+      fetch('{{ url_for("subscribe_channel") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'csrf_token=' + encodeURIComponent({{ csrf_token() | tojson }}) + '&channel_id=' + encodeURIComponent(channelId),

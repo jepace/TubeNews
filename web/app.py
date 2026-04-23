@@ -2046,6 +2046,31 @@ def account_mark_unstarred():
     return jsonify({"ok": True})
 
 
+@app.route("/account/subscribe", methods=["POST"])
+@csrf.exempt
+@login_required
+def subscribe_channel():
+    """Subscribe user to a channel (AJAX endpoint for Popular view)."""
+    channel_id = request.form.get("channel_id", "").strip()
+    if not channel_id:
+        return jsonify({"ok": False, "error": "missing channel_id"}), 400
+
+    # Check if channel exists
+    channels = _load_channels()
+    channel = next((ch for ch in channels if ch.get("channel_id") == channel_id), None)
+    if not channel:
+        return jsonify({"ok": False, "error": "channel not found"}), 404
+
+    # Check if already subscribed
+    if channel_id in current_user.channel_ids:
+        return jsonify({"ok": True})  # Already subscribed, treat as success
+
+    # Add to subscriptions
+    current_user._data.setdefault("channels", {})[channel_id] = {"focus": ""}
+    current_user._save()
+    return jsonify({"ok": True})
+
+
 # ---------------------------------------------------------------------------
 # Comment routes
 # ---------------------------------------------------------------------------
