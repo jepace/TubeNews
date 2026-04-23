@@ -1073,6 +1073,96 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     return stories  # type: ignore[return-value]
 
 
+def _get_popular_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
+    """Return all stories (across all channels) with vote counts, sorted by upvotes then date.
+
+    Filters to stories with at least 1 upvote and excludes read stories.
+    """
+    read_set = set(user_data.get("read_articles", []))
+    raw: list[dict] = []
+
+    for channel_dir in [d for d in STORAGE_ROOT.iterdir()
+                        if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
+        channel_info = _channel_info_for_dir(channel_dir)
+        if not channel_info:
+            continue
+        channel_id = channel_info.get("channel_id", "")
+        channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+        for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            meta_path = meeting_dir / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+                if meta.get("status") == "ignored_too_old":
+                    continue
+                for story_file in meeting_dir.glob("[0-9]*.md"):
+                    # Get vote count
+                    votes_file = story_file.parent / (story_file.stem + ".votes.json")
+                    upvotes = 0
+                    if votes_file.exists():
+                        try:
+                            votes_data = json.loads(votes_file.read_text())
+                            upvotes = votes_data.get("counts", {}).get("up", 0)
+                        except Exception:
+                            pass
+                    if upvotes > 0:
+                        raw.append({"file": story_file, "meta": meta, "channel_name": channel_name,
+                                    "channel_id": channel_id, "channel_slug": channel_dir.name,
+                                    "meeting_id": meeting_dir.name, "upvotes": upvotes})
+            except Exception as exc:
+                logger.debug(f"Skipping {meeting_dir}: {exc}")
+                continue
+
+    # Sort by upvotes (descending), then by date (descending)
+    raw.sort(key=lambda e: (-e["upvotes"], -_get_timestamp_as_float(e["meta"].get("processed_at"))))
+
+    stories = []
+    for entry in raw:
+        try:
+            s = parse_story_file(entry["file"])
+            story_user_ids = s.get("user_ids", [])
+            # Apply user filter
+            if story_user_ids and user_id not in story_user_ids:
+                continue
+            # Exclude read stories
+            if s.get("content_hash", "") in read_set:
+                continue
+            vid = entry["meta"]["video_id"]
+            vt = entry["meta"].get("video_title", "")
+            published = s.get("published", "")
+            user_tz = user_data.get("preferences", {}).get("timezone", "UTC")
+            if published:
+                published = _reformat_published_timestamp(published, user_tz, "UTC")
+            stories.append({
+                "title": s["title"],
+                "dateline": s["dateline"],
+                "video_date": _fmt_video_date(
+                    entry["meta"].get("video_date", ""),
+                    published_at=entry["meta"].get("video_published_at", ""),
+                    user_tz=user_tz,
+                ),
+                "body_html": s["body_html"],
+                "start_seconds": s["start_seconds"],
+                "video_id": vid,
+                "video_title": vt if vt != vid else "",
+                "channel_name": entry["channel_name"],
+                "channel_slug": entry.get("channel_slug", ""),
+                "meeting_id": entry.get("meeting_id", ""),
+                "story_filename": entry["file"].name,
+                "processed_at": _get_timestamp_as_float(entry["meta"].get("processed_at")),
+                "content_hash": s.get("content_hash", ""),
+                "channel_id": entry["channel_id"],
+                "published": published,
+                "comment_count": _story_comment_count(entry["file"]),
+                "upvotes": entry["upvotes"],
+            })
+        except Exception as exc:
+            logger.debug(f"Skipping {entry['file']}: {exc}")
+            continue
+    return stories  # type: ignore[return-value]
+
+
 # ---------------------------------------------------------------------------
 # Public routes
 # ---------------------------------------------------------------------------
@@ -1647,6 +1737,25 @@ def serve_starred():
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_starred"))
+
+
+@app.route("/popular")
+@login_required
+def serve_popular():
+    """Render the most upvoted stories across all channels (unread only)."""
+    stories = _get_popular_stories(current_user._data, current_user.get_id())
+    starred_hashes = set(current_user._data.get("starred_articles", []))
+    counts = _channel_counts(stories)
+    active_channel_id = request.args.get("channel", "")
+    if active_channel_id:
+        stories = [s for s in stories if s["channel_id"] == active_channel_id]
+        if not stories:
+            abort(404)
+    return render_template("feed.html", stories=stories, feed_name="Popular",
+                           read_count=0, starred_hashes=starred_hashes,
+                           channel_counts=counts, active_channel_id=active_channel_id,
+                           is_popular=True, current_view_url=url_for("serve_popular"),
+                           hide_subscribe_on_current_channel=False)
 
 
 @app.route("/channel/<channel_id>")
