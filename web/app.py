@@ -2144,7 +2144,7 @@ def post_comment():
     new_comment = {
         "user_id": current_user.get_id(),
         "user_name": current_user.name,
-        "posted_at": now_utc_iso(),
+        "posted_at": time.time(),
         "body": body,
     }
     try:
@@ -2225,7 +2225,7 @@ def comment_edit():
     if comments[idx].get("user_id") != current_user.get_id():
         abort(403)
     comments[idx]["body"] = body
-    comments[idx]["edited_at"] = now_utc_iso()
+    comments[idx]["edited_at"] = time.time()
     tmp = comment_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(comments, indent=2), encoding="utf-8")
     tmp.rename(comment_path)
