@@ -22,6 +22,14 @@ pip install --user --upgrade pip setuptools wheel
 pip install --user -r requirements-dev.txt
 ```
 
+### Apply Supadata Patch
+
+After installing dependencies, apply the Supadata error field filtering patch:
+
+```bash
+./apply-supadata-patch.sh
+```
+
 ### Running Tests
 
 ```bash

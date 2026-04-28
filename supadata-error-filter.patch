@@ -1,0 +1,26 @@
+--- a/supadata/client.py
++++ b/supadata/client.py
+@@ -171,7 +171,10 @@ class Supadata:
+         if response.status_code == 206 and ('/transcript' in path):
+             error_data = self._camel_to_snake(response.json())
+             if 'error' in error_data:
+-                raise SupadataError(**error_data)
++                # Filter to only fields that SupadataError accepts
++                valid_fields = {'error', 'message', 'details', 'documentation_url'}
++                filtered_data = {k: v for k, v in error_data.items() if k in valid_fields}
++                raise SupadataError(**filtered_data)
+             raise SupadataError(error="transcript-unavailable", message="No Transcript", details="No transcript available")
+
+         try:
+@@ -181,7 +184,10 @@ class Supadata:
+             if e.response is not None:
+                 try:
+                     error_data = self._camel_to_snake(e.response.json())
+-                    raise SupadataError(**error_data) from e
++                    # Filter to only fields that SupadataError accepts
++                    valid_fields = {'error', 'message', 'details', 'documentation_url'}
++                    filtered_data = {k: v for k, v in error_data.items() if k in valid_fields}
++                    raise SupadataError(**filtered_data) from e
+                 except (ValueError, KeyError):
+                     raise e
+             raise e

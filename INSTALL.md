@@ -27,6 +27,16 @@ pip install --user --prefer-binary -r requirements-dev.txt pytest
 - **`--prefer-binary`**: Avoids building `feedgen` from source. The latest source version (1.0.0) has setup.py compatibility issues with modern setuptools. We use the pre-built wheel for version 0.4.0.
 - **`--user`**: Installs to your user directory (`~/.local/lib/python3.x/site-packages`) instead of system directories, avoiding permission issues.
 
+## Supadata Patch
+
+After installing Supadata, apply the error field filtering patch:
+
+```bash
+./apply-supadata-patch.sh
+```
+
+This fixes an issue where Supadata API error responses include extra fields that aren't part of the SupadataError dataclass.
+
 ## Verification
 
 After installation, verify all dependencies are available:

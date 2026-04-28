@@ -2115,7 +2115,8 @@ def test_fetch_transcript_returns_false_for_empty_content():
 
 def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
     """When fetch_transcript returns False, process_video writes metadata.json with
-    status 'no_transcript_available' and _needs_processing returns False afterward."""
+    status 'no_transcript_available'. The video will be retried within 3 days (in case
+    captions are added), then permanently skipped after 3 days."""
     import TubeNews
     from TubeNews import _needs_processing
 
@@ -2152,8 +2153,9 @@ def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
     assert meta["status"] == "no_transcript_available"
     assert meta["video_id"] == "VID_NO_TX"
 
-    # _needs_processing must now return False — the video won't be retried
-    assert not _needs_processing("VID_NO_TX", feed_dir)
+    # _needs_processing must return True — the video will be retried within 3 days
+    # in case captions are added to the video on YouTube
+    assert _needs_processing("VID_NO_TX", feed_dir)
 
 
 # ---------------------------------------------------------------------------
