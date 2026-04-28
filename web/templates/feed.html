@@ -391,6 +391,21 @@
     }
   }
 
+  function stickyHeaderHeight() {
+    var h = 0;
+    document.querySelectorAll('header, .header-sub').forEach(function (el) {
+      var pos = window.getComputedStyle(el).position;
+      if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
+    });
+    return h;
+  }
+
+  function scrollToStory(el) {
+    var offset = stickyHeaderHeight() + 8;
+    var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
+    window.scrollTo({ top: top, behavior: 'smooth' });
+  }
+
   function fadeRemove(article) {
     var channelId = article.dataset.channelId || '';
     // Find the next sibling article before removing, so we can snap to it.
@@ -812,21 +827,6 @@
 
   function getArticles() {
     return Array.from(document.querySelectorAll('article.story'));
-  }
-
-  function stickyHeaderHeight() {
-    var h = 0;
-    document.querySelectorAll('header, .header-sub').forEach(function (el) {
-      var pos = window.getComputedStyle(el).position;
-      if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
-    });
-    return h;
-  }
-
-  function scrollToStory(el) {
-    var offset = stickyHeaderHeight() + 8;
-    var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
-    window.scrollTo({ top: top, behavior: 'smooth' });
   }
 
   function setFocus(idx) {
