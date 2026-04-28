@@ -1598,18 +1598,39 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     - Its archive directory does not exist yet (new video).
     - The directory exists but has no ``metadata.json`` (transcript cached but
       the AI step failed on a previous run — recovery path).
+    - The directory has ``metadata.json`` but status is "no_transcript_available"
+      and less than 3 days have passed (retry in case captions are added later).
 
-    A video with any ``metadata.json`` (regardless of ``processed_focuses``) is
-    considered done and will not be reprocessed.  New focus strings only apply
-    to newly discovered videos going forward.
+    A video with ``metadata.json`` and a final status (e.g., content_written,
+    no_captions_final) is considered done and will not be reprocessed.
     """
     if not feed_dir.is_dir():
         return True
-    return not any(
-        d.name == video_id
-        for d in feed_dir.iterdir()
-        if d.is_dir() and (d / "metadata.json").exists()
-    )
+
+    for d in feed_dir.iterdir():
+        if d.is_dir() and d.name == video_id:
+            metadata_path = d / "metadata.json"
+            if not metadata_path.exists():
+                return True
+
+            # Check if this is a "no_transcript_available" status from less than 3 days ago
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                status = metadata.get("status", "")
+                if status == "no_transcript_available":
+                    processed_at_ts = _get_timestamp_as_float(metadata.get("processed_at"))
+                    age_seconds = time.time() - processed_at_ts
+                    age_days = age_seconds / (24 * 3600)
+                    if age_days < 3:
+                        # Retry within 3 days; captions may have been added
+                        return True
+            except (json.JSONDecodeError, KeyError, ValueError):
+                # If metadata is invalid, reprocess to recover
+                return True
+
+            return False
+
+    return True
 
 
 def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str, list[str]]]:
