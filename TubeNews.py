@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import signal
 import socket
 import threading
 import time
@@ -3591,6 +3592,21 @@ def _reload_config_from_disk() -> dict:
     return _daemon_config
 
 
+def _setup_signal_handlers(ntfy_topic: str | None) -> None:
+    """Set up signal handlers to notify when TubeNews is killed."""
+    def _on_signal(signum: int, frame) -> None:
+        sig_name = signal.Signals(signum).name
+        msg = f"TubeNews daemon killed by signal {sig_name} ({signum})"
+        logger.error(msg)
+        if ntfy_topic:
+            _send_ntfy_alert(ntfy_topic, "🚨 TubeNews Killed", msg, priority="urgent")
+        raise SystemExit(128 + signum)
+
+    # Catch termination signals
+    for sig in [signal.SIGTERM, signal.SIGINT, signal.SIGHUP]:
+        signal.signal(sig, _on_signal)
+
+
 def _run_daemon(config: dict) -> None:
     """Start the WebSub daemon: subscribe all channels, then run the two threads.
 
@@ -3602,6 +3618,12 @@ def _run_daemon(config: dict) -> None:
     """
     global _daemon_config
     _daemon_config = config.copy()
+
+    # Set up signal handlers for kill notifications
+    ntfy_topic = config.get("ntfy_topic")
+    if ntfy_topic:
+        _setup_signal_handlers(ntfy_topic)
+        logger.info(f"Kill notifications enabled via ntfy.sh/{ntfy_topic}")
 
     channels = _read_channels()
     if not channels:
@@ -4257,6 +4279,23 @@ def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], s
         logger.debug(f"ntfy.sh/{topic}: notification sent")
     except Exception as exc:
         logger.warning(f"ntfy.sh/{topic}: notification failed: {exc}")
+
+
+def _send_ntfy_alert(topic: str, title: str, message: str, priority: str = "high") -> None:
+    """Send an alert notification to ntfy.sh/<topic>."""
+    import urllib.request as _urllib_request
+
+    req = _urllib_request.Request(
+        f"https://ntfy.sh/{topic}",
+        data=message.encode(),
+        method="POST",
+        headers={"Title": title, "Priority": priority},
+    )
+    try:
+        _urllib_request.urlopen(req, timeout=5)
+        logger.debug(f"ntfy.sh/{topic}: alert sent")
+    except Exception as exc:
+        logger.warning(f"ntfy.sh/{topic}: alert failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
