@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import requests
 import secrets
 import shutil
 import subprocess
@@ -1628,17 +1629,13 @@ def serve_feed():
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     prefs = current_user._data.get("preferences", {})
     lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
-    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
-    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            read_count=read_count, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_feed"),
-                           lobotomy_enabled=lobotomy_enabled,
-                           lobotomy_api_url=lobotomy_api_url,
-                           lobotomy_api_key=lobotomy_api_key)
+                           lobotomy_enabled=lobotomy_enabled)
 
 
 @app.route("/read")
@@ -1676,17 +1673,13 @@ def serve_read():
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     prefs = current_user._data.get("preferences", {})
     lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
-    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
-    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_archive=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_read"),
-                           lobotomy_enabled=lobotomy_enabled,
-                           lobotomy_api_url=lobotomy_api_url,
-                           lobotomy_api_key=lobotomy_api_key)
+                           lobotomy_enabled=lobotomy_enabled)
 
 
 @app.route("/all")
@@ -1723,17 +1716,13 @@ def serve_all():
     current_view = url_for("serve_all", q=query) if query else url_for("serve_all")
     prefs = current_user._data.get("preferences", {})
     lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
-    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
-    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_all=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=current_view,
-                           lobotomy_enabled=lobotomy_enabled,
-                           lobotomy_api_url=lobotomy_api_url,
-                           lobotomy_api_key=lobotomy_api_key)
+                           lobotomy_enabled=lobotomy_enabled)
 
 
 @app.route("/starred")
@@ -1762,17 +1751,13 @@ def serve_starred():
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     prefs = current_user._data.get("preferences", {})
     lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
-    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
-    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_starred=True, starred_hashes=starred_set,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_starred"),
-                           lobotomy_enabled=lobotomy_enabled,
-                           lobotomy_api_url=lobotomy_api_url,
-                           lobotomy_api_key=lobotomy_api_key)
+                           lobotomy_enabled=lobotomy_enabled)
 
 
 @app.route("/popular")
@@ -1789,16 +1774,12 @@ def serve_popular():
             abort(404)
     prefs = current_user._data.get("preferences", {})
     lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
-    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
-    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name="Popular",
                            read_count=0, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            is_popular=True, current_view_url=url_for("serve_popular"),
                            hide_subscribe_on_current_channel=False,
-                           lobotomy_enabled=lobotomy_enabled,
-                           lobotomy_api_url=lobotomy_api_url,
-                           lobotomy_api_key=lobotomy_api_key)
+                           lobotomy_enabled=lobotomy_enabled)
 
 
 @app.route("/channel/<channel_id>")
@@ -3020,6 +3001,45 @@ def admin_feed_delete(channel_id: str):
     _save_channels(channels)
     flash(f"Feed '{removed['channel_name']}' removed.", "success")
     return redirect(url_for("admin_feeds"))
+
+
+@app.route("/api/lobotomy-push", methods=["POST"])
+@login_required
+@limiter.limit("20 per minute")
+def api_lobotomy_push():
+    """Push a story to Lobotomy's inbox (server-side proxy)."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    # Get user's Lobotomy settings from preferences
+    prefs = current_user._data.get("preferences", {})
+    lobotomy_url = prefs.get("lobotomy_api_url", "").strip()
+    lobotomy_key = prefs.get("lobotomy_api_key", "").strip()
+
+    if not lobotomy_url or not lobotomy_key:
+        return jsonify({"error": "Lobotomy not configured for this account"}), 400
+
+    try:
+        resp = requests.post(
+            f"{lobotomy_url}/api/push",
+            headers={
+                "Authorization": f"Bearer {lobotomy_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "title": data.get("title"),
+                "content": data.get("content"),
+                "source_url": data.get("source_url"),
+                "tags": data.get("tags", []),
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+    except requests.RequestException as e:
+        logger.error(f"Lobotomy push failed: {e}")
+        return jsonify({"error": str(e)}), 502
 
 
 # ---------------------------------------------------------------------------
