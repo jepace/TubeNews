@@ -1618,12 +1618,19 @@ def serve_feed():
         if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
+    config = _load_config()
+    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
+    lobotomy_api_url = config.get("lobotomy_api_url", "")
+    lobotomy_api_key = config.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            read_count=read_count, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
-                           current_view_url=url_for("serve_feed"))
+                           current_view_url=url_for("serve_feed"),
+                           lobotomy_enabled=lobotomy_enabled,
+                           lobotomy_api_url=lobotomy_api_url,
+                           lobotomy_api_key=lobotomy_api_key)
 
 
 @app.route("/read")
@@ -1659,12 +1666,19 @@ def serve_read():
         if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
+    config = _load_config()
+    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
+    lobotomy_api_url = config.get("lobotomy_api_url", "")
+    lobotomy_api_key = config.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_archive=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
-                           current_view_url=url_for("serve_read"))
+                           current_view_url=url_for("serve_read"),
+                           lobotomy_enabled=lobotomy_enabled,
+                           lobotomy_api_url=lobotomy_api_url,
+                           lobotomy_api_key=lobotomy_api_key)
 
 
 @app.route("/all")
@@ -1699,12 +1713,19 @@ def serve_all():
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     current_view = url_for("serve_all", q=query) if query else url_for("serve_all")
+    config = _load_config()
+    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
+    lobotomy_api_url = config.get("lobotomy_api_url", "")
+    lobotomy_api_key = config.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_all=True, query=query, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
-                           current_view_url=current_view)
+                           current_view_url=current_view,
+                           lobotomy_enabled=lobotomy_enabled,
+                           lobotomy_api_url=lobotomy_api_url,
+                           lobotomy_api_key=lobotomy_api_key)
 
 
 @app.route("/starred")
@@ -1731,12 +1752,19 @@ def serve_starred():
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
+    config = _load_config()
+    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
+    lobotomy_api_url = config.get("lobotomy_api_url", "")
+    lobotomy_api_key = config.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_starred=True, starred_hashes=starred_set,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
-                           current_view_url=url_for("serve_starred"))
+                           current_view_url=url_for("serve_starred"),
+                           lobotomy_enabled=lobotomy_enabled,
+                           lobotomy_api_url=lobotomy_api_url,
+                           lobotomy_api_key=lobotomy_api_key)
 
 
 @app.route("/popular")
@@ -1751,11 +1779,18 @@ def serve_popular():
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
         if not stories:
             abort(404)
+    config = _load_config()
+    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
+    lobotomy_api_url = config.get("lobotomy_api_url", "")
+    lobotomy_api_key = config.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name="Popular",
                            read_count=0, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,
                            is_popular=True, current_view_url=url_for("serve_popular"),
-                           hide_subscribe_on_current_channel=False)
+                           hide_subscribe_on_current_channel=False,
+                           lobotomy_enabled=lobotomy_enabled,
+                           lobotomy_api_url=lobotomy_api_url,
+                           lobotomy_api_key=lobotomy_api_key)
 
 
 @app.route("/channel/<channel_id>")

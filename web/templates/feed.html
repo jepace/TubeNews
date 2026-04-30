@@ -178,6 +178,7 @@
            data-anchor="s{{ story.video_id }}-{{ story.start_seconds }}"
            data-youtube="https://youtu.be/{{ story.video_id }}?t={{ story.start_seconds }}"
            data-content-hash="{{ story.content_hash | e }}"
+           data-body="{{ story.body_html | striptags | e }}"
            {% if story.channel_slug and story.meeting_id %}
            data-transcript="{{ url_for('serve_transcript', channel_slug=story.channel_slug, meeting_id=story.meeting_id) }}#t{{ story.start_seconds }}"
            {% endif %}>
@@ -185,6 +186,9 @@
         <button type="button" class="tb-copy-link" title="Copy link to this article">&#128279; Copy Link</button>
         <a class="tb-email" href="#" title="Share via email">&#128231; Email</a>
         <button type="button" class="tb-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
+        {% if lobotomy_enabled %}
+        <button type="button" class="tb-lobotomize" title="Push to Lobotomy wiki">&#128214; Wiki</button>
+        {% endif %}
         {% if current_user.is_authenticated and not channel_id %}
           {% if is_archive %}
           <button type="button" class="tb-unread" title="Mark as unread">&#10003; Mark Unread</button>
@@ -443,6 +447,55 @@
     }, 300);
   }
 
+  function attachLobotomizeBtn(btn) {
+    btn.addEventListener('click', function () {
+      var bar = btn.closest('.story-toolbar');
+      var title = bar.dataset.title || 'Untitled';
+      var body = bar.dataset.body || '';
+      var youtubeUrl = bar.dataset.youtube || '';
+
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+
+      var payload = {
+        title: title,
+        content: body,
+        source_url: youtubeUrl,
+        tags: [document.querySelector('article').dataset.channelId || ''] // channel as tag
+      };
+
+      fetch('{{ lobotomy_api_url }}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer {{ lobotomy_api_key }}'
+        },
+        body: JSON.stringify(payload)
+      })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.json().then(function (err) {
+              throw new Error(err.error || 'HTTP ' + r.status);
+            }).catch(function () {
+              throw new Error('HTTP ' + r.status);
+            });
+          }
+          return r.json();
+        })
+        .then(function (data) {
+          btn.textContent = '✓ Sent to Wiki';
+          setTimeout(function () {
+            btn.disabled = false;
+            btn.textContent = '📖 Wiki';
+          }, 2000);
+        })
+        .catch(function (err) {
+          btn.textContent = 'Failed: ' + err.message;
+          btn.disabled = false;
+        });
+    });
+  }
+
   function attachReadBtn(btn) {
     btn.addEventListener('click', function handler() {
       if (btn.disabled) return;
@@ -527,6 +580,7 @@
   document.querySelectorAll('.tb-unread').forEach(attachUnreadBtn);
   document.querySelectorAll('.tb-star').forEach(attachStarBtn);
   document.querySelectorAll('.tb-unstar').forEach(attachUnstarBtn);
+  document.querySelectorAll('.tb-lobotomize').forEach(attachLobotomizeBtn);
 })();
 {% endif %}
 

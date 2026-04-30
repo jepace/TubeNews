@@ -35,5 +35,9 @@
   "websub_secret": "generate with: python3 -c 'import secrets; print(secrets.token_hex(32))'",
   "websub_daemon_port": 8675,
   "websub_check_interval_minutes": 1,
-  "websub_max_videos_per_cycle": 3
+  "websub_max_videos_per_cycle": 3,
+
+  "_lobotomy": "Push stories to Lobotomy wiki (optional)",
+  "lobotomy_api_url": "",
+  "lobotomy_api_key": ""
 }
