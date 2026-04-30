@@ -263,9 +263,9 @@
         <p class="muted" style="font-size: 0.9rem;">Push stories to your Lobotomy smart wiki for processing. Leave blank to disable.</p>
 
         <div class="form-row">
-          <label for="lobotomy_api_url">Lobotomy API URL</label>
-          <input type="url" id="lobotomy_api_url" name="lobotomy_api_url"
-                 placeholder="https://your-lobotomy.com/api/push"
+          <label for="lobotomy_api_url">Lobotomy API URL <span class="muted" style="font-size: 0.85rem;">(with https://)</span></label>
+          <input type="text" id="lobotomy_api_url" name="lobotomy_api_url"
+                 placeholder="https://your-lobotomy.com"
                  value="{{ (is_own_profile and prefs.get('lobotomy_api_url')) or (not is_own_profile and user._data.get('preferences', {}).get('lobotomy_api_url')) or '' }}"
                  style="max-width: 400px;">
         </div>
