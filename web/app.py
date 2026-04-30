@@ -859,6 +859,8 @@ def _save_user_preferences(user: User, form_data: dict) -> str | None:
     digest_email_enabled = "digest_email_enabled" in form_data
     podcast_enabled = "podcast_enabled" in form_data
     timezone = form_data.get("timezone", "").strip()
+    lobotomy_api_url = form_data.get("lobotomy_api_url", "").strip()
+    lobotomy_api_key = form_data.get("lobotomy_api_key", "").strip()
 
     if timezone and timezone not in pytz.all_timezones:
         return "Invalid timezone."
@@ -871,6 +873,12 @@ def _save_user_preferences(user: User, form_data: dict) -> str | None:
     }
     if timezone:
         user._data["preferences"]["timezone"] = timezone
+    if lobotomy_api_url or lobotomy_api_key:
+        user._data["preferences"]["lobotomy_api_url"] = lobotomy_api_url
+        user._data["preferences"]["lobotomy_api_key"] = lobotomy_api_key
+    elif "lobotomy_api_url" in user._data["preferences"]:
+        del user._data["preferences"]["lobotomy_api_url"]
+        del user._data["preferences"]["lobotomy_api_key"]
     user._save()
     return None
 
@@ -1618,10 +1626,10 @@ def serve_feed():
         if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
-    config = _load_config()
-    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
-    lobotomy_api_url = config.get("lobotomy_api_url", "")
-    lobotomy_api_key = config.get("lobotomy_api_key", "")
+    prefs = current_user._data.get("preferences", {})
+    lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
+    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
+    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            read_count=read_count, starred_hashes=starred_hashes,
@@ -1666,10 +1674,10 @@ def serve_read():
         if active_channel_id not in current_user.channel_ids:
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
-    config = _load_config()
-    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
-    lobotomy_api_url = config.get("lobotomy_api_url", "")
-    lobotomy_api_key = config.get("lobotomy_api_key", "")
+    prefs = current_user._data.get("preferences", {})
+    lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
+    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
+    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_archive=True, query=query, starred_hashes=starred_hashes,
@@ -1713,10 +1721,10 @@ def serve_all():
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
     current_view = url_for("serve_all", q=query) if query else url_for("serve_all")
-    config = _load_config()
-    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
-    lobotomy_api_url = config.get("lobotomy_api_url", "")
-    lobotomy_api_key = config.get("lobotomy_api_key", "")
+    prefs = current_user._data.get("preferences", {})
+    lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
+    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
+    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_all=True, query=query, starred_hashes=starred_hashes,
@@ -1752,10 +1760,10 @@ def serve_starred():
         if not any(s["channel_id"] == active_channel_id for s in stories):
             abort(404)
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
-    config = _load_config()
-    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
-    lobotomy_api_url = config.get("lobotomy_api_url", "")
-    lobotomy_api_key = config.get("lobotomy_api_key", "")
+    prefs = current_user._data.get("preferences", {})
+    lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
+    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
+    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name=feed_name,
                            feed_path=f"/feed/{current_user.feed_token}.xml",
                            is_starred=True, starred_hashes=starred_set,
@@ -1779,10 +1787,10 @@ def serve_popular():
         stories = [s for s in stories if s["channel_id"] == active_channel_id]
         if not stories:
             abort(404)
-    config = _load_config()
-    lobotomy_enabled = bool(config.get("lobotomy_api_url"))
-    lobotomy_api_url = config.get("lobotomy_api_url", "")
-    lobotomy_api_key = config.get("lobotomy_api_key", "")
+    prefs = current_user._data.get("preferences", {})
+    lobotomy_enabled = bool(prefs.get("lobotomy_api_url"))
+    lobotomy_api_url = prefs.get("lobotomy_api_url", "")
+    lobotomy_api_key = prefs.get("lobotomy_api_key", "")
     return render_template("feed.html", stories=stories, feed_name="Popular",
                            read_count=0, starred_hashes=starred_hashes,
                            channel_counts=counts, active_channel_id=active_channel_id,

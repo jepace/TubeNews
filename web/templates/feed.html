@@ -187,7 +187,7 @@
         <a class="tb-email" href="#" title="Share via email">&#128231; Email</a>
         <button type="button" class="tb-mastodon" title="Share to Mastodon">&#128024; Mastodon</button>
         {% if lobotomy_enabled %}
-        <button type="button" class="tb-lobotomize" title="Push to Lobotomy wiki">&#128214; Wiki</button>
+        <button type="button" class="tb-lobotomize" title="Push to Lobotomy">🧠 Lobotomize</button>
         {% endif %}
         {% if current_user.is_authenticated and not channel_id %}
           {% if is_archive %}
@@ -483,10 +483,10 @@
           return r.json();
         })
         .then(function (data) {
-          btn.textContent = '✓ Sent to Wiki';
+          btn.textContent = '✓ Lobotomized';
           setTimeout(function () {
             btn.disabled = false;
-            btn.textContent = '📖 Wiki';
+            btn.textContent = '🧠 Lobotomize';
           }, 2000);
         })
         .catch(function (err) {
