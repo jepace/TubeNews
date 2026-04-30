@@ -464,11 +464,10 @@
         tags: [document.querySelector('article').dataset.channelId || ''] // channel as tag
       };
 
-      fetch('{{ lobotomy_api_url }}', {
+      fetch('/api/lobotomy-push', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer {{ lobotomy_api_key }}'
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
