@@ -3021,18 +3021,24 @@ def api_lobotomy_push():
         return jsonify({"error": "Lobotomy not configured for this account"}), 400
 
     try:
+        # Build payload for Lobotomy API
+        payload = {"source": "TubeNews"}
+        if data.get("title"):
+            payload["title"] = data["title"]
+        if data.get("content"):
+            payload["content"] = data["content"]
+        if data.get("url"):
+            payload["url"] = data["url"]
+        if data.get("tags"):
+            payload["tags"] = data["tags"]
+
         resp = requests.post(
             f"{lobotomy_url}/api/push",
             headers={
                 "Authorization": f"Bearer {lobotomy_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "title": data.get("title"),
-                "content": data.get("content"),
-                "source_url": data.get("source_url"),
-                "tags": data.get("tags", []),
-            },
+            json=payload,
             timeout=10,
         )
         resp.raise_for_status()
