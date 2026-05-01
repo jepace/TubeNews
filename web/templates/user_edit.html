@@ -272,11 +272,27 @@
 
         <div class="form-row">
           <label for="lobotomy_api_key">API Key / Secret</label>
-          <input type="password" id="lobotomy_api_key" name="lobotomy_api_key"
-                 placeholder="your-secret-key"
-                 value="{{ (is_own_profile and prefs.get('lobotomy_api_key')) or (not is_own_profile and user._data.get('preferences', {}).get('lobotomy_api_key')) or '' }}"
-                 style="max-width: 400px;">
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="password" id="lobotomy_api_key" name="lobotomy_api_key"
+                   placeholder="your-secret-key"
+                   value="{{ (is_own_profile and prefs.get('lobotomy_api_key')) or (not is_own_profile and user._data.get('preferences', {}).get('lobotomy_api_key')) or '' }}"
+                   style="max-width: 400px; flex: 1;">
+            <button type="button" id="toggle-lobotomy-key" title="Show/hide API key" style="padding: 0.4rem 0.6rem; font-size: 1rem; cursor: pointer; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 4px;">👁️</button>
+          </div>
         </div>
+        <script>
+        (function() {
+          var keyInput = document.getElementById('lobotomy_api_key');
+          var toggleBtn = document.getElementById('toggle-lobotomy-key');
+          if (toggleBtn) {
+            toggleBtn.addEventListener('click', function(e) {
+              e.preventDefault();
+              keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+              toggleBtn.textContent = keyInput.type === 'password' ? '👁️' : '🙈';
+            });
+          }
+        })();
+        </script>
       </div>
 
       <button type="submit" class="btn-save">Save display preferences</button>
