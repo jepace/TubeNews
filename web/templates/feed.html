@@ -239,6 +239,37 @@
 </div>{# end .feed-layout #}
 
 <script>
+// Global scroll helpers for keyboard navigation and authenticated features
+function stickyHeaderHeight() {
+  var h = 0;
+  document.querySelectorAll('header, .header-sub').forEach(function (el) {
+    var pos = window.getComputedStyle(el).position;
+    if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
+  });
+  return h;
+}
+
+function scrollToStory(el) {
+  var offset = stickyHeaderHeight() + 8;
+  var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
+  console.log('scrollToStory called: offset=' + offset + ', currentScroll=' + window.pageYOffset + ', elTop=' + el.getBoundingClientRect().top + ', targetTop=' + top);
+  window.scrollTo({ top: top, behavior: 'smooth' });
+}
+
+function scrollToFocused() {
+  var el = document.querySelector('.story-focused');
+  if (!el) return;
+  var headerH = 0;
+  document.querySelectorAll('header, .header-sub').forEach(function (h) {
+    var s = window.getComputedStyle(h).position;
+    if (s === 'sticky' || s === 'fixed') headerH += h.getBoundingClientRect().height;
+  });
+  var rect = el.getBoundingClientRect();
+  if (rect.top < headerH + 8) {
+    window.scrollBy({ top: rect.top - headerH - 8, behavior: 'smooth' });
+  }
+}
+
 (function () {
   function flash(el, msg) {
     var orig = el.textContent;
@@ -352,43 +383,8 @@
     }
   });
 })();
-</script>
-
-<!-- Global scroll helpers for keyboard and authenticated features -->
-<script>
-function stickyHeaderHeight() {
-  var h = 0;
-  document.querySelectorAll('header, .header-sub').forEach(function (el) {
-    var pos = window.getComputedStyle(el).position;
-    if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
-  });
-  return h;
-}
-
-function scrollToStory(el) {
-  var offset = stickyHeaderHeight() + 8;
-  var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
-  console.log('scrollToStory called: offset=' + offset + ', currentScroll=' + window.pageYOffset + ', elTop=' + el.getBoundingClientRect().top + ', targetTop=' + top);
-  window.scrollTo({ top: top, behavior: 'smooth' });
-}
-
-function scrollToFocused() {
-  var el = document.querySelector('.story-focused');
-  if (!el) return;
-  var headerH = 0;
-  document.querySelectorAll('header, .header-sub').forEach(function (h) {
-    var s = window.getComputedStyle(h).position;
-    if (s === 'sticky' || s === 'fixed') headerH += h.getBoundingClientRect().height;
-  });
-  var rect = el.getBoundingClientRect();
-  if (rect.top < headerH + 8) {
-    window.scrollBy({ top: rect.top - headerH - 8, behavior: 'smooth' });
-  }
-}
-</script>
 
 {% if current_user.is_authenticated %}
-<script>
 (function () {
   var csrfToken = {{ csrf_token() | tojson }};
   var markReadUrl     = {{ url_for('account_mark_read')     | tojson }};
@@ -587,7 +583,6 @@ function scrollToFocused() {
   document.querySelectorAll('.tb-unstar').forEach(attachUnstarBtn);
   document.querySelectorAll('.tb-lobotomize').forEach(attachLobotomizeBtn);
 })();
-</script>
 {% endif %}
 
 {% if current_user.is_authenticated and current_user.is_admin %}
