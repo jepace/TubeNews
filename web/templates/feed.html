@@ -440,6 +440,15 @@ function scrollToFocused() {
           }
         }
       }
+      // Update bundle counts for active bundle
+      var activeBundleEl = document.querySelector('.sc-bundle.sc-active');
+      if (activeBundleEl) {
+        var bundleCountEl = activeBundleEl.querySelector('.sc-count');
+        if (bundleCountEl) {
+          var bundleN = Math.max(0, parseInt(bundleCountEl.textContent || '0') - 1);
+          bundleCountEl.textContent = bundleN;
+        }
+      }
       // Snap the next story to the top of the visible area (good for touch/iOS).
       if (nextArticle && nextArticle.isConnected) {
         scrollToStory(nextArticle);
