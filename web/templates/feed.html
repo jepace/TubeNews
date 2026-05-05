@@ -367,6 +367,7 @@ function stickyHeaderHeight() {
 function scrollToStory(el) {
   var offset = stickyHeaderHeight() + 8;
   var top = window.pageYOffset + el.getBoundingClientRect().top - offset;
+  console.log('scrollToStory called: offset=' + offset + ', currentScroll=' + window.pageYOffset + ', elTop=' + el.getBoundingClientRect().top + ', targetTop=' + top);
   window.scrollTo({ top: top, behavior: 'smooth' });
 }
 
