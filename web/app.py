@@ -36,6 +36,7 @@ from flask import (
     Response,
     abort,
     flash,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -649,6 +650,17 @@ def format_datetime(ts: int | str | None) -> str:
         return datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _get_cached_today():
+    """Get today's date for the current user, cached in g for the request."""
+    if 'relative_date_today' not in g:
+        tz_name = "UTC"
+        if current_user and current_user.is_authenticated:
+            tz_name = _get_user_timezone(current_user)
+        tz = pytz.timezone(tz_name)
+        g.relative_date_today = datetime.now(tz=tz).date()
+    return g.relative_date_today
+
+
 @app.template_filter("relative_date")
 def relative_date(date_str: str | None) -> str:
     """Convert date to 'Today', 'Yesterday', or original string.
@@ -660,13 +672,7 @@ def relative_date(date_str: str | None) -> str:
         return "—"
 
     try:
-        # Get user's timezone (or UTC if not authenticated)
-        tz_name = "UTC"
-        if current_user and current_user.is_authenticated:
-            tz_name = _get_user_timezone(current_user)
-
-        tz = pytz.timezone(tz_name)
-        today = datetime.now(tz=tz).date()
+        today = _get_cached_today()
 
         # Try parsing as YYYY-MM-DD first
         try:
