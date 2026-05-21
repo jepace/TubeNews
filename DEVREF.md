@@ -95,7 +95,7 @@ Defined at the top of `TubeNews.py` (and importable into `web/app.py`):
 | TypedDict | Fields | Used by |
 |---|---|---|
 | `VideoInfo` | `id`, `title`, `date` (all `str`) | `discover_videos()` return type |
-| `FeedConfig` | `channel_id`, `channel_name`, `focus` (all `str`) | Config array entries; `rebuild_feed`, `process_feed`, `process_video` parameters |
+| `FeedConfig` | `channel_id`, `channel_name`, `focus` (all `str`); optional `disabled` (`bool`, default `False`) | Config array entries; `rebuild_feed`, `process_feed`, `process_video` parameters |
 | `GeminiStory` | `title`, `dateline`, `content` (`str`), `start_time_seconds` (`int`), `topics` (`list[str]`) | `call_gemini_api()` return type; `write_story_files()` input |
 | `ParsedStory` | `title`, `dateline`, `body_html` (`str`), `start_seconds` (`int`), `topics` (`list[str]`), `content_hash` (`str`), `user_ids` (`list[str]`) | `parse_story_file()` return type; imported by `web/app.py` |
 | `MetadataDict` | `video_id`, `video_title`, `status`, `processed_at`, `processed_focuses` (`total=False`) | Internal; represents `metadata.json` content |

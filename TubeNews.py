@@ -4394,7 +4394,8 @@ def _main_body(args) -> None:
         logger.error(str(exc))
         return
 
-    channels = _read_channels()
+    all_channels = _read_channels()
+    channels = [ch for ch in all_channels if not ch.get("disabled", False)]
     if not channels:
         logger.error("TubeNews: No channels configured in state/channels.json — nothing to do.")
         return

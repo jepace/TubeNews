@@ -3009,6 +3009,30 @@ def admin_feed_delete(channel_id: str):
     return redirect(url_for("admin_feeds"))
 
 
+@app.route("/admin/feeds/<channel_id>/toggle", methods=["POST"])
+@login_required
+@admin_required
+def admin_feed_toggle(channel_id: str):
+    channels = _load_channels()
+    idx = next((i for i, ch in enumerate(channels) if ch["channel_id"] == channel_id), None)
+    if idx is None:
+        abort(404)
+    feed = channels[idx]
+    is_disabled = feed.get("disabled", False)
+    config = _load_config()
+    if is_disabled:
+        feed["disabled"] = False
+        _wsb_subscribe(channel_id, config)
+        status = "enabled"
+    else:
+        feed["disabled"] = True
+        _wsb_unsubscribe(channel_id, config)
+        status = "disabled"
+    _save_channels(channels)
+    flash(f"Feed '{feed['channel_name']}' {status}.", "success")
+    return redirect(url_for("admin_feeds"))
+
+
 @app.route("/api/lobotomy-push", methods=["POST"])
 @login_required
 @limiter.limit("20 per minute")
