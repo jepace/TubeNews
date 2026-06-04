@@ -788,7 +788,15 @@ def fetch_transcript(
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        transcript_response = supadata_client.transcript(url=url, lang="en", text=False)
+        try:
+            transcript_response = supadata_client.transcript(url=url, lang="en", text=False)
+        except TypeError as te:
+            # Supadata library error: likely a version mismatch in error constructor
+            # e.g., "SupadataError.__init__() got an unexpected keyword argument 'type'"
+            if "SupadataError" in str(te) and "__init__" in str(te):
+                logger.error(f"Supadata: Library error (version mismatch?) - {metadata}: {te}")
+                return None
+            raise
         if hasattr(transcript_response, "content") and transcript_response.content:
             segments = transcript_response.content
             lang_received = getattr(transcript_response, "lang", "") or ""
@@ -814,6 +822,7 @@ def fetch_transcript(
         exc_str = str(exc).lower()
         # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
         is_quota_error = False
+        http_status = None
         if isinstance(exc, SupadataError):
             is_quota_error = any(
                 kw in (exc.error or "").lower()
@@ -821,7 +830,11 @@ def fetch_transcript(
             )
         elif isinstance(exc, requests.exceptions.HTTPError):
             status = getattr(getattr(exc, "response", None), "status_code", None)
+            http_status = status
             is_quota_error = status == 402
+
+        # Detect service unavailability (5xx errors) — don't give up after 12 hours
+        is_service_error = http_status in (500, 502, 503, 504)
 
         # Detect permanent "no transcript" from SupadataError codes.
         is_permanent_no_transcript = isinstance(exc, SupadataError) and (
@@ -837,6 +850,8 @@ def fetch_transcript(
             )
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
+        elif is_service_error:
+            logger.warning(f"Supadata: Service error (HTTP {http_status}) — will retry - {metadata}")
         elif is_permanent_no_transcript:
             error_code = getattr(exc, "error", "") or ""
             if "forbidden" in error_code:
@@ -2398,8 +2413,9 @@ _QUEUE_MAX_RETRIES = 10
 
 # Transcript retry schedule: seconds from queued_at for each successive attempt.
 # Attempt 0 → T+5 min (first check, shortly after notification).
-# Attempts 1–12 → T+1h through T+12h (hourly, anchored to the original notification time).
+# Attempts 1–16 → T+1h through T+24h (spaced over 24 hours).
 # After _TRANSCRIPT_MAX_ATTEMPTS failures the video is marked permanently no-transcript.
+# This allows captions to appear later and services (like Supadata) to recover.
 _TRANSCRIPT_RETRY_OFFSETS: tuple[int, ...] = (
     5 * 60,       # attempt 0:  T+5 min  (first check)
     1 * 3600,     # attempt 1:  T+1 hr
@@ -2412,8 +2428,12 @@ _TRANSCRIPT_RETRY_OFFSETS: tuple[int, ...] = (
     8 * 3600,     # attempt 8:  T+8 hr
     9 * 3600,     # attempt 9:  T+9 hr
     10 * 3600,    # attempt 10: T+10 hr
-    11 * 3600,    # attempt 11: T+11 hr
-    12 * 3600,    # attempt 12: T+12 hr  (final; failure → permanent)
+    12 * 3600,    # attempt 11: T+12 hr
+    15 * 3600,    # attempt 12: T+15 hr
+    18 * 3600,    # attempt 13: T+18 hr
+    21 * 3600,    # attempt 14: T+21 hr
+    24 * 3600,    # attempt 15: T+24 hr
+    30 * 3600,    # attempt 16: T+30 hr  (final; failure → permanent)
 )
 _TRANSCRIPT_MAX_ATTEMPTS: int = len(_TRANSCRIPT_RETRY_OFFSETS)  # 13
 
@@ -3184,7 +3204,9 @@ def _wsb_processor_thread(config: dict) -> None:
             continue
 
         try:
-            channels = _read_channels()
+            all_channels = _read_channels()
+            # Only process enabled channels; disabled channels' queued videos are dropped
+            channels = [ch for ch in all_channels if not ch.get("disabled", False)]
             channel_map = {ch["channel_id"]: ch for ch in channels}
 
             # Drain the queue aggressively while service is healthy.
