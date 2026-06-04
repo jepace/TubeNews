@@ -3086,6 +3086,8 @@ def _wsb_processor_thread(config: dict) -> None:
     _last_orphan_recovery: float = time.time()
     _last_digest_check: float = 0.0
     _last_podcast_check: float = 0.0
+    _last_heartbeat: float = 0.0
+    _heartbeat_interval: float = 300  # Log heartbeat every 5 minutes
 
     while True:
         # -- Config reload ----------------------------------------------------
@@ -3443,6 +3445,12 @@ def _wsb_processor_thread(config: dict) -> None:
             logger.error(f"WebSub: Cycle failed - {exc}", exc_info=True)
         finally:
             _release_lock()
+
+        # Heartbeat log every 5 minutes so we know the daemon is alive
+        now = time.time()
+        if now - _last_heartbeat >= _heartbeat_interval:
+            logger.info("WebSub: Daemon alive and monitoring...")
+            _last_heartbeat = now
 
         time.sleep(interval)
 
