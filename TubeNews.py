@@ -3086,6 +3086,8 @@ def _wsb_processor_thread(config: dict) -> None:
     _last_orphan_recovery: float = time.time()
     _last_digest_check: float = 0.0
     _last_podcast_check: float = 0.0
+    _last_heartbeat: float = 0.0
+    _heartbeat_interval: float = 300  # Log heartbeat every 5 minutes
 
     while True:
         # -- Config reload ----------------------------------------------------
@@ -3444,6 +3446,12 @@ def _wsb_processor_thread(config: dict) -> None:
         finally:
             _release_lock()
 
+        # Heartbeat log every 5 minutes so we know the daemon is alive
+        now = time.time()
+        if now - _last_heartbeat >= _heartbeat_interval:
+            logger.info("WebSub: Daemon alive and monitoring...")
+            _last_heartbeat = now
+
         time.sleep(interval)
 
 
@@ -3625,7 +3633,8 @@ def _run_daemon(config: dict) -> None:
         _setup_signal_handlers(ntfy_topic)
         logger.info(f"Kill notifications enabled via ntfy.sh/{ntfy_topic}")
 
-    channels = _read_channels()
+    all_channels = _read_channels()
+    channels = [ch for ch in all_channels if not ch.get("disabled", False)]
     if not channels:
         logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
         return
