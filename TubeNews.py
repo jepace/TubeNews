@@ -3625,7 +3625,8 @@ def _run_daemon(config: dict) -> None:
         _setup_signal_handlers(ntfy_topic)
         logger.info(f"Kill notifications enabled via ntfy.sh/{ntfy_topic}")
 
-    channels = _read_channels()
+    all_channels = _read_channels()
+    channels = [ch for ch in all_channels if not ch.get("disabled", False)]
     if not channels:
         logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
         return
