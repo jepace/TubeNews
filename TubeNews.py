@@ -788,7 +788,15 @@ def fetch_transcript(
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        transcript_response = supadata_client.transcript(url=url, lang="en", text=False)
+        try:
+            transcript_response = supadata_client.transcript(url=url, lang="en", text=False)
+        except TypeError as te:
+            # Supadata library error: likely a version mismatch in error constructor
+            # e.g., "SupadataError.__init__() got an unexpected keyword argument 'type'"
+            if "SupadataError" in str(te) and "__init__" in str(te):
+                logger.error(f"Supadata: Library error (version mismatch?) - {metadata}: {te}")
+                return None
+            raise
         if hasattr(transcript_response, "content") and transcript_response.content:
             segments = transcript_response.content
             lang_received = getattr(transcript_response, "lang", "") or ""
@@ -814,6 +822,7 @@ def fetch_transcript(
         exc_str = str(exc).lower()
         # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
         is_quota_error = False
+        http_status = None
         if isinstance(exc, SupadataError):
             is_quota_error = any(
                 kw in (exc.error or "").lower()
@@ -821,7 +830,11 @@ def fetch_transcript(
             )
         elif isinstance(exc, requests.exceptions.HTTPError):
             status = getattr(getattr(exc, "response", None), "status_code", None)
+            http_status = status
             is_quota_error = status == 402
+
+        # Detect service unavailability (5xx errors) — don't give up after 12 hours
+        is_service_error = http_status in (500, 502, 503, 504)
 
         # Detect permanent "no transcript" from SupadataError codes.
         is_permanent_no_transcript = isinstance(exc, SupadataError) and (
@@ -837,6 +850,8 @@ def fetch_transcript(
             )
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
+        elif is_service_error:
+            logger.warning(f"Supadata: Service error (HTTP {http_status}) — will retry - {metadata}")
         elif is_permanent_no_transcript:
             error_code = getattr(exc, "error", "") or ""
             if "forbidden" in error_code:
