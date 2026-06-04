@@ -2413,8 +2413,9 @@ _QUEUE_MAX_RETRIES = 10
 
 # Transcript retry schedule: seconds from queued_at for each successive attempt.
 # Attempt 0 → T+5 min (first check, shortly after notification).
-# Attempts 1–12 → T+1h through T+12h (hourly, anchored to the original notification time).
+# Attempts 1–16 → T+1h through T+24h (spaced over 24 hours).
 # After _TRANSCRIPT_MAX_ATTEMPTS failures the video is marked permanently no-transcript.
+# This allows captions to appear later and services (like Supadata) to recover.
 _TRANSCRIPT_RETRY_OFFSETS: tuple[int, ...] = (
     5 * 60,       # attempt 0:  T+5 min  (first check)
     1 * 3600,     # attempt 1:  T+1 hr
@@ -2427,8 +2428,12 @@ _TRANSCRIPT_RETRY_OFFSETS: tuple[int, ...] = (
     8 * 3600,     # attempt 8:  T+8 hr
     9 * 3600,     # attempt 9:  T+9 hr
     10 * 3600,    # attempt 10: T+10 hr
-    11 * 3600,    # attempt 11: T+11 hr
-    12 * 3600,    # attempt 12: T+12 hr  (final; failure → permanent)
+    12 * 3600,    # attempt 11: T+12 hr
+    15 * 3600,    # attempt 12: T+15 hr
+    18 * 3600,    # attempt 13: T+18 hr
+    21 * 3600,    # attempt 14: T+21 hr
+    24 * 3600,    # attempt 15: T+24 hr
+    30 * 3600,    # attempt 16: T+30 hr  (final; failure → permanent)
 )
 _TRANSCRIPT_MAX_ATTEMPTS: int = len(_TRANSCRIPT_RETRY_OFFSETS)  # 13
 
@@ -3199,7 +3204,9 @@ def _wsb_processor_thread(config: dict) -> None:
             continue
 
         try:
-            channels = _read_channels()
+            all_channels = _read_channels()
+            # Only process enabled channels; disabled channels' queued videos are dropped
+            channels = [ch for ch in all_channels if not ch.get("disabled", False)]
             channel_map = {ch["channel_id"]: ch for ch in channels}
 
             # Drain the queue aggressively while service is healthy.
