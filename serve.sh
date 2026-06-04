@@ -19,4 +19,4 @@ except Exception:
 " 2>/dev/null)
 PORT=${PORT:-8000}
 
-exec gunicorn -w 4 --timeout 30 -b "0.0.0.0:${PORT}" 'web.app:app'
+exec gunicorn -w 1 --timeout 30 -b "0.0.0.0:${PORT}" 'web.app:app'
