@@ -475,33 +475,52 @@ function scrollToFocused() {
         tags: [document.querySelector('article').dataset.channelId || ''] // channel as tag
       };
 
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 10000);
+
       fetch('/api/lobotomy-push', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: ctrl.signal
       })
         .then(function (r) {
+          clearTimeout(timer);
           if (!r.ok) {
-            return r.json().then(function (err) {
-              throw new Error(err.error || 'HTTP ' + r.status);
-            }).catch(function () {
-              throw new Error('HTTP ' + r.status);
+            return r.json().catch(function () {
+              return { error: 'HTTP ' + r.status };
+            }).then(function (err) {
+              throw new Error(err.error || 'Server error');
             });
           }
           return r.json();
         })
         .then(function (data) {
-          btn.textContent = '✓ Lobotomized';
+          if (data.duplicate) {
+            btn.textContent = '✓ Already in Lobotomy';
+          } else if (data.fetch_failed) {
+            btn.textContent = '✓ Saved (will index)';
+          } else {
+            btn.textContent = '✓ Sent to Lobotomy';
+          }
           setTimeout(function () {
             btn.disabled = false;
             btn.textContent = '🧠 Lobotomize';
           }, 2000);
         })
         .catch(function (err) {
-          btn.textContent = 'Failed: ' + err.message;
+          clearTimeout(timer);
+          var msg = (err && err.message) ? err.message : String(err);
+          if (err && err.name === 'AbortError') {
+            msg = 'Timeout — is Lobotomy running?';
+          } else if (msg === 'Failed to fetch') {
+            msg = 'Could not reach Lobotomy';
+          }
+          btn.textContent = '❌ ' + msg;
           btn.disabled = false;
+          // Don't revert on error, keep error message visible
         });
     });
   }

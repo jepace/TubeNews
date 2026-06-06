@@ -3051,6 +3051,10 @@ def api_lobotomy_push():
         return jsonify({"error": "Lobotomy not configured for this account"}), 400
 
     try:
+        # Validate URL format
+        if not lobotomy_url.startswith(("http://", "https://")):
+            return jsonify({"error": "Invalid Lobotomy URL (must start with http/https)"}), 400
+
         # Build payload for Lobotomy API
         payload = {"source": "TubeNews"}
         if data.get("title"):
@@ -3072,10 +3076,30 @@ def api_lobotomy_push():
             timeout=10,
         )
         resp.raise_for_status()
-        return jsonify(resp.json())
+        result = resp.json()
+        # Pass through Lobotomy's response (may include duplicate, fetch_failed, etc.)
+        return jsonify(result)
+    except requests.Timeout:
+        logger.warning(f"Lobotomy push timeout: {lobotomy_url}")
+        return jsonify({"error": "Lobotomy server timeout"}), 504
+    except requests.ConnectionError as e:
+        logger.error(f"Lobotomy connection error: {lobotomy_url}: {e}")
+        return jsonify({"error": "Could not reach Lobotomy server"}), 502
+    except requests.HTTPError as e:
+        if e.response.status_code == 401:
+            logger.error(f"Lobotomy authentication failed for user {current_user.get_id()}")
+            return jsonify({"error": "Lobotomy authentication failed (check API key)"}), 401
+        elif e.response.status_code == 403:
+            return jsonify({"error": "Lobotomy permission denied"}), 403
+        else:
+            logger.error(f"Lobotomy push error ({e.response.status_code}): {e}")
+            return jsonify({"error": f"Lobotomy error: {e.response.status_code}"}), 502
     except requests.RequestException as e:
         logger.error(f"Lobotomy push failed: {e}")
-        return jsonify({"error": str(e)}), 502
+        return jsonify({"error": "Request failed"}), 502
+    except ValueError as e:
+        logger.error(f"Lobotomy response parsing error: {e}")
+        return jsonify({"error": "Invalid response from Lobotomy"}), 502
 
 
 # ---------------------------------------------------------------------------
