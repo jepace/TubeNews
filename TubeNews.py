@@ -2980,6 +2980,11 @@ def _wsb_receiver_thread(config: dict) -> None:
                 pub_el   = entry.find("atom:published", _YT_NS)
                 sched_el = entry.find("yt:scheduledStartTime", _YT_NS)
                 if vid_el is not None and ch_el is not None:
+                    # Only accept pushes for enabled channels (reject disabled/unknown)
+                    channel_id = ch_el.text.strip()
+                    if channel_id not in channel_by_id:
+                        logger.debug(f"WebSub: rejecting push for unknown/disabled channel {channel_id}")
+                        continue
                     pub_raw = (pub_el.text or "").strip() if pub_el is not None else ""
                     # Normalize date to YYYY-MM-DD format (truncate full ISO timestamp)
                     pub_date = pub_raw.split("T")[0] if pub_raw else ""
