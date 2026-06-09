@@ -4325,13 +4325,23 @@ def _send_ntfy(topic: str, total_stories: int, feed_results: list[FeedResult], s
         f"https://ntfy.sh/{topic}",
         data=message.encode(),
         method="POST",
-        headers={"Title": "TubeNews", "Priority": "default"},
+        headers={"Title": _ntfy_encode_header("TubeNews"), "Priority": "default"},
     )
     try:
         _urllib_request.urlopen(req, timeout=10)
         logger.debug(f"ntfy.sh/{topic}: notification sent")
     except Exception as exc:
         logger.warning(f"ntfy.sh/{topic}: notification failed: {exc}")
+
+
+def _ntfy_encode_header(value: str) -> str:
+    """Encode a header value for ntfy using RFC 5987 if it contains non-Latin-1 characters."""
+    try:
+        value.encode("latin-1")
+        return value  # Pure Latin-1, no encoding needed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        from urllib.parse import quote
+        return f"=?utf-8?b?{__import__('base64').b64encode(value.encode()).decode()}?="
 
 
 def _send_ntfy_alert(topic: str, title: str, message: str, priority: str = "high") -> None:
@@ -4342,7 +4352,7 @@ def _send_ntfy_alert(topic: str, title: str, message: str, priority: str = "high
         f"https://ntfy.sh/{topic}",
         data=message.encode(),
         method="POST",
-        headers={"Title": title, "Priority": priority},
+        headers={"Title": _ntfy_encode_header(title), "Priority": priority},
     )
     try:
         _urllib_request.urlopen(req, timeout=5)
