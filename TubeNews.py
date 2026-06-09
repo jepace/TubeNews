@@ -3663,6 +3663,8 @@ def _run_daemon(config: dict) -> None:
 
     all_channels = _read_channels()
     channels = [ch for ch in all_channels if not ch.get("disabled", False)]
+    disabled_channels = [ch for ch in all_channels if ch.get("disabled", False)]
+
     if not channels:
         logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
         return
@@ -3672,6 +3674,13 @@ def _run_daemon(config: dict) -> None:
         ok = _wsb_subscribe(ch["channel_id"], config)
         status = "OK" if ok else "skipped (not configured or failed)"
         logger.info(f"  {ch['channel_name']}: {status}")
+
+    # Unsubscribe from disabled channels
+    if disabled_channels:
+        logger.info(f"TubeNews daemon: unsubscribing {len(disabled_channels)} disabled channel(s) from WebSub...")
+        for ch in disabled_channels:
+            _wsb_unsubscribe(ch["channel_id"], config)
+            logger.info(f"  {ch['channel_name']}: unsubscribed")
 
     t1 = threading.Thread(target=_wsb_receiver_thread, args=(config,), daemon=True)
     t2 = threading.Thread(target=_wsb_processor_thread, args=(config,), daemon=True)
