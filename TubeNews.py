@@ -3258,7 +3258,13 @@ def _wsb_processor_thread(config: dict) -> None:
 
                 feed_cfg = channel_map.get(cid)
                 if not feed_cfg:
-                    # Channel removed from config — discard the entry.
+                    # Channel not in enabled channels — check if it's disabled or removed
+                    all_channel_ids = {ch["channel_id"]: ch for ch in all_channels}
+                    if cid in all_channel_ids and all_channel_ids[cid].get("disabled"):
+                        # Channel is disabled — drop silently but log it
+                        ch_name = all_channel_ids[cid].get("channel_name", "?")
+                        title = entry.get("title", "[unknown]")
+                        logger.info(f"WebSub: Skipping disabled channel - {vid}: {ch_name}: {title}")
                     resolved_ids.add(vid)
                     continue
 
