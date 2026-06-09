@@ -2921,7 +2921,9 @@ def _wsb_receiver_thread(config: dict) -> None:
     """
     port = _safe_int(config.get("websub_daemon_port", 8675), 8675)
     secret = config.get("websub_secret", "").encode()
-    channels = _read_channels()
+    all_channels = _read_channels()
+    # Only listen for pushes from enabled channels
+    channels = [ch for ch in all_channels if not ch.get("disabled", False)]
     known_topics = {_wsb_topic(ch["channel_id"]): ch["channel_id"] for ch in channels}
     channel_by_id = {ch["channel_id"]: ch["channel_name"] for ch in channels}
 
