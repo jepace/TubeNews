@@ -6,7 +6,7 @@ Start the server (always use gunicorn — never python web/app.py):
 With HTTPS (behind nginx/Caddy):
     TUBENEWS_HTTPS=true ./serve.sh
 
-The secret key is read from the "tubenews_key" field in TubeNews.json.
+The secret key is read from the "tubenews_key" field in config.json.
 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'
 """
 
@@ -85,7 +85,7 @@ from TubeNews import (  # noqa: E402
     _fmt_no_leading_zeros,
 )
 
-CONFIG_FILE = BASE_DIR / "TubeNews.json"
+CONFIG_FILE = BASE_DIR / "config.json"
 USERS_ROOT = STATE_ROOT / "users"
 LOCK_FILE = STATE_ROOT / ".tubenews.lock"
 TUBENEWS_PY = BASE_DIR / "TubeNews.py"
@@ -115,7 +115,7 @@ except Exception:
     _port = 8000
 if not secret_key:
     raise RuntimeError(
-        "'tubenews_key' is not set in TubeNews.json. "
+        "'tubenews_key' is not set in config.json. "
         "Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'"
     )
 app.config["SECRET_KEY"] = secret_key
@@ -433,7 +433,7 @@ def _save_channels(feeds: list[FeedConfig]) -> None:
 def _load_channels() -> list[FeedConfig]:
     """Return configured channels, reading from ``state/channels.json``.
 
-    Falls back to ``feeds[]`` in ``TubeNews.json`` for backward compatibility
+    Falls back to ``feeds[]`` in ``config.json`` for backward compatibility
     with installs that have not yet been migrated.
     """
     channels_file = STATE_ROOT / "channels.json"

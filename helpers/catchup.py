@@ -37,11 +37,11 @@ import requests
 
 # ---------------------------------------------------------------------------
 # Resolve paths the same way TubeNews.py does so content_dir/state_dir
-# settings in TubeNews.json are respected.
+# settings in config.json are respected.
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_FILE = BASE_DIR / "TubeNews.json"
+CONFIG_FILE = BASE_DIR / "config.json"
 
 sys.path.insert(0, str(BASE_DIR))
 from tubenews_utils import resolve_roots, slugify  # noqa: E402
@@ -60,7 +60,7 @@ _YT_RSS_NS = {
 
 
 def _read_channels(config: dict) -> list[dict]:
-    """Return configured channels from state/channels.json or TubeNews.json feeds[]."""
+    """Return configured channels from state/channels.json or config.json feeds[]."""
     channels_file = STATE_ROOT / "channels.json"
     if channels_file.exists():
         try:
@@ -85,7 +85,7 @@ def catchup() -> None:
     try:
         config = json.loads(CONFIG_FILE.read_text())
     except FileNotFoundError:
-        sys.exit(f"Error: {CONFIG_FILE} not found — copy TubeNews.json.sample first.")
+        sys.exit(f"Error: {CONFIG_FILE} not found — copy config.json.sample first.")
     except json.JSONDecodeError as exc:
         sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
 

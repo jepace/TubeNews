@@ -41,7 +41,7 @@ would require restructuring that state propagation.
 
 ~~The current storage model is intentionally simple:
 
-- **Feeds** are stored as a JSON array in `TubeNews.json` under `feeds`.
+- **Feeds** are stored as a JSON array in `config.json` under `feeds`.
   This is the operator config file — read directly by the CLI tool at startup.
 - **Users** are stored as individual `content/_users/<uuid>/user.json` files.
   Discovery happens by globbing `content/_users/*/user.json` at runtime.
@@ -74,17 +74,17 @@ that maps email → uuid. The per-user files stay as-is; the index just speeds u
 `_find_user_by_email()`. Rebuild the index on registration, deletion, and email
 change. No schema migration needed for existing user directories.~~ **Done — see Completed Items.**
 
-~~**If `TubeNews.json` becomes unwieldy** (many feeds + many server config keys),
+~~**If `config.json` becomes unwieldy** (many feeds + many server config keys),
 consider splitting it:
 
-- `TubeNews.json` — server/runtime config only: API keys, model name, base URL,
+- `config.json` — server/runtime config only: API keys, model name, base URL,
   port, admin emails, rate limits, etc.
 - `feeds.json` — the channel list only.
 
 Both files would live in the project root. `TubeNews.py` and `web/app.py` would
 need small updates to load from two files. This separation makes it easier to
 check `feeds.json` into version control (no secrets) while keeping
-`TubeNews.json` gitignored.~~ **Done — see Completed Items (channels.json migration).**
+`config.json` gitignored.~~ **Done — see Completed Items (channels.json migration).**
 
 ---
 
@@ -162,12 +162,12 @@ and scraper create `state/` on first run; no data in `content/` needs to move
 
 ### channels.json migration (April 2026)
 
-Channel configuration moved from `feeds[]` in `TubeNews.json` to
+Channel configuration moved from `feeds[]` in `config.json` to
 `state/channels.json`. `_save_channels()` in `web/app.py` writes atomically to
 `state/channels.json`. `_read_channels(config)` in `TubeNews.py` and
 `_load_channels()` in `web/app.py` both read from `state/channels.json` with
 fallback to `config["feeds"]` for migration compatibility. `channels.json.sample`
-added to the repo. The `feeds[]` key in `TubeNews.json` is no longer written by
+added to the repo. The `feeds[]` key in `config.json` is no longer written by
 the application but continues to be read as a fallback until operators migrate.
 
 ### WebSub `--daemon` mode (April 2026)

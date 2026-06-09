@@ -41,7 +41,7 @@ from pathlib import Path
 
 # Resolve paths the same way TubeNews.py does
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_FILE = BASE_DIR / "TubeNews.json"
+CONFIG_FILE = BASE_DIR / "config.json"
 
 sys.path.insert(0, str(BASE_DIR))
 from tubenews_utils import resolve_roots  # noqa: E402

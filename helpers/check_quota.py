@@ -12,7 +12,7 @@ Usage::
 If every model fails, the most likely cause is that the Google Cloud project
 associated with this key has exhausted its free quota for the billing period.
 Create a new project in Google AI Studio, generate a fresh key, and update
-``gemini_api_key`` in ``TubeNews.json``.
+``gemini_api_key`` in ``config.json``.
 """
 
 import json
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import requests
 
-CONFIG_FILE = Path(__file__).resolve().parent.parent / "TubeNews.json"
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "config.json"
 
 # Models most likely to have free-tier quota, checked in preference order.
 # Update this list if Google adds or removes models.
@@ -41,7 +41,7 @@ def test_models(api_key: str) -> str | None:
     """Send a minimal prompt to each model and return the first that responds.
 
     Args:
-        api_key: Gemini API key read from ``TubeNews.json``.
+        api_key: Gemini API key read from ``config.json``.
 
     Returns:
         The name of the first working model, or ``None`` if all fail.
@@ -78,13 +78,13 @@ def main() -> None:
     try:
         config = json.loads(CONFIG_FILE.read_text())
     except FileNotFoundError:
-        sys.exit(f"Error: {CONFIG_FILE} not found — copy TubeNews.json.sample first.")
+        sys.exit(f"Error: {CONFIG_FILE} not found — copy config.json.sample first.")
     except json.JSONDecodeError as exc:
         sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
 
     api_key = config.get("gemini_api_key", "")
     if not api_key:
-        sys.exit("Error: gemini_api_key is not set in TubeNews.json.")
+        sys.exit("Error: gemini_api_key is not set in config.json.")
 
     winner = test_models(api_key)
 
@@ -93,14 +93,14 @@ def main() -> None:
         print(f"\n[✓] Use model: {winner!r}")
         if current and current != winner:
             print(
-                f"    Note: TubeNews.json currently has gemini_model: {current!r}.\n"
+                f"    Note: config.json currently has gemini_model: {current!r}.\n"
                 f"    Update it to {winner!r} if that model is no longer working."
             )
     else:
         print(
             "\n[✗] All models returned errors.\n"
             "    Go to https://aistudio.google.com, create a new project,\n"
-            "    generate a fresh API key, and update gemini_api_key in TubeNews.json."
+            "    generate a fresh API key, and update gemini_api_key in config.json."
         )
 
 

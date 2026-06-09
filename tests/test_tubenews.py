@@ -1039,7 +1039,7 @@ def test_old_stories_appear_in_both_feed_and_blog(tmp_path, monkeypatch):
 def test_resolve_content_dir_absolute(tmp_path):
     """An absolute content_dir is used as-is for STORAGE_ROOT."""
     custom = tmp_path / "my_content"
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"content_dir": str(custom)}))
     storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == custom
@@ -1047,7 +1047,7 @@ def test_resolve_content_dir_absolute(tmp_path):
 
 def test_resolve_content_dir_relative(tmp_path):
     """A relative content_dir is resolved against base_dir."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"content_dir": "subdir/content"}))
     storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == (tmp_path / "subdir" / "content").resolve()
@@ -1055,7 +1055,7 @@ def test_resolve_content_dir_relative(tmp_path):
 
 def test_resolve_content_dir_absent_defaults_to_base_content(tmp_path):
     """When content_dir is omitted, STORAGE_ROOT defaults to base_dir/content."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
     storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == tmp_path / "content"
@@ -1063,7 +1063,7 @@ def test_resolve_content_dir_absent_defaults_to_base_content(tmp_path):
 
 def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
     """An explicit empty string for content_dir is treated the same as absent."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"content_dir": ""}))
     storage_root, *_ = _resolve_early_config(cfg, tmp_path)
     assert storage_root == tmp_path / "content"
@@ -1071,7 +1071,7 @@ def test_resolve_content_dir_empty_string_defaults_to_base_content(tmp_path):
 
 def test_resolve_request_timeout_custom(tmp_path):
     """A configured request_timeout is returned as an int."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"request_timeout": 30}))
     _, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert timeout == 30
@@ -1079,14 +1079,14 @@ def test_resolve_request_timeout_custom(tmp_path):
 
 def test_resolve_request_timeout_absent_defaults_to_15(tmp_path):
     """When request_timeout is omitted the default of 15 is returned."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"gemini_api_key": "x"}))
     _, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert timeout == 15
 
 
 def test_resolve_falls_back_on_missing_config_file(tmp_path):
-    """If TubeNews.json does not exist both defaults are returned without raising."""
+    """If config.json does not exist both defaults are returned without raising."""
     missing = tmp_path / "no_such_file.json"
     storage_root, _, timeout = _resolve_early_config(missing, tmp_path)
     assert storage_root == tmp_path / "content"
@@ -1095,7 +1095,7 @@ def test_resolve_falls_back_on_missing_config_file(tmp_path):
 
 def test_resolve_falls_back_on_invalid_json(tmp_path):
     """Corrupt JSON must not crash — defaults are returned instead."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text("{ NOT VALID JSON }")
     storage_root, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert storage_root == tmp_path / "content"
@@ -1104,7 +1104,7 @@ def test_resolve_falls_back_on_invalid_json(tmp_path):
 
 def test_resolve_request_timeout_is_int_not_string(tmp_path):
     """request_timeout must be returned as int even if stored as a JSON number."""
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"request_timeout": 45}))
     _, _, timeout = _resolve_early_config(cfg, tmp_path)
     assert isinstance(timeout, int)
@@ -1131,7 +1131,7 @@ def test_main_body_rejects_duplicate_channel_ids(tmp_path, monkeypatch, caplog):
         ],
     }
 
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps(cfg))
 
     supadata_called = []
@@ -2453,7 +2453,7 @@ def test_read_channels_reads_state_channels_json(tmp_path, monkeypatch):
     """_read_channels returns channels from state/channels.json when it exists."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
-    monkeypatch.setattr(TubeNews, "CONFIG_FILE", tmp_path / "TubeNews.json")
+    monkeypatch.setattr(TubeNews, "CONFIG_FILE", tmp_path / "config.json")
     (tmp_path / "channels.json").write_text(json.dumps([
         {"channel_id": "UCaaa", "channel_name": "Test Channel", "focus": "housing"},
     ]))
@@ -2463,10 +2463,10 @@ def test_read_channels_reads_state_channels_json(tmp_path, monkeypatch):
 
 
 def test_read_channels_falls_back_to_tubenews_json(tmp_path, monkeypatch):
-    """_read_channels falls back to feeds[] in TubeNews.json when state/channels.json absent."""
+    """_read_channels falls back to feeds[] in config.json when state/channels.json absent."""
     import TubeNews
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path / "state")
-    cfg = tmp_path / "TubeNews.json"
+    cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"feeds": [
         {"channel_id": "UCbbb", "channel_name": "Fallback Channel", "focus": "transit"},
     ]}))
@@ -2498,7 +2498,7 @@ def test_reload_config_from_disk_detects_changes(tmp_path, monkeypatch):
         "websub_check_interval_minutes": 10,
     })
 
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
         "gemini_api_key": "new_key",
         "supadata_api_key": "supa_key",
@@ -2533,7 +2533,7 @@ def test_reload_config_from_disk_detects_changes(tmp_path, monkeypatch):
 
 
 def test_reload_config_graceful_on_invalid_json(tmp_path, monkeypatch):
-    """Reload keeps old config when TubeNews.json is invalid JSON."""
+    """Reload keeps old config when config.json is invalid JSON."""
     import TubeNews
 
     # Set up initial config
@@ -2542,7 +2542,7 @@ def test_reload_config_graceful_on_invalid_json(tmp_path, monkeypatch):
         "supadata_api_key": "old_supa",
     }
 
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text("{invalid json")
 
     # Mock logger to capture warnings
@@ -2555,7 +2555,7 @@ def test_reload_config_graceful_on_invalid_json(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews.logger, "warning", mock_warning)
 
     # In practice, this is tested via the daemon integration test
-    # where we edit TubeNews.json while the daemon is running
+    # where we edit config.json while the daemon is running
 
 
 def test_reload_config_validates_required_keys(tmp_path, monkeypatch):
@@ -2567,7 +2567,7 @@ def test_reload_config_validates_required_keys(tmp_path, monkeypatch):
         "supadata_api_key": "old_supa",
     }
 
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
         "gemini_api_key": "new_key",
         # Missing supadata_api_key

@@ -2,7 +2,7 @@
 # Start the TubeNews web server with gunicorn.
 #
 # Usage:
-#   ./serve.sh              — listens on 0.0.0.0 at the port in TubeNews.json (default 8000)
+#   ./serve.sh              — listens on 0.0.0.0 at the port in config.json (default 8000)
 #   TUBENEWS_HTTPS=true ./serve.sh   — also marks session cookies Secure (use behind HTTPS)
 #
 # To keep it running after logout, start it under your preferred process manager,
@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 PORT=$(python3 -c "
 import json, sys
 try:
-    print(json.load(open('TubeNews.json')).get('port', 8000))
+    print(json.load(open('config.json')).get('port', 8000))
 except Exception:
     print(8000)
 " 2>/dev/null)

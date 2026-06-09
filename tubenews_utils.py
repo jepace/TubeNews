@@ -51,7 +51,7 @@ def resolve_roots(config_file: Path, base_dir: Path) -> tuple[Path, Path]:
     when the keys are absent.
 
     Args:
-        config_file: Path to ``TubeNews.json``.
+        config_file: Path to ``config.json``.
         base_dir:    Directory used to resolve relative paths (typically the
                      project root, i.e. the parent of ``TubeNews.py``).
 

@@ -22,7 +22,7 @@ Pipeline: YouTube RSS → Supadata transcripts → Gemini stories (`.md`) → RS
 | `web/static/style.css` | All CSS; CSS vars for dark/light mode |
 | `state/channels.json` | Channel list (managed via admin UI or directly; replaces `feeds[]` in JSON) |
 | `state/users/<uuid>/user.json` | Per-user account, prefs, subscriptions, digest + podcast state |
-| `TubeNews.json` | Runtime config (gitignored; copy from `.sample`) |
+| `config.json` | Runtime config (gitignored; copy from `.sample`) |
 
 ---
 
@@ -35,7 +35,7 @@ Pipeline: YouTube RSS → Supadata transcripts → Gemini stories (`.md`) → RS
 - **WebSub daemon (default mode).** YouTube pushes new video notifications; processor thread wakes every ~1 min and works through `state/queue/push_queue.json`. Use `--single-run` for cron-style use.
 - **AI backoff.** Gemini 429 or 503 → `False` return from `call_gemini_api` → 1-hour backoff. `retry_count` is NOT incremented during backoff (only genuine per-video Gemini failures count).
 - **Transcript caching.** `transcript.txt` existence skips Supadata. Delete it to re-fetch.
-- **Config hot-reload.** Most `TubeNews.json` keys reload each processor cycle. Immutable: `websub_callback_url`, `websub_secret`, `websub_daemon_port`. Reloadable podcast keys: `tts_provider`, `tts_api_key`, `tts_voice_id`, `tts_language_code`, `podcast_generation_hour`, `podcast_retention_days`.
+- **Config hot-reload.** Most `config.json` keys reload each processor cycle. Immutable: `websub_callback_url`, `websub_secret`, `websub_daemon_port`. Reloadable podcast keys: `tts_provider`, `tts_api_key`, `tts_voice_id`, `tts_language_code`, `podcast_generation_hour`, `podcast_retention_days`.
 
 ---
 

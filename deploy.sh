@@ -4,7 +4,7 @@
 # Run this from the project root after git pull:
 #   ./deploy.sh
 #
-# Preserves TubeNews.json, content/, and anything else already in the
+# Preserves config.json, content/, and anything else already in the
 # destination that isn't part of the codebase.
 #
 # On FreeBSD: also installs rc.d scripts and fixes state directory ownership.
@@ -35,7 +35,7 @@ fi
 echo "Deploying $SRC → $DEST"
 
 rsync -av --delete \
-    --exclude='TubeNews.json' \
+    --exclude='config.json' \
     --exclude='content/' \
     --exclude='state/' \
     --exclude='deploy.sh' \
@@ -87,10 +87,10 @@ fi
 
 echo "Done."
 
-# Remind operator to create TubeNews.json if this is a first deploy
-if [ ! -f "$DEST/TubeNews.json" ]; then
+# Remind operator to create config.json if this is a first deploy
+if [ ! -f "$DEST/config.json" ]; then
     echo ""
-    echo "NOTE: TubeNews.json not found in destination."
+    echo "NOTE: config.json not found in destination."
     echo "      Copy and edit the sample to get started:"
-    echo "        cp $DEST/TubeNews.json.sample $DEST/TubeNews.json"
+    echo "        cp $DEST/config.json.sample $DEST/config.json"
 fi

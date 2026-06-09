@@ -13,7 +13,7 @@ Usage::
     python3 helpers/dump_channel_html.py [channel_id [tab]]
 
 ``tab`` is ``videos`` (default) or ``streams``.  If ``channel_id`` is
-omitted, reads the first channel from ``TubeNews.json``.  When the warning
+omitted, reads the first channel from ``config.json``.  When the warning
 log tells you which channel and tab triggered the error, copy-paste the
 suggested command directly — it now includes both.
 
@@ -43,7 +43,7 @@ HEADERS = {
     )
 }
 
-CONFIG_FILE = Path(__file__).resolve().parent.parent / "TubeNews.json"
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "config.json"
 
 
 def find_video_renderers(obj: object, found: list | None = None) -> list[dict]:
@@ -81,13 +81,13 @@ def main() -> None:
         try:
             config = json.loads(CONFIG_FILE.read_text())
         except FileNotFoundError:
-            sys.exit(f"Error: {CONFIG_FILE} not found — copy TubeNews.json.sample first.")
+            sys.exit(f"Error: {CONFIG_FILE} not found — copy config.json.sample first.")
         except json.JSONDecodeError as exc:
             sys.exit(f"Error: could not parse {CONFIG_FILE}: {exc}")
 
         feeds = config.get("feeds", [])
         if not feeds:
-            sys.exit("No feeds configured in TubeNews.json — nothing to fetch.")
+            sys.exit("No feeds configured in config.json — nothing to fetch.")
 
         channel_id = feeds[0]["channel_id"]
         channel_name = feeds[0]["channel_name"]

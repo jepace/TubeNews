@@ -12,7 +12,7 @@ Workflow for each configured channel (feed):
 Run:
     python TubeNews.py [--debug]
 
-Configuration lives in TubeNews.json (see TubeNews.json.sample).
+Configuration lives in config.json (see config.json.sample).
 """
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ from supadata import Supadata, SupadataError
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = BASE_DIR / "TubeNews.json"
+CONFIG_FILE = BASE_DIR / "config.json"
 
 from tubenews_utils import resolve_roots  # noqa: E402
 
@@ -62,7 +62,7 @@ def _resolve_early_config(config_file: Path, base_dir: Path) -> tuple[Path, Path
     is missing.
 
     Args:
-        config_file: Path to TubeNews.json.
+        config_file: Path to config.json.
         base_dir:    Directory used to resolve relative path keys.
     """
     storage_root, state_root = resolve_roots(config_file, base_dir)
@@ -82,7 +82,7 @@ def _validate_config(config: dict) -> None:
     This prevents confusing KeyError crashes later.
 
     Args:
-        config: Loaded TubeNews.json configuration dict.
+        config: Loaded config.json configuration dict.
 
     Raises:
         ValueError: If required keys are missing or invalid.
@@ -102,7 +102,7 @@ def _validate_config(config: dict) -> None:
         raise ValueError(
             f"TubeNews: Missing required configuration keys in {CONFIG_FILE}:\n"
             + "\n".join(missing) + "\n"
-            "Copy TubeNews.json.sample and fill in your API keys."
+            "Copy config.json.sample and fill in your API keys."
         )
 
     # Validate API keys are strings and non-empty
@@ -288,7 +288,7 @@ class VideoInfo(TypedDict):
 
 
 class FeedConfig(TypedDict):
-    """Per-channel configuration block from ``TubeNews.json``."""
+    """Per-channel configuration block from ``config.json``."""
     channel_id: str
     channel_name: str
     focus: str
@@ -1059,7 +1059,7 @@ def call_gemini_api(
             # Detect config errors (invalid model name) vs other errors
             if response.status_code == 404 and "models/" in err_msg and "is not found" in err_msg:
                 logger.error(
-                    f"Gemini: CONFIG ERROR — invalid gemini_model in TubeNews.json. {err_msg} - {metadata}"
+                    f"Gemini: CONFIG ERROR — invalid gemini_model in config.json. {err_msg} - {metadata}"
                 )
             else:
                 logger.error(f"Gemini: HTTP {response.status_code}: {err_msg}")
@@ -1173,7 +1173,7 @@ def rebuild_feed(feed_dir: Path, feed_cfg: FeedConfig) -> None:
 
     Args:
         feed_dir:  Root directory for this channel (e.g., ``archive/my_channel``).
-        feed_cfg:  The feed's config dict from ``TubeNews.json`` (needs
+        feed_cfg:  The feed's config dict from ``config.json`` (needs
                    ``channel_name``, ``channel_id``, and ``focus``).
     """
     safe_name = slugify(feed_cfg["channel_name"])
@@ -1657,7 +1657,7 @@ def _collect_channel_focuses(channel_id: str, feed_focus: str) -> list[tuple[str
     the focus came from the feed-level config and is unrestricted (all users
     see the resulting stories).
 
-    Starts with *feed_focus* from ``TubeNews.json`` (unrestricted), then
+    Starts with *feed_focus* from ``config.json`` (unrestricted), then
     appends each unique user focus.  When multiple users share the same focus
     string their UUIDs are merged into a single entry so Gemini is only called
     once.  If a user focus matches the feed-level focus it is absorbed into the
@@ -2230,7 +2230,7 @@ def _read_channels() -> list[FeedConfig]:
     """Return the list of configured channels.
 
     Reads ``state/channels.json`` first.  Falls back to the ``feeds`` key in
-    ``TubeNews.json`` for backward compatibility with installs that have not
+    ``config.json`` for backward compatibility with installs that have not
     yet been migrated.  Returns ``[]`` when neither source can be read.
     """
     channels_file = STATE_ROOT / "channels.json"
@@ -2239,7 +2239,7 @@ def _read_channels() -> list[FeedConfig]:
             return json.loads(channels_file.read_text())
         except Exception as exc:
             logger.warning(f"TubeNews: Could not read state/channels.json: {exc}")
-    # Fallback: read feeds[] from TubeNews.json (pre-migration layout).
+    # Fallback: read feeds[] from config.json (pre-migration layout).
     try:
         return json.loads(CONFIG_FILE.read_text()).get("feeds", [])
     except Exception:
@@ -3088,7 +3088,7 @@ def _wsb_processor_thread(config: dict) -> None:
     this phase; transcript fetching (Phase 1) continues unimpeded.
 
     Other tasks each cycle:
-    1. **Config reload:** checks TubeNews.json for changes and applies them.
+    1. **Config reload:** checks config.json for changes and applies them.
     2. **Renewal check:** re-subscribes channels whose WebSub lease expires
        within the next 24 hours.
     3. **Orphan recovery (once per day):** scans the content archive for meeting
@@ -3134,7 +3134,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 logger.warning(
                     "websub_min_age_minutes is deprecated and has no effect. "
                     "Per-entry next_try_at scheduling is used instead. "
-                    "You may remove it from TubeNews.json."
+                    "You may remove it from config.json."
                 )
                 _deprecated_min_age_warned = True
             # Make a shallow copy of _daemon_config for use outside the lock
@@ -3500,15 +3500,15 @@ def _wsb_processor_thread(config: dict) -> None:
 
 _daemon_config: dict = {}
 _config_lock = threading.RLock()
-_config_mtime: float = 0.0  # Last known mtime of TubeNews.json
+_config_mtime: float = 0.0  # Last known mtime of config.json
 
 
 def _reload_config_from_disk() -> dict:
-    """Reload TubeNews.json and atomically update daemon config.
+    """Reload config.json and atomically update daemon config.
 
     Only updates values that changed. Logs all changes. On error, keeps old
     values and returns existing config. Uses mtime check to avoid parsing
-    unchanged files — only reloads if TubeNews.json has been modified.
+    unchanged files — only reloads if config.json has been modified.
 
     Thread Safety: The mtime check (_config_mtime) is intentionally not locked
     because it's an optimization, not correctness-critical. The actual
@@ -3519,7 +3519,7 @@ def _reload_config_from_disk() -> dict:
     """
     global _config_mtime
 
-    config_file = Path(__file__).parent / "TubeNews.json"
+    config_file = Path(__file__).parent / "config.json"
 
     # Fast gate: check if file has been modified since last reload
     # NOTE: Reading _config_mtime without lock is safe (benign race); see docstring.
@@ -3536,13 +3536,13 @@ def _reload_config_from_disk() -> dict:
     try:
         fresh: dict = json.loads(config_file.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        logger.warning("Config reload: TubeNews.json not found — keeping old config")
+        logger.warning("Config reload: config.json not found — keeping old config")
         return _daemon_config
     except json.JSONDecodeError as exc:
-        logger.warning(f"Config reload: failed to parse TubeNews.json: {exc} — keeping old config")
+        logger.warning(f"Config reload: failed to parse config.json: {exc} — keeping old config")
         return _daemon_config
     except Exception as exc:
-        logger.warning(f"Config reload: failed to read TubeNews.json: {exc} — keeping old config")
+        logger.warning(f"Config reload: failed to read config.json: {exc} — keeping old config")
         return _daemon_config
 
     # Validate required keys
@@ -3862,7 +3862,7 @@ def _send_daily_digests(config: dict) -> None:
     base_url = config.get("base_url", "").rstrip("/")
     if not base_url:
         logger.warning(
-            "Daily digest: base_url is not set in TubeNews.json"
+            "Daily digest: base_url is not set in config.json"
             " — digest skipped (email links require an absolute URL)"
         )
         return
@@ -4443,7 +4443,7 @@ def _main_body(args) -> None:
     except FileNotFoundError:
         logger.error(
             f"TubeNews: Configuration file not found: {CONFIG_FILE}\n"
-            f"Copy TubeNews.json.sample to {CONFIG_FILE} and fill in your API keys."
+            f"Copy config.json.sample to {CONFIG_FILE} and fill in your API keys."
         )
         return
     except json.JSONDecodeError as exc:

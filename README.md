@@ -19,8 +19,8 @@ TubeNews monitors YouTube channels, transcribes new videos via [Supadata](https:
 pip install -r requirements.txt
 
 # Configure
-cp TubeNews.json.sample TubeNews.json
-# Edit TubeNews.json: add gemini_api_key, supadata_api_key, base_url
+cp config.json.sample config.json
+# Edit config.json: add gemini_api_key, supadata_api_key, base_url
 
 # Start the daemon (subscribes to YouTube push, processes new videos continuously)
 python3 TubeNews.py
@@ -44,10 +44,10 @@ See `SERVING.md` for production deployment (gunicorn, HTTPS, reverse proxy).
 ## Configuration
 
 ```bash
-cp TubeNews.json.sample TubeNews.json
+cp config.json.sample config.json
 ```
 
-Key fields in `TubeNews.json`:
+Key fields in `config.json`:
 
 ```json
 {
@@ -61,7 +61,7 @@ Key fields in `TubeNews.json`:
 }
 ```
 
-Channel configuration lives in `state/channels.json` and is managed via the web UI admin panel. See `TubeNews.json.sample` for all available options including ntfy notifications, email digests (via Resend), and daemon tuning.
+Channel configuration lives in `state/channels.json` and is managed via the web UI admin panel. See `config.json.sample` for all available options including ntfy notifications, email digests (via Resend), and daemon tuning.
 
 ## Running
 
@@ -79,7 +79,7 @@ python3 TubeNews.py --debug
 ./serve.sh
 ```
 
-Most `TubeNews.json` settings are hot-reloaded each processor cycle — no restart needed for API key or tuning changes.
+Most `config.json` settings are hot-reloaded each processor cycle — no restart needed for API key or tuning changes.
 
 ## Storage
 

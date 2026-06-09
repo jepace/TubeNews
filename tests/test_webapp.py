@@ -95,8 +95,8 @@ def _make_user(users_root: Path, name: str, email: str, channel_ids: list[str],
 
 @pytest.fixture(autouse=True)
 def _patch_config(tmp_path, monkeypatch):
-    """Point CONFIG_FILE at a temp file so tests never read the real TubeNews.json."""
-    cfg_path = tmp_path / "TubeNews.json"
+    """Point CONFIG_FILE at a temp file so tests never read the real config.json."""
+    cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({
         "tubenews_key": "test-secret-key-32-bytes-xxxxxxxx",
         "gemini_api_key": "test",

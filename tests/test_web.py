@@ -12,9 +12,9 @@ Focus areas:
   in feed/rss URL fields.  Helper-function unit tests alone are not
   enough — they don't catch bugs in how routes call or pass those helpers.
 
-Import note: app.py reads TubeNews.json at import time for the secret
+Import note: app.py reads config.json at import time for the secret
 key.  We set TUBENEWS_SECRET_KEY in the environment before importing so
-the tests work even without a local TubeNews.json.
+the tests work even without a local config.json.
 """
 
 import json
@@ -267,7 +267,7 @@ def flask_env(tmp_path, monkeypatch):
     """Minimal Flask test environment: one admin user, one regular user.
 
     - WTF_CSRF_ENABLED disabled so POST forms work without tokens.
-    - CONFIG_FILE points to a temp TubeNews.json with no base_url set,
+    - CONFIG_FILE points to a temp config.json with no base_url set,
       so _rss_url/_feed_url must return root-relative paths.
     - USERS_ROOT points to tmp_path/_users.
     - Admin is logged in via the real /login route before yielding.
@@ -276,7 +276,7 @@ def flask_env(tmp_path, monkeypatch):
     _web_app.app.config["WTF_CSRF_ENABLED"] = False
 
     # Config with no base_url — all generated URLs must be relative.
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
         "tubenews_key": "test-secret-key-for-testing-only-xx",
         "admin_users": ["admin@test.com"],
@@ -425,7 +425,7 @@ def test_admin_edit_user_feed_url_uses_configured_base_url(flask_env, tmp_path):
     client, _, target_id = flask_env
     import app as wa
     # Rewrite config with a base_url.
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
         "tubenews_key": "test-secret-key-for-testing-only-xx",
         "admin_users": ["admin@test.com"],
@@ -440,7 +440,7 @@ def test_admin_edit_user_feed_page_url_uses_configured_base_url(flask_env, tmp_p
     """When base_url IS set, the feed page URL must be absolute using that base."""
     client, _, target_id = flask_env
     import app as wa
-    config_file = tmp_path / "TubeNews.json"
+    config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
         "tubenews_key": "test-secret-key-for-testing-only-xx",
         "admin_users": ["admin@test.com"],

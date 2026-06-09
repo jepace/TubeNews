@@ -2,7 +2,7 @@
 
 TubeNews is served via gunicorn. The `web/app.py` Flask app handles user
 accounts, subscriptions, the admin panel, and serves the generated feeds and
-stories. Set `base_url` in `TubeNews.json` to the public root URL so RSS
+stories. Set `base_url` in `config.json` to the public root URL so RSS
 feed links resolve correctly.
 
 ---
@@ -10,7 +10,7 @@ feed links resolve correctly.
 ## Deploying with gunicorn
 
 `serve.sh` wraps gunicorn with the right settings and reads the port from
-`TubeNews.json` automatically.
+`config.json` automatically.
 
 ### 1. Install dependencies
 
@@ -40,7 +40,7 @@ All packages install globally — no virtual environment needed.
 python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
-Copy the output into `TubeNews.json` as `tubenews_key`:
+Copy the output into `config.json` as `tubenews_key`:
 
 ```json
 {
@@ -54,7 +54,7 @@ logs everyone out.
 
 ### 3. Make yourself an admin
 
-Add your email to `TubeNews.json`:
+Add your email to `config.json`:
 
 ```json
 {
@@ -70,7 +70,7 @@ Add your email to `TubeNews.json`:
 ```
 
 Open `http://your-server:8000` in a browser (default port; change with `"port"`
-in `TubeNews.json`). Register an account — your email matches `admin_users` so
+in `config.json`). Register an account — your email matches `admin_users` so
 you will have admin access automatically.
 
 To keep it running after logout:
@@ -83,7 +83,7 @@ For a proper service that survives reboots, see the FreeBSD rc.d section below.
 
 ### 5. Set base_url
 
-Set `base_url` in `TubeNews.json` to the public root of your server
+Set `base_url` in `config.json` to the public root of your server
 (no trailing slash):
 
 ```json
@@ -164,7 +164,7 @@ and `www.tubenews.org` redirects to `https://tubenews.org`.
 
 ### 5. Tell Flask it's behind HTTPS
 
-In the jail's `TubeNews.json`:
+In the jail's `config.json`:
 
 ```json
 {
@@ -298,7 +298,7 @@ all internal state (user accounts, run logs, channel config, lock file, Supadata
 balance cache, WebSub queue and subscription data). This directory is **never
 web-served** — it should live outside your web server's document root.
 
-To override the location, set `state_dir` in `TubeNews.json` (absolute path or
+To override the location, set `state_dir` in `config.json` (absolute path or
 relative to `TubeNews.py`):
 
 ```json
@@ -320,7 +320,7 @@ trigger processing within minutes instead of waiting for the next cron run.
 
 ### Enable
 
-Add these keys to `TubeNews.json`:
+Add these keys to `config.json`:
 
 ```json
 {
@@ -375,7 +375,7 @@ location /youtube/push {
 
 Replace `10.0.0.1` with the jail IP if yours differs. The path in the
 `location` block must match the path component of `websub_callback_url` in
-`TubeNews.json`. The block is already included in
+`config.json`. The block is already included in
 `contrib/nginx/tubenews.org.conf`.
 
 ### Subscriptions
@@ -396,14 +396,14 @@ Subscription state is stored in `state/subscriptions.json` (keyed by
 
 ## Migration from feeds[] to channels.json
 
-Channel configuration has moved from the `feeds[]` array in `TubeNews.json` to
+Channel configuration has moved from the `feeds[]` array in `config.json` to
 `state/channels.json`. The old location is still read as a fallback so existing
 installs continue to work without any manual step.
 
 ### Automatic migration
 
 TubeNews reads `state/channels.json` on startup. If that file does not exist, it
-falls back to `feeds[]` in `TubeNews.json`. No action is required for existing
+falls back to `feeds[]` in `config.json`. No action is required for existing
 deployments — channels appear correctly in the web UI and the scraper runs
 normally.
 
@@ -414,19 +414,19 @@ channel list, make any edit (or add/remove a channel), and save. The web UI
 writes to `state/channels.json`; after the first save the fallback is no longer
 needed.
 
-Alternatively, copy the array from `TubeNews.json`:
+Alternatively, copy the array from `config.json`:
 
 ```bash
 # extract feeds[] and write to state/channels.json
 python3 -c "
 import json, pathlib
-cfg = json.loads(pathlib.Path('TubeNews.json').read_text())
+cfg = json.loads(pathlib.Path('config.json').read_text())
 pathlib.Path('state').mkdir(exist_ok=True)
 pathlib.Path('state/channels.json').write_text(json.dumps(cfg.get('feeds', []), indent=2))
 "
 ```
 
-Once `state/channels.json` exists, the `feeds[]` key in `TubeNews.json` is
+Once `state/channels.json` exists, the `feeds[]` key in `config.json` is
 ignored. It can be removed from the file but does not need to be.
 
 ---
@@ -442,7 +442,7 @@ existing install, move the directory once:
 mv archive content
 ```
 
-Then restart the server. If you have `"archive_dir"` set in `TubeNews.json`,
+Then restart the server. If you have `"archive_dir"` set in `config.json`,
 rename the key to `"content_dir"`.
 
 ---

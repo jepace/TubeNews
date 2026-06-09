@@ -19,8 +19,8 @@
 ```
 TubeNews/
 ├── TubeNews.py              # Main application (single-file)
-├── TubeNews.json            # Runtime config (gitignored — copy from .sample)
-├── TubeNews.json.sample     # Config template
+├── config.json            # Runtime config (gitignored — copy from .sample)
+├── config.json.sample     # Config template
 ├── channels.json.sample     # Channel config template (copied to state/channels.json)
 ├── requirements.txt         # Python dependencies
 ├── README.md
@@ -194,10 +194,10 @@ Packages install globally — no virtual environment is used.
 ### Configure
 
 ```bash
-cp TubeNews.json.sample TubeNews.json
+cp config.json.sample config.json
 ```
 
-Edit `TubeNews.json`:
+Edit `config.json`:
 
 ```json
 {
@@ -217,7 +217,7 @@ Channel configuration lives in `state/channels.json` (see `channels.json.sample`
 ```bash
 # Daemon mode (default; runs indefinitely as WebSub receiver)
 # Logs to state/run_logs/tubenews_daemon.log (rotating, 10MB max)
-# Config changes to TubeNews.json are reloaded on each processor cycle
+# Config changes to config.json are reloaded on each processor cycle
 python3 TubeNews.py
 
 # Debug mode with daemon (verbose logging, shows API calls and raw responses)
@@ -233,7 +233,7 @@ python3 TubeNews.py --single-run --debug
 ./serve.sh
 ```
 
-**Daemon mode note:** TubeNews now runs in daemon mode by default, subscribing to YouTube push notifications and processing new videos immediately. Logs are written to `state/run_logs/tubenews_daemon.log` with automatic rotation at 10MB. Most TubeNews.json configuration changes (API keys, timeouts, daemon parameters, etc.) are automatically reloaded on each processor cycle without requiring a restart. See **Configuration Reference** section for details on which keys are reloadable vs. which require restart.
+**Daemon mode note:** TubeNews now runs in daemon mode by default, subscribing to YouTube push notifications and processing new videos immediately. Logs are written to `state/run_logs/tubenews_daemon.log` with automatic rotation at 10MB. Most config.json configuration changes (API keys, timeouts, daemon parameters, etc.) are automatically reloaded on each processor cycle without requiring a restart. See **Configuration Reference** section for details on which keys are reloadable vs. which require restart.
 
 **Single-run mode:** Use `--single-run` to process all configured channels once and exit. Useful for cron jobs or ad-hoc processing. Logs to `state/run_logs/run-<pid>.log`.
 
@@ -265,7 +265,7 @@ content/
 └── rss.xml                     # Regional aggregate feed (all channels)
 
 state/
-├── channels.json               # Channel configuration (replaces feeds[] in TubeNews.json)
+├── channels.json               # Channel configuration (replaces feeds[] in config.json)
 ├── subscriptions.json          # WebSub subscription tracking (keyed by channel_id)
 ├── .tubenews.lock              # Process lock file
 ├── supadata_balance.json       # Cached Supadata credit balance (written at end of each run)
@@ -379,13 +379,13 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `websub_callback_url` | No | Public HTTPS URL TubeNews registers with YouTube's hub as the push endpoint (e.g. `https://yourdomain.com/youtube/push`). Required for `--daemon` mode. |
 | `websub_secret` | No | HMAC-SHA1 signing secret for verifying push payloads from the hub. Generate with `python3 -c 'import secrets; print(secrets.token_hex(32))'`. |
 | `websub_daemon_port` | No | Port the WebSub HTTP receiver listens on (default: `8675`). Must be accessible from the internet or a reverse proxy. |
-| `websub_min_age_minutes` | No | **Deprecated.** Previously controlled the minimum hold time before processing a queued entry. Replaced by per-entry `next_try_at` scheduling (T+5 min first try, then hourly for 12 hours). Setting this key logs a deprecation warning and has no effect. Safe to remove from `TubeNews.json`. |
+| `websub_min_age_minutes` | No | **Deprecated.** Previously controlled the minimum hold time before processing a queued entry. Replaced by per-entry `next_try_at` scheduling (T+5 min first try, then hourly for 12 hours). Setting this key logs a deprecation warning and has no effect. Safe to remove from `config.json`. |
 | `websub_check_interval_minutes` | No | How often (minutes) the processor thread wakes to check for pending push notifications (default: `1`). Lower values make the T+5min first-try window more accurate; higher values reduce disk I/O at the cost of timing precision. |
 | `websub_max_videos_per_cycle` | No | Maximum number of videos to run through Gemini per processor cycle (default: `3`). Transcript fetching is uncapped — only the Gemini phase is limited. Remaining Gemini-ready entries are deferred to the next cycle. |
 
 ### Daemon Config Reload
 
-When running in daemon mode (the default, `python3 TubeNews.py`), the following configuration keys are **automatically reloaded** from `TubeNews.json` on each processor cycle (~every 1 minute):
+When running in daemon mode (the default, `python3 TubeNews.py`), the following configuration keys are **automatically reloaded** from `config.json` on each processor cycle (~every 1 minute):
 
 **Reloadable keys** (changes take effect immediately or next cycle):
 - `gemini_api_key`, `supadata_api_key` — next API call uses new key
@@ -401,7 +401,7 @@ When running in daemon mode (the default, `python3 TubeNews.py`), the following 
 
 Changes to other keys (like `content_dir`, `state_dir`, `port`, `admin_users`) are handled by the web app when those are modified; they don't affect the daemon.
 
-**Note:** In single-run mode (`python3 TubeNews.py --single-run`), `TubeNews.json` is loaded once at startup. To pick up config changes, restart the process.
+**Note:** In single-run mode (`python3 TubeNews.py --single-run`), `config.json` is loaded once at startup. To pick up config changes, restart the process.
 
 ---
 
@@ -511,7 +511,7 @@ state/users/
 - `feed_token` — UUID generated at registration; authenticates all public (no-login) URLs for that user. Rotating it invalidates both the RSS feed URL and the feed page URL simultaneously.
 - `locked` — boolean; when `true` the account fails `is_active` and is rejected by flask-login on every request without needing to log out. Admin-toggled via `/admin/user/<uid>/lock`.
 - `feed_name` — optional custom title shown on the user's `/feed` page (e.g. `"Alice's Local News"`). Key absent means the default `"<name>'s TubeNews"` title is used.
-- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), `timezone` (IANA timezone string, optional), and `digest_email_enabled` (bool, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` controls display of timestamps in the web UI (admin pages, story published times). Defaults to UTC if not set (since all stored data is in UTC). `digest_email_enabled` opts the user into daily email digests via Resend (requires `resend_api_key` and `base_url` in `TubeNews.json`). Key absent means all defaults (light mode, normal font, UTC display, no digest).
+- `preferences` — display settings dict with keys `dark_mode` (bool), `font_size` (`"normal"` | `"large"` | `"larger"`), `timezone` (IANA timezone string, optional), and `digest_email_enabled` (bool, optional). `dark_mode` and `font_size` converted to CSS classes by `_prefs_to_classes()` and applied to `<html>` via the `inject_body_classes` context processor. `timezone` controls display of timestamps in the web UI (admin pages, story published times). Defaults to UTC if not set (since all stored data is in UTC). `digest_email_enabled` opts the user into daily email digests via Resend (requires `resend_api_key` and `base_url` in `config.json`). Key absent means all defaults (light mode, normal font, UTC display, no digest).
 - `last_digest_sent` — ISO 8601 UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format of the most recent successful digest email send. Written atomically by `_send_daily_digests` immediately after `resend.Emails.send()` succeeds. Key absent means no digest has been sent yet (first send uses `now - 24h` as the cutoff).
 - `seen_channel_ids` — list of channel IDs the user has "seen" on the dashboard. The `inject_body_classes` context processor diffs this against the current feed list to compute `unseen_channel_count`, which drives the red badge on the "Settings" nav link. Key absent means not yet initialised (pre-feature users); treated as 0 unseen so existing users aren't badged on upgrade. Written (covering all current channels) whenever the user loads or saves the dashboard.
 - `read_articles` — sorted list of `content_hash` strings for articles the user has marked as read. `/feed` (Unread tab) hides stories whose hash is in this list; `/read` (Read tab) shows only those stories. Key absent means no articles have been read. Written by the `account_mark_read`, `account_mark_unread`, `account_mark_all_read`, and `account_mark_all_unread` routes. Growth is bounded (~117 KB/year at 10 stories/day × 32 bytes/hash) and individual unread is preserved.
@@ -557,9 +557,9 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 | Function | Description |
 |---|---|
-| `_load_config()` | Reads `TubeNews.json`; returns `{}` on failure |
+| `_load_config()` | Reads `config.json`; returns `{}` on failure |
 | `_save_channels(channels)` | Atomically writes the channel list to `state/channels.json` (write-then-rename) |
-| `_load_channels()` | Returns the channel list from `state/channels.json`; falls back to `feeds[]` in `TubeNews.json` when `channels.json` does not exist (migration compatibility) |
+| `_load_channels()` | Returns the channel list from `state/channels.json`; falls back to `feeds[]` in `config.json` when `channels.json` does not exist (migration compatibility) |
 | `_base_url()` | Returns `base_url` from config (empty string if not set) |
 | `_rss_url(token)` | Builds the full `/feed/<token>.xml` URL using `base_url` or `url_for` |
 | `_feed_url(token)` | Builds the full `/feed/<token>.html` URL using `base_url` or `url_for` |
@@ -634,7 +634,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 | POST | `/admin/user/<uid>/password` | `admin_user_password` | Reset password |
 | POST | `/admin/user/<uid>/lock` | `admin_user_lock` | Toggle account lock |
 | POST | `/admin/user/<uid>/prefs` | `admin_user_prefs` | Update display preferences (font size, dark mode) for the target user |
-| POST | `/admin/user/<uid>/promote` | `admin_user_promote` | Toggle admin status for the target user (adds/removes email from `admin_users` in `TubeNews.json`); self-promotion is blocked |
+| POST | `/admin/user/<uid>/promote` | `admin_user_promote` | Toggle admin status for the target user (adds/removes email from `admin_users` in `config.json`); self-promotion is blocked |
 | POST | `/admin/user/<uid>/rotate-token` | `admin_rotate_token` | Issue new feed token (invalidates old URLs) |
 | POST | `/admin/user/<uid>/delete` | `admin_user_delete` | Delete account (requires email confirmation) |
 | GET | `/admin/feeds` | `admin_feeds` | Feed (channel) list |
@@ -670,13 +670,13 @@ the web app does **not** call either — the web UI uses dynamic generation only
 - `SESSION_COOKIE_SECURE` is only set when `TUBENEWS_HTTPS=true` is in the
   environment, so local dev works without HTTPS.
 - Admins are determined solely by email match against `admin_users` in
-  `TubeNews.json` — there is no `is_admin` flag stored in `user.json`.
+  `config.json` — there is no `is_admin` flag stored in `user.json`.
 - Locked accounts (`"locked": true`) fail `is_active` and are rejected by
   flask-login on every request without needing to log out.
 - Changing account name or email (the `/account` info action) requires the current password, just like the password-change and delete flows.
 - `body_html` in `ParsedStory` contains HTML-escaped text joined with `<br>` tags. HTML special characters are escaped in `parse_story_file()` so the `{{ story.body_html | safe }}` in templates is safe to render.
 - User directories are deleted with `shutil.rmtree()` (not a manual file loop) so deletion works even when subdirectories are present.
-- `_save_channels()` writes `state/channels.json` atomically via write-then-rename (same pattern as `_write_email_index`). `admin_user_promote()` writes `TubeNews.json` by the same pattern, preventing partial writes from corrupting either file.
+- `_save_channels()` writes `state/channels.json` atomically via write-then-rename (same pattern as `_write_email_index`). `admin_user_promote()` writes `config.json` by the same pattern, preventing partial writes from corrupting either file.
 
 ---
 
@@ -710,7 +710,7 @@ the web app does **not** call either — the web UI uses dynamic generation only
 
 **Never use `_external=True` with `url_for()`** in the web UI. The deployment does not yet have HTTPS configured, and `_external=True` produces absolute URLs (with scheme and host) that break when the scheme or host is wrong.
 
-- `_rss_url(token)` returns `/feed/<token>.xml` and `_feed_url(token)` returns `/feed/<token>.html` when `base_url` is not set in `TubeNews.json`. They only prepend an absolute base when the operator has explicitly configured `base_url`.
+- `_rss_url(token)` returns `/feed/<token>.xml` and `_feed_url(token)` returns `/feed/<token>.html` when `base_url` is not set in `config.json`. They only prepend an absolute base when the operator has explicitly configured `base_url`.
 - All links rendered in HTML templates must be relative (use `url_for()` without `_external=True`, or hardcoded root-relative paths like `/feed/...`).
 - The only place absolute URLs are appropriate is inside generated RSS/Atom XML, and only when `base_url` is configured.
 
