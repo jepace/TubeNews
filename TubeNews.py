@@ -2839,6 +2839,10 @@ def _recover_orphaned_videos() -> int:
 
     new_entries: list[dict] = []
 
+    if not STORAGE_ROOT.is_dir():
+        logger.debug("Orphan recovery: content directory not found, skipping")
+        return 0
+
     for channel_dir in sorted(STORAGE_ROOT.iterdir()):
         if not channel_dir.is_dir() or channel_dir.name.startswith("_"):
             continue
