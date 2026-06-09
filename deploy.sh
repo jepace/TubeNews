@@ -10,8 +10,8 @@
 # On FreeBSD: also installs rc.d scripts and fixes state directory ownership.
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
-DEST="/usr/local/bastille/jails/TubeNews/root/var/www/TubeNews"
-JAIL="TubeNews"
+JAIL="tubenews"
+DEST="/usr/local/bastille/jails/$JAIL/root/var/www/tubenews"
 
 # ---------------------------------------------------------------------------
 # Preflight
@@ -34,7 +34,7 @@ fi
 
 echo "Deploying $SRC → $DEST"
 
-rsync -av --delete \
+sudo rsync -av --delete \
     --exclude='config.json' \
     --exclude='content/' \
     --exclude='state/' \
@@ -73,7 +73,7 @@ if uname -s | grep -q FreeBSD; then
     # Fix state directory ownership (www user needs to write to state/)
     # Note: must use jail-relative path, not host path
     echo "Fixing state directory ownership to www:www..."
-    DEST_IN_JAIL="/var/www/TubeNews"
+    DEST_IN_JAIL="/var/www/tubenews"
     sudo bastille cmd "$JAIL" chown -R www:www "$DEST_IN_JAIL/state"
     sudo bastille cmd "$JAIL" chmod 755 "$DEST_IN_JAIL/state"
 
