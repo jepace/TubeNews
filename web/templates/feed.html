@@ -498,17 +498,13 @@ function scrollToFocused() {
           return r.json();
         })
         .then(function (data) {
-          if (data.duplicate) {
-            btn.textContent = '✓ Already in Lobotomy';
-          } else if (data.fetch_failed) {
-            btn.textContent = '✓ Saved (will index)';
+          if (data.redirect_url) {
+            // Redirect to Lobotomy /save endpoint
+            btn.textContent = 'Opening Lobotomy…';
+            window.location.href = data.redirect_url;
           } else {
-            btn.textContent = '✓ Sent to Lobotomy';
+            throw new Error(data.error || 'Invalid response');
           }
-          setTimeout(function () {
-            btn.disabled = false;
-            btn.textContent = '🧠 Lobotomize';
-          }, 2000);
         })
         .catch(function (err) {
           clearTimeout(timer);

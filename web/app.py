@@ -3037,7 +3037,7 @@ def admin_feed_toggle(channel_id: str):
 @login_required
 @limiter.limit("20 per minute")
 def api_lobotomy_push():
-    """Push a story to Lobotomy's inbox (server-side proxy)."""
+    """Build Lobotomy redirect URL using the /save endpoint (GET-based)."""
     data = request.get_json()
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
@@ -3055,41 +3055,18 @@ def api_lobotomy_push():
         if not lobotomy_url.startswith(("http://", "https://")):
             return jsonify({"error": "Invalid Lobotomy URL (must start with http/https)"}), 400
 
-        # Build payload for Lobotomy API
-        payload = {"source": "TubeNews"}
-        if data.get("title"):
-            payload["title"] = data["title"]
-        if data.get("content"):
-            payload["content"] = data["content"]
-        if data.get("url"):
-            payload["url"] = data["url"]
-        if data.get("tags"):
-            payload["tags"] = data["tags"]
-
-        resp = requests.post(
-            f"{lobotomy_url}/api/push",
-            headers={
-                "Authorization": f"Bearer {lobotomy_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        # Pass through Lobotomy's response (may include duplicate, fetch_failed, etc.)
-        return jsonify(result)
-    except requests.Timeout:
-        logger.warning(f"Lobotomy push timeout: {lobotomy_url}")
-        return jsonify({"error": "Lobotomy server timeout"}), 504
-    except requests.ConnectionError as e:
-        logger.error(f"Lobotomy connection error: {lobotomy_url}: {e}")
-        return jsonify({"error": "Could not reach Lobotomy server"}), 502
-    except requests.HTTPError as e:
-        if e.response.status_code == 401:
-            logger.error(f"Lobotomy authentication failed for user {current_user.get_id()}")
-            return jsonify({"error": "Lobotomy authentication failed (check API key)"}), 401
-        elif e.response.status_code == 403:
+        # Build Lobotomy /save endpoint URL with query parameters
+        from urllib.parse import urlencode
+        params = {
+            "key": lobotomy_key,
+            "url": data.get("url", ""),
+            "title": data.get("title", ""),
+        }
+        redirect_url = f"{lobotomy_url}/save?{urlencode(params)}"
+        return jsonify({"redirect_url": redirect_url})
+    except Exception as e:
+        logger.error(f"Lobotomy redirect URL generation failed: {e}")
+        return jsonify({"error": "Failed to generate Lobotomy URL"}), 500
             return jsonify({"error": "Lobotomy permission denied"}), 403
         else:
             logger.error(f"Lobotomy push error ({e.response.status_code}): {e}")
