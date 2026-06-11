@@ -2323,15 +2323,15 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
         ok = r.status_code == 202
         if ok:
             _wsb_record_subscription(channel_id, cb)
-            logger.debug(f"WebSub: subscription confirmed for {channel_id}")
+            logger.info(f"WebSub: subscription confirmed for {channel_id}")
         else:
-            logger.debug(
+            logger.warning(
                 f"WebSub: subscription request returned HTTP {r.status_code} for {channel_id} "
                 "(transient; will retry later)"
             )
         return ok
     except Exception as exc:
-        logger.debug(f"WebSub: subscription request failed for {channel_id}: {exc} (transient; will retry)")
+        logger.warning(f"WebSub: subscription request failed for {channel_id}: {exc} (transient; will retry)")
         return False
 
 
@@ -2359,7 +2359,7 @@ def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
         ok = r.status_code == 202
         if ok:
             _wsb_remove_subscription(channel_id)
-            logger.debug(f"WebSub: unsubscribed channel {channel_id}")
+            logger.info(f"WebSub: unsubscribed channel {channel_id}")
         else:
             logger.warning(f"WebSub: unsubscribe returned HTTP {r.status_code} for {channel_id}")
         return ok
