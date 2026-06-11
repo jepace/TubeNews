@@ -34,18 +34,15 @@
     </thead>
     <tbody>
       {% for ch in channels %}
-      <tr{% if ch.get('disabled') %} style="opacity: 0.6;"{% endif %}>
+      <tr class="feed-row" data-channel-id="{{ ch.channel_id }}"{% if ch.get('disabled') %} style="opacity: 0.6;"{% endif %}>
         <td>{{ ch.channel_name }}</td>
         <td class="mono">{{ ch.channel_id }}</td>
         <td class="muted">{{ ch.focus | truncate(60) }}</td>
-        <td class="muted">{% if ch.get('disabled') %}<span style="color: var(--color-danger);">Disabled</span>{% else %}Active{% endif %}</td>
+        <td class="muted status-cell">{% if ch.get('disabled') %}<span style="color: var(--color-danger);">Disabled</span>{% else %}Active{% endif %}</td>
         <td style="white-space: nowrap;">
           <a href="{{ url_for('channel_feed', channel_id=ch.channel_id) }}" class="btn-sm">Browse</a>
           <a href="{{ url_for('admin_feed_edit', channel_id=ch.channel_id) }}" class="btn-sm">Edit</a>
-          <form method="post" action="{{ url_for('admin_feed_toggle', channel_id=ch.channel_id) }}" class="inline-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn-sm">{% if ch.get('disabled') %}Enable{% else %}Disable{% endif %}</button>
-          </form>
+          <button type="button" class="btn-sm toggle-feed-btn" data-channel-id="{{ ch.channel_id }}" data-csrf="{{ csrf_token() }}">{% if ch.get('disabled') %}Enable{% else %}Disable{% endif %}</button>
           <form method="post" action="{{ url_for('admin_feed_delete', channel_id=ch.channel_id) }}"
                 class="inline-form"
                 onsubmit="return confirm('Remove \'{{ ch.channel_name }}\'? Archive data is not deleted.')">
@@ -57,6 +54,51 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <script>
+  document.querySelectorAll('.toggle-feed-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var channelId = this.dataset.channelId;
+      var csrfToken = this.dataset.csrf;
+      var row = this.closest('.feed-row');
+      var statusCell = row.querySelector('.status-cell');
+      var originalText = this.textContent;
+
+      this.disabled = true;
+      this.textContent = 'Working…';
+
+      fetch('{{ url_for("admin_feed_toggle", channel_id="__CHANNEL__") }}'.replace('__CHANNEL__', channelId), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: 'csrf_token=' + encodeURIComponent(csrfToken)
+      })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        })
+        .then(function () {
+          // Toggle the button text and row opacity
+          var isNowDisabled = originalText === 'Enable';
+          btn.textContent = isNowDisabled ? 'Disable' : 'Enable';
+          if (isNowDisabled) {
+            row.style.opacity = '0.6';
+            statusCell.innerHTML = '<span style="color: var(--color-danger);">Disabled</span>';
+          } else {
+            row.style.opacity = '1';
+            statusCell.innerHTML = 'Active';
+          }
+          btn.disabled = false;
+        })
+        .catch(function (err) {
+          console.error('Toggle failed:', err);
+          btn.textContent = originalText;
+          btn.disabled = false;
+        });
+    });
+  });
+  </script>
   {% else %}
     <p class="muted">No feeds configured. <a href="{{ url_for('admin_feed_add') }}">Add one.</a></p>
   {% endif %}
