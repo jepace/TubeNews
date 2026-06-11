@@ -3069,16 +3069,6 @@ def api_lobotomy_push():
     except Exception as e:
         logger.error(f"Lobotomy redirect URL generation failed: {e}")
         return jsonify({"error": "Failed to generate Lobotomy URL"}), 500
-            return jsonify({"error": "Lobotomy permission denied"}), 403
-        else:
-            logger.error(f"Lobotomy push error ({e.response.status_code}): {e}")
-            return jsonify({"error": f"Lobotomy error: {e.response.status_code}"}), 502
-    except requests.RequestException as e:
-        logger.error(f"Lobotomy push failed: {e}")
-        return jsonify({"error": "Request failed"}), 502
-    except ValueError as e:
-        logger.error(f"Lobotomy response parsing error: {e}")
-        return jsonify({"error": "Invalid response from Lobotomy"}), 502
 
 
 # ---------------------------------------------------------------------------
