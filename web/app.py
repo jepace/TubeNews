@@ -3022,12 +3022,14 @@ def admin_feed_toggle(channel_id: str):
     config = _load_config()
     if is_disabled:
         feed["disabled"] = False
-        _wsb_subscribe(channel_id, config)
+        ok = _wsb_subscribe(channel_id, config)
         status = "enabled"
+        logger.info(f"Feed '{feed['channel_name']}' ({channel_id}) enabled; WebSub subscribe {'ok' if ok else 'failed'}")
     else:
         feed["disabled"] = True
         _wsb_unsubscribe(channel_id, config)
         status = "disabled"
+        logger.info(f"Feed '{feed['channel_name']}' ({channel_id}) disabled; WebSub unsubscribe requested")
     _save_channels(channels)
     flash(f"Feed '{feed['channel_name']}' {status}.", "success")
     return redirect(url_for("admin_feeds"))
