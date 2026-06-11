@@ -72,10 +72,12 @@
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: 'csrf_token=' + encodeURIComponent(csrfToken)
+        body: 'csrf_token=' + encodeURIComponent(csrfToken),
+        redirect: 'manual'
       })
         .then(function (r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
+          // Accept 200-299 (ok) or 302/303 (redirect) as success
+          if (r.status < 200 || r.status >= 400) throw new Error('HTTP ' + r.status);
           return r.text();
         })
         .then(function () {
