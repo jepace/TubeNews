@@ -972,7 +972,7 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
                                 "channel_id": channel_id,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
             except Exception as exc:
-                logger.debug(f"Skipping {meeting_dir}: {exc}")
+                logger.warning(f"Skipping {meeting_dir}: {exc}")
                 continue
         raw.sort(key=lambda e: _get_timestamp_as_float(e["meta"].get("processed_at")), reverse=True)
         stories = []
@@ -1043,7 +1043,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                                 "channel_id": channel_id,
                                 "channel_slug": channel_dir.name, "meeting_id": meeting_dir.name})
             except Exception as exc:
-                logger.debug(f"Skipping {meeting_dir}: {exc}")
+                logger.warning(f"Skipping {meeting_dir}: {exc}")
                 continue
     raw.sort(key=lambda e: _get_timestamp_as_float(e["meta"].get("processed_at")), reverse=True)
     stories = []
@@ -1083,7 +1083,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "comment_count": _story_comment_count(entry["file"]),
             })
         except Exception as exc:
-            logger.debug(f"Skipping {entry['file']}: {exc}")
+            logger.warning(f"Skipping corrupted story file {entry['file']}: {exc}")
             continue
     return stories  # type: ignore[return-value]
 
@@ -1126,7 +1126,7 @@ def _get_popular_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                                     "channel_id": channel_id, "channel_slug": channel_dir.name,
                                     "meeting_id": meeting_dir.name, "upvotes": upvotes})
             except Exception as exc:
-                logger.debug(f"Skipping {meeting_dir}: {exc}")
+                logger.warning(f"Skipping {meeting_dir}: {exc}")
                 continue
 
     # Sort by upvotes (descending), then by date (descending)
@@ -1173,7 +1173,7 @@ def _get_popular_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 "upvotes": entry["upvotes"],
             })
         except Exception as exc:
-            logger.debug(f"Skipping {entry['file']}: {exc}")
+            logger.warning(f"Skipping corrupted story file {entry['file']}: {exc}")
             continue
     return stories  # type: ignore[return-value]
 
@@ -1554,7 +1554,7 @@ def serve_article(video_id: str, start_seconds: int):
 
                         break
             except Exception as exc:
-                logger.debug(f"Skipping {meeting_dir}: {exc}")
+                logger.warning(f"Skipping {meeting_dir}: {exc}")
                 continue
 
         if story:

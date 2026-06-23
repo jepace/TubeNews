@@ -468,7 +468,17 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         body_html    – body lines joined with ``<br>`` tags (string)
         start_seconds – integer timestamp into the source video
     """
-    text = story_path.read_text(encoding="utf-8")
+    # Try UTF-8 first, fall back to latin-1 for corrupted files
+    try:
+        text = story_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        logger.warning(f"Story file has invalid UTF-8, falling back to latin-1: {story_path}")
+        try:
+            text = story_path.read_text(encoding="latin-1")
+        except Exception as e:
+            logger.error(f"Failed to read story file {story_path}: {e}")
+            raise
+
     lines = text.splitlines()
 
     title = lines[0].replace("# ", "")
