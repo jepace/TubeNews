@@ -309,6 +309,35 @@ def test_parse_story_file_content_hash_stable(tmp_path):
     r2 = parse_story_file(story)
     assert r1["content_hash"] == r2["content_hash"]
 
+def test_parse_story_file_invalid_utf8_falls_back(tmp_path):
+    """Corrupt UTF-8 bytes should not crash; latin-1 fallback recovers the file."""
+    story = tmp_path / "01_Bad_Bytes.md"
+    # 0xFF is invalid as a UTF-8 start byte but valid latin-1.
+    story.write_bytes(
+        b"# Title\n*Dateline*\n\nCaf\xff body.\n\n---\n**Segment Start:** 30s\n"
+    )
+    result = parse_story_file(story)
+    assert result["title"] == "Title"
+    assert result["start_seconds"] == 30
+
+def test_parse_story_file_too_large_rejected(tmp_path):
+    """An implausibly large story file is rejected rather than read (would hang a worker)."""
+    story = tmp_path / "01_Huge.md"
+    # Just over the 5 MB cap.
+    story.write_bytes(b"# Title\n*Dateline*\n\n" + b"x" * (5 * 1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="implausibly large"):
+        parse_story_file(story)
+
+def test_parse_story_file_non_regular_rejected(tmp_path):
+    """A non-regular file (e.g. FIFO) is rejected rather than blocking on read()."""
+    fifo = tmp_path / "01_Fifo.md"
+    try:
+        os.mkfifo(fifo)
+    except (AttributeError, OSError):
+        pytest.skip("mkfifo not supported on this platform")
+    with pytest.raises(ValueError, match="not a regular file"):
+        parse_story_file(fifo)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures shared by rebuild_feed and rebuild_aggregate_feed tests

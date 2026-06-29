@@ -29,6 +29,7 @@ import os
 import re
 import signal
 import socket
+import stat
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -468,6 +469,19 @@ def parse_story_file(story_path: Path) -> ParsedStory:
         body_html    – body lines joined with ``<br>`` tags (string)
         start_seconds – integer timestamp into the source video
     """
+    # Guard against pathological files that would hang or balloon a worker:
+    # a non-regular file (FIFO/device/socket) can block read() forever, and a
+    # runaway-sized file can stall the request past gunicorn's timeout. Real
+    # story markdown is KB-range, so anything over the cap is corrupt.
+    _MAX_STORY_BYTES = 5 * 1024 * 1024  # 5 MB
+    st = os.stat(story_path)
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError(f"Story path is not a regular file: {story_path}")
+    if st.st_size > _MAX_STORY_BYTES:
+        raise ValueError(
+            f"Story file is implausibly large ({st.st_size} bytes), refusing to read: {story_path}"
+        )
+
     # Try UTF-8 first, fall back to latin-1 for corrupted files
     try:
         text = story_path.read_text(encoding="utf-8")
