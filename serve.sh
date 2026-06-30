@@ -10,9 +10,9 @@
 
 cd "$(dirname "$0")"
 
-# Gunicorn writes its control socket to ~/.gunicorn/. The www user on FreeBSD
-# has HOME=/nonexistent, so point it somewhere writable if HOME is unset or missing.
-if [ ! -d "${HOME:-}" ]; then
+# Gunicorn writes its control socket to ~/.gunicorn/. On FreeBSD the www user
+# has HOME=/nonexistent which exists but is not writable, so redirect to /tmp.
+if [ ! -w "${HOME:-}" ]; then
   export HOME=/tmp
 fi
 
