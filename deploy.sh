@@ -78,11 +78,13 @@ if uname -s | grep -q FreeBSD; then
     sudo bastille cmd "$JAIL" chmod 755 "$DEST_IN_JAIL/state"
 
     echo ""
-    echo "Next steps:"
-    echo "  1. Enable services: sudo bastille console $JAIL"
-    echo "  2. Inside jail: echo 'tubenews_daemon_enable=\"YES\"' >> /etc/rc.conf.local"
-    echo "  3. Inside jail: echo 'tubenews_web_enable=\"YES\"' >> /etc/rc.conf.local"
-    echo "  4. Exit jail: exit"
+    echo "Next steps (if first install):"
+    echo "  sudo bastille console $JAIL"
+    echo "  echo 'tubenews_daemon_enable=\"YES\"'  >> /etc/rc.conf.local"
+    echo "  echo 'tubenews_daemon_dir=\"/var/www/tubenews\"' >> /etc/rc.conf.local"
+    echo "  echo 'tubenews_web_enable=\"YES\"'     >> /etc/rc.conf.local"
+    echo "  echo 'tubenews_web_dir=\"/var/www/tubenews\"'    >> /etc/rc.conf.local"
+    echo "  exit"
 fi
 
 echo "Done."

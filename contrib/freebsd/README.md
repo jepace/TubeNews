@@ -6,79 +6,94 @@ Scripts and instructions for running TubeNews in a FreeBSD Bastille jail with au
 
 ### State Directory Permissions
 
-Both services run as the `www` user. Ensure the `state/` directory (used for user data, run logs, and lock files) is owned by `www`:
+Both services run as the `www` user. Ensure the `state/` directory is owned by `www`:
 
-```bash
-sudo bastille console TubeNews
-chown -R www:www /var/www/TubeNews/state
-chmod 755 /var/www/TubeNews/state
+```sh
+sudo bastille console tubenews
+chown -R www:www /var/www/tubenews/state
+chmod 755 /var/www/tubenews/state
 exit
 ```
 
 ## Installation
 
-### 1. Copy rc.d scripts into the jail
+### 1. Deploy files and install rc.d scripts
 
-```bash
-sudo bastille cp TubeNews contrib/freebsd/tubenews_daemon /etc/rc.d/tubenews_daemon
-sudo bastille cp TubeNews contrib/freebsd/tubenews_web /etc/rc.d/tubenews_web
-sudo bastille console TubeNews -c "chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web"
+Run `deploy.sh` from the project root on the host — it syncs the codebase into the
+jail and installs both rc.d scripts automatically on FreeBSD:
+
+```sh
+./deploy.sh
 ```
 
-### 2. Enable services in jail
+Or install manually:
 
-```bash
-sudo bastille console TubeNews
-echo 'tubenews_daemon_enable="YES"' >> /etc/rc.conf.local
-echo 'tubenews_web_enable="YES"' >> /etc/rc.conf.local
+```sh
+sudo bastille cp tubenews contrib/freebsd/tubenews_daemon /etc/rc.d/tubenews_daemon
+sudo bastille cp tubenews contrib/freebsd/tubenews_web    /etc/rc.d/tubenews_web
+sudo bastille cmd tubenews chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web
+```
+
+### 2. Enable services in the jail
+
+```sh
+sudo bastille console tubenews
+echo 'tubenews_daemon_enable="YES"'           >> /etc/rc.conf.local
+echo 'tubenews_daemon_dir="/var/www/tubenews"' >> /etc/rc.conf.local
+echo 'tubenews_web_enable="YES"'              >> /etc/rc.conf.local
+echo 'tubenews_web_dir="/var/www/tubenews"'    >> /etc/rc.conf.local
 exit
 ```
 
-### 3. Enable jail auto-start on boot
+Optional settings (add to `/etc/rc.conf.local` inside the jail):
 
-Configure your Bastille jail to auto-start on system reboot:
+```sh
+# Run services as a different user (default: www)
+tubenews_daemon_user="www"
+tubenews_web_user="www"
 
-```bash
-sudo bastille config TubeNews
+# Enable Secure cookie flag when behind an HTTPS proxy
+tubenews_web_https="YES"
+
+# Override log file destinations
+tubenews_daemon_logfile="/var/log/tubenews_daemon.log"
+tubenews_web_logfile="/var/log/tubenews_web.log"
 ```
 
-Look for the `enable` or `boot` setting and set it to `1` or `YES`.
+### 3. Start services
 
-### 4. Verify
+```sh
+sudo bastille console tubenews
+service tubenews_daemon start
+service tubenews_web start
+exit
+```
 
-Test that services start:
+### 4. Enable jail auto-start on host boot
 
-```bash
-sudo bastille console TubeNews
+```sh
+sudo bastille config tubenews set boot 1
+```
+
+## Managing services
+
+```sh
+sudo bastille console tubenews
+
 service tubenews_daemon status
+service tubenews_daemon restart
 service tubenews_web status
-exit
+service tubenews_web restart
 ```
 
-Check log files:
+Check logs:
 
-```bash
-sudo bastille console TubeNews
+```sh
 tail -f /var/log/tubenews_daemon.log
 tail -f /var/log/tubenews_web.log
-exit
-```
-
-After reboot, verify both services are running:
-
-```bash
-sudo bastille console TubeNews
-ps aux | grep -i tubenews
 ```
 
 ## Services
 
-- **tubenews_daemon**: Runs `python3 TubeNews.py` for WebSub push notifications (daemon mode is default)
-  - Logs to `state/run_logs/tubenews_daemon.log` (rotating, 10MB max with 5 backups)
-  - Runs as `www` user
-  
-- **tubenews_web**: Runs `./serve.sh` for the Flask web UI (gunicorn)
-  - Logs to stdout/stderr (gunicorn handles log rotation)
-  - Runs as `www` user
-
-Both services will auto-start when the jail boots, with output handled via their respective logging mechanisms.
+- **tubenews_daemon** — runs `python3 TubeNews.py` in WebSub daemon mode
+- **tubenews_web** — runs `serve.sh` (gunicorn) for the Flask web UI

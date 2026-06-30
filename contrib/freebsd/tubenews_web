@@ -4,21 +4,90 @@
 # REQUIRE: NETWORKING
 # KEYWORD: shutdown
 #
-# Add the following to /etc/rc.conf[.local] to enable this service:
+# FreeBSD rc.d service for the TubeNews web UI (gunicorn via serve.sh).
 #
-# tubenews_web_enable="YES"
+# Install:
+#   cp contrib/freebsd/tubenews_web /etc/rc.d/tubenews_web
+#   chmod +x /etc/rc.d/tubenews_web
+#
+# Then add to /etc/rc.conf (or /etc/rc.conf.local):
+#   tubenews_web_enable="YES"
+#   tubenews_web_dir="/var/www/tubenews"
+#
+# Optional rc.conf settings and their defaults:
+#   tubenews_web_user="www"                        # system user to run as
+#   tubenews_web_https="NO"                        # YES when behind an HTTPS proxy
+#   tubenews_web_logfile="/var/log/tubenews_web.log"
+#
+# Manage:
+#   service tubenews_web start | stop | restart | status
 
 . /etc/rc.subr
 
 name="tubenews_web"
-rcvar=tubenews_web_enable
-pidfile="/var/www/TubeNews/state/tubenews_web.pid"
+rcvar="${name}_enable"
+
+load_rc_config "$name"
 
 : ${tubenews_web_enable:="NO"}
-: ${tubenews_web_dir:="/var/www/TubeNews"}
+: ${tubenews_web_dir:=""}
 : ${tubenews_web_user:="www"}
+: ${tubenews_web_https:="NO"}
+: ${tubenews_web_logfile:="/var/log/tubenews_web.log"}
 
-procname="${tubenews_web_dir}/serve.sh"
+pidfile="/var/run/${name}.pid"
 
-load_rc_config $name
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+restart_cmd="${name}_restart"
+extra_commands="status"
+
+_require_dir() {
+    if [ -z "${tubenews_web_dir}" ]; then
+        err 1 "Set tubenews_web_dir in /etc/rc.conf to the TubeNews installation directory."
+    fi
+    if [ ! -f "${tubenews_web_dir}/serve.sh" ]; then
+        err 1 "serve.sh not found in ${tubenews_web_dir}"
+    fi
+}
+
+tubenews_web_start() {
+    _require_dir
+    local env_extra=""
+    [ "${tubenews_web_https}" = "YES" ] && env_extra="TUBENEWS_HTTPS=true"
+    echo "Starting ${name}."
+    /usr/sbin/daemon \
+        -p "${pidfile}" \
+        -u "${tubenews_web_user}" \
+        -o "${tubenews_web_logfile}" \
+        /usr/bin/env ${env_extra} sh "${tubenews_web_dir}/serve.sh"
+}
+
+tubenews_web_stop() {
+    if [ -f "${pidfile}" ]; then
+        local pid
+        pid=$(cat "${pidfile}")
+        echo "Stopping ${name} (pid ${pid})."
+        kill "${pid}" 2>/dev/null
+        wait_for_pids "${pid}"
+        rm -f "${pidfile}"
+    else
+        echo "${name} is not running."
+    fi
+}
+
+tubenews_web_status() {
+    if [ -f "${pidfile}" ] && kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
+        echo "${name} is running as pid $(cat "${pidfile}")."
+    else
+        echo "${name} is not running."
+    fi
+}
+
+tubenews_web_restart() {
+    tubenews_web_stop
+    tubenews_web_start
+}
+
 run_rc_command "$1"

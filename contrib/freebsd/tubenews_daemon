@@ -4,23 +4,86 @@
 # REQUIRE: NETWORKING
 # KEYWORD: shutdown
 #
-# Add the following to /etc/rc.conf[.local] to enable this service:
+# FreeBSD rc.d service for the TubeNews WebSub daemon (TubeNews.py).
 #
-# tubenews_daemon_enable="YES"
+# Install:
+#   cp contrib/freebsd/tubenews_daemon /etc/rc.d/tubenews_daemon
+#   chmod +x /etc/rc.d/tubenews_daemon
+#
+# Then add to /etc/rc.conf (or /etc/rc.conf.local):
+#   tubenews_daemon_enable="YES"
+#   tubenews_daemon_dir="/var/www/tubenews"
+#
+# Optional rc.conf settings and their defaults:
+#   tubenews_daemon_user="www"                          # system user to run as
+#   tubenews_daemon_logfile="/var/log/tubenews_daemon.log"
+#
+# Manage:
+#   service tubenews_daemon start | stop | restart | status
 
 . /etc/rc.subr
 
 name="tubenews_daemon"
-rcvar=tubenews_daemon_enable
-pidfile="/var/www/TubeNews/state/tubenews_daemon.pid"
+rcvar="${name}_enable"
+
+load_rc_config "$name"
 
 : ${tubenews_daemon_enable:="NO"}
-: ${tubenews_daemon_dir:="/var/www/TubeNews"}
+: ${tubenews_daemon_dir:=""}
 : ${tubenews_daemon_user:="www"}
+: ${tubenews_daemon_logfile:="/var/log/tubenews_daemon.log"}
 
-procname="/usr/local/bin/python3"
-command_args="${tubenews_daemon_dir}/TubeNews.py"
+pidfile="/var/run/${name}.pid"
 
-load_rc_config $name
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+restart_cmd="${name}_restart"
+extra_commands="status"
+
+_require_dir() {
+    if [ -z "${tubenews_daemon_dir}" ]; then
+        err 1 "Set tubenews_daemon_dir in /etc/rc.conf to the TubeNews installation directory."
+    fi
+    if [ ! -f "${tubenews_daemon_dir}/TubeNews.py" ]; then
+        err 1 "TubeNews.py not found in ${tubenews_daemon_dir}"
+    fi
+}
+
+tubenews_daemon_start() {
+    _require_dir
+    echo "Starting ${name}."
+    /usr/sbin/daemon \
+        -p "${pidfile}" \
+        -u "${tubenews_daemon_user}" \
+        -o "${tubenews_daemon_logfile}" \
+        /usr/local/bin/python3 "${tubenews_daemon_dir}/TubeNews.py"
+}
+
+tubenews_daemon_stop() {
+    if [ -f "${pidfile}" ]; then
+        local pid
+        pid=$(cat "${pidfile}")
+        echo "Stopping ${name} (pid ${pid})."
+        kill "${pid}" 2>/dev/null
+        wait_for_pids "${pid}"
+        rm -f "${pidfile}"
+    else
+        echo "${name} is not running."
+    fi
+}
+
+tubenews_daemon_status() {
+    if [ -f "${pidfile}" ] && kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
+        echo "${name} is running as pid $(cat "${pidfile}")."
+    else
+        echo "${name} is not running."
+    fi
+}
+
+tubenews_daemon_restart() {
+    tubenews_daemon_stop
+    tubenews_daemon_start
+}
+
 run_rc_command "$1"
-
