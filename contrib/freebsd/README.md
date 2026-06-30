@@ -29,9 +29,9 @@ jail and installs both rc.d scripts automatically on FreeBSD:
 Or install manually:
 
 ```sh
-sudo bastille cp tubenews contrib/freebsd/tubenews_daemon /etc/rc.d/tubenews_daemon
-sudo bastille cp tubenews contrib/freebsd/tubenews_web    /etc/rc.d/tubenews_web
-sudo bastille cmd tubenews chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web
+sudo bastille cp tubenews contrib/freebsd/tubenews_daemon /usr/local/etc/rc.d/tubenews_daemon
+sudo bastille cp tubenews contrib/freebsd/tubenews_web    /usr/local/etc/rc.d/tubenews_web
+sudo bastille cmd tubenews chmod +x /usr/local/etc/rc.d/tubenews_daemon /usr/local/etc/rc.d/tubenews_web
 ```
 
 ### 2. Enable services in the jail

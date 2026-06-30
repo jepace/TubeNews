@@ -64,11 +64,11 @@ if uname -s | grep -q FreeBSD; then
     echo "Installing FreeBSD rc.d scripts..."
 
     # Copy rc.d files into the jail
-    sudo bastille cp "$JAIL" "$SRC/contrib/freebsd/tubenews_daemon" /etc/rc.d/tubenews_daemon
-    sudo bastille cp "$JAIL" "$SRC/contrib/freebsd/tubenews_web" /etc/rc.d/tubenews_web
+    sudo bastille cp "$JAIL" "$SRC/contrib/freebsd/tubenews_daemon" /usr/local/etc/rc.d/tubenews_daemon
+    sudo bastille cp "$JAIL" "$SRC/contrib/freebsd/tubenews_web" /usr/local/etc/rc.d/tubenews_web
 
     # Make executable
-    sudo bastille cmd "$JAIL" chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews_web
+    sudo bastille cmd "$JAIL" chmod +x /usr/local/etc/rc.d/tubenews_daemon /usr/local/etc/rc.d/tubenews_web
 
     # Fix state directory ownership (www user needs to write to state/)
     # Note: must use jail-relative path, not host path
