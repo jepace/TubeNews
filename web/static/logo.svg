@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="body" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a9aaa"/>
+      <stop offset="100%" stop-color="#1a6a8a"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#155f7a"/>
+      <stop offset="100%" stop-color="#0f4a62"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Main newspaper body -->
+  <rect x="10" y="8" width="72" height="84" rx="5" fill="url(#body)"/>
+
+  <!-- Right-side fold/spine -->
+  <rect x="72" y="8" width="10" height="84" rx="3" fill="url(#fold)"/>
+  <!-- Fold highlight line -->
+  <rect x="72" y="8" width="2" height="84" fill="#1a8a9a" opacity="0.5"/>
+
+  <!-- Play triangle (left-anchored, large) -->
+  <polygon points="16,24 16,62 44,43" fill="white" opacity="0.92"/>
+
+  <!-- News text lines (right of play button) -->
+  <rect x="50" y="30" width="26" height="5" rx="2.5" fill="white" opacity="0.85"/>
+  <rect x="50" y="42" width="22" height="5" rx="2.5" fill="white" opacity="0.85"/>
+  <rect x="50" y="54" width="26" height="5" rx="2.5" fill="white" opacity="0.85"/>
+
+  <!-- Lower text lines (full width) -->
+  <rect x="16" y="70" width="50" height="4" rx="2" fill="white" opacity="0.6"/>
+  <rect x="16" y="79" width="38" height="4" rx="2" fill="white" opacity="0.6"/>
+</svg>
