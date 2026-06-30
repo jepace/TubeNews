@@ -43,12 +43,7 @@
           <a href="{{ url_for('channel_feed', channel_id=ch.channel_id) }}" class="btn-sm">Browse</a>
           <a href="{{ url_for('admin_feed_edit', channel_id=ch.channel_id) }}" class="btn-sm">Edit</a>
           <button type="button" class="btn-sm toggle-feed-btn" data-channel-id="{{ ch.channel_id }}" data-csrf="{{ csrf_token() }}">{% if ch.get('disabled') %}Enable{% else %}Disable{% endif %}</button>
-          <form method="post" action="{{ url_for('admin_feed_delete', channel_id=ch.channel_id) }}"
-                class="inline-form"
-                onsubmit="return confirm('Remove \'{{ ch.channel_name }}\'? Archive data is not deleted.')">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn-danger-sm">Remove</button>
-          </form>
+          <button type="button" class="btn-danger-sm delete-feed-btn" data-channel-id="{{ ch.channel_id }}" data-channel-name="{{ ch.channel_name }}" data-csrf="{{ csrf_token() }}">Remove</button>
         </td>
       </tr>
       {% endfor %}
@@ -82,8 +77,8 @@
         })
         .then(function () {
           // Toggle the button text and row opacity
-          var isNowDisabled = originalText === 'Enable';
-          btn.textContent = isNowDisabled ? 'Disable' : 'Enable';
+          var isNowDisabled = originalText === 'Disable';
+          btn.textContent = isNowDisabled ? 'Enable' : 'Disable';
           if (isNowDisabled) {
             row.style.opacity = '0.6';
             statusCell.innerHTML = '<span style="color: var(--color-danger);">Disabled</span>';
@@ -96,6 +91,38 @@
         .catch(function (err) {
           console.error('Toggle failed:', err);
           btn.textContent = originalText;
+          btn.disabled = false;
+        });
+    });
+  });
+
+  document.querySelectorAll('.delete-feed-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var channelId = this.dataset.channelId;
+      var channelName = this.dataset.channelName;
+      var csrfToken = this.dataset.csrf;
+      var row = this.closest('.feed-row');
+
+      if (!confirm('Remove \'' + channelName + '\'? Archive data is not deleted.')) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Removing…';
+
+      fetch('{{ url_for("admin_feed_delete", channel_id="__CHANNEL__") }}'.replace('__CHANNEL__', channelId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'csrf_token=' + encodeURIComponent(csrfToken),
+        redirect: 'manual'
+      })
+        .then(function (r) {
+          if (r.status < 200 || r.status >= 400) throw new Error('HTTP ' + r.status);
+          row.remove();
+          var badge = document.querySelector('h1 .badge');
+          if (badge) badge.textContent = parseInt(badge.textContent, 10) - 1;
+        })
+        .catch(function (err) {
+          console.error('Delete failed:', err);
+          btn.textContent = 'Remove';
           btn.disabled = false;
         });
     });
