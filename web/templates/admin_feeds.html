@@ -42,7 +42,7 @@
         <td style="white-space: nowrap;">
           <a href="{{ url_for('channel_feed', channel_id=ch.channel_id) }}" class="btn-sm">Browse</a>
           <a href="{{ url_for('admin_feed_edit', channel_id=ch.channel_id) }}" class="btn-sm">Edit</a>
-          <button type="button" class="btn-sm toggle-feed-btn" data-channel-id="{{ ch.channel_id }}" data-csrf="{{ csrf_token() }}">{% if ch.get('disabled') %}Enable{% else %}Disable{% endif %}</button>
+          <button type="button" class="btn-sm toggle-feed-btn" data-channel-id="{{ ch.channel_id }}" data-csrf="{{ csrf_token() }}" data-disabled="{{ 'true' if ch.get('disabled') else 'false' }}">{% if ch.get('disabled') %}Enable{% else %}Disable{% endif %}</button>
           <button type="button" class="btn-danger-sm delete-feed-btn" data-channel-id="{{ ch.channel_id }}" data-channel-name="{{ ch.channel_name }}" data-csrf="{{ csrf_token() }}">Remove</button>
         </td>
       </tr>
@@ -57,7 +57,7 @@
       var csrfToken = this.dataset.csrf;
       var row = this.closest('.feed-row');
       var statusCell = row.querySelector('.status-cell');
-      var originalText = this.textContent;
+      var wasDisabled = this.dataset.disabled === 'true';
 
       this.disabled = true;
       this.textContent = 'Working…';
@@ -76,21 +76,24 @@
           return r.text();
         })
         .then(function () {
-          // Toggle the button text and row opacity
-          var isNowDisabled = originalText === 'Disable';
-          btn.textContent = isNowDisabled ? 'Enable' : 'Disable';
-          if (isNowDisabled) {
-            row.style.opacity = '0.6';
-            statusCell.innerHTML = '<span style="color: var(--color-danger);">Disabled</span>';
-          } else {
+          if (wasDisabled) {
+            // was disabled → now enabled
             row.style.opacity = '1';
             statusCell.innerHTML = 'Active';
+            btn.textContent = 'Disable';
+            btn.dataset.disabled = 'false';
+          } else {
+            // was enabled → now disabled
+            row.style.opacity = '0.6';
+            statusCell.innerHTML = '<span style="color: var(--color-danger);">Disabled</span>';
+            btn.textContent = 'Enable';
+            btn.dataset.disabled = 'true';
           }
           btn.disabled = false;
         })
         .catch(function (err) {
           console.error('Toggle failed:', err);
-          btn.textContent = originalText;
+          btn.textContent = wasDisabled ? 'Enable' : 'Disable';
           btn.disabled = false;
         });
     });
