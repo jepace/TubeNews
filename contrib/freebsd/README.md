@@ -38,26 +38,24 @@ sudo bastille cmd tubenews chmod +x /etc/rc.d/tubenews_daemon /etc/rc.d/tubenews
 
 ```sh
 sudo bastille console tubenews
-echo 'tubenews_daemon_enable="YES"'           >> /etc/rc.conf.local
-echo 'tubenews_daemon_dir="/var/www/tubenews"' >> /etc/rc.conf.local
-echo 'tubenews_web_enable="YES"'              >> /etc/rc.conf.local
-echo 'tubenews_web_dir="/var/www/tubenews"'    >> /etc/rc.conf.local
+sysrc tubenews_daemon_enable=YES tubenews_daemon_dir=/var/www/tubenews
+sysrc tubenews_web_enable=YES    tubenews_web_dir=/var/www/tubenews
 exit
 ```
 
-Optional settings (add to `/etc/rc.conf.local` inside the jail):
+Optional settings:
 
 ```sh
 # Run services as a different user (default: www)
-tubenews_daemon_user="www"
-tubenews_web_user="www"
+sysrc tubenews_daemon_user=www
+sysrc tubenews_web_user=www
 
 # Enable Secure cookie flag when behind an HTTPS proxy
-tubenews_web_https="YES"
+sysrc tubenews_web_https=YES
 
 # Override log file destinations
-tubenews_daemon_logfile="/var/log/tubenews_daemon.log"
-tubenews_web_logfile="/var/log/tubenews_web.log"
+sysrc tubenews_daemon_logfile=/var/log/tubenews_daemon.log
+sysrc tubenews_web_logfile=/var/log/tubenews_web.log
 ```
 
 ### 3. Start services

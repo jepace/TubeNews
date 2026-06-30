@@ -80,10 +80,8 @@ if uname -s | grep -q FreeBSD; then
     echo ""
     echo "Next steps (if first install):"
     echo "  sudo bastille console $JAIL"
-    echo "  echo 'tubenews_daemon_enable=\"YES\"'  >> /etc/rc.conf.local"
-    echo "  echo 'tubenews_daemon_dir=\"/var/www/tubenews\"' >> /etc/rc.conf.local"
-    echo "  echo 'tubenews_web_enable=\"YES\"'     >> /etc/rc.conf.local"
-    echo "  echo 'tubenews_web_dir=\"/var/www/tubenews\"'    >> /etc/rc.conf.local"
+    echo "  sysrc tubenews_daemon_enable=YES tubenews_daemon_dir=/var/www/tubenews"
+    echo "  sysrc tubenews_web_enable=YES    tubenews_web_dir=/var/www/tubenews"
     echo "  exit"
 fi
 
