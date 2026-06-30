@@ -54,8 +54,8 @@ _require_dir() {
 
 tubenews_web_start() {
     _require_dir
-    local env_extra=""
-    [ "${tubenews_web_https}" = "YES" ] && env_extra="TUBENEWS_HTTPS=true"
+    local env_extra="HOME=/tmp"
+    [ "${tubenews_web_https}" = "YES" ] && env_extra="${env_extra} TUBENEWS_HTTPS=true"
     echo "Starting ${name}."
     /usr/sbin/daemon \
         -p "${pidfile}" \
