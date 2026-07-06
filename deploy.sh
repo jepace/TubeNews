@@ -70,12 +70,14 @@ if uname -s | grep -q FreeBSD; then
     # Make executable
     sudo bastille cmd "$JAIL" chmod +x /usr/local/etc/rc.d/tubenews_daemon /usr/local/etc/rc.d/tubenews_web
 
-    # Fix state directory ownership (www user needs to write to state/)
+    # Fix state and content directory ownership (www user needs to write to both)
     # Note: must use jail-relative path, not host path
-    echo "Fixing state directory ownership to www:www..."
+    echo "Fixing state and content directory ownership to www:www..."
     DEST_IN_JAIL="/var/www/tubenews"
     sudo bastille cmd "$JAIL" chown -R www:www "$DEST_IN_JAIL/state"
     sudo bastille cmd "$JAIL" chmod 755 "$DEST_IN_JAIL/state"
+    sudo bastille cmd "$JAIL" mkdir -p "$DEST_IN_JAIL/content"
+    sudo bastille cmd "$JAIL" chown -R www:www "$DEST_IN_JAIL/content"
 
     echo ""
     echo "Next steps (if first install):"
