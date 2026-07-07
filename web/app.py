@@ -1512,7 +1512,8 @@ def serve_feed_public(token: str):
                 feed_name = data.get("feed_name") or f"{data['name']}'s TubeNews"
                 return render_template("feed.html", stories=stories, feed_name=feed_name,
                                        feed_path=f"/feed/{token}.xml",
-                                       body_classes=_prefs_to_classes(data.get("preferences", {})))
+                                       body_classes=_prefs_to_classes(data.get("preferences", {})),
+                                       page=0, has_more=False)
         except Exception as exc:
             logger.debug(f"Skipping {user_json.parent.name}: {exc}")
             continue
@@ -1801,7 +1802,8 @@ def serve_starred():
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_starred"),
-                           lobotomy_enabled=lobotomy_enabled)
+                           lobotomy_enabled=lobotomy_enabled,
+                           page=0, has_more=False)
 
 
 @app.route("/popular")
