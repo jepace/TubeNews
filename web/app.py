@@ -1014,14 +1014,22 @@ def _get_channel_stories(channel_id: str, user_timezone: str = "") -> tuple[str 
     return None, []  # type: ignore[return-value]
 
 
-def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
-    """Return parsed stories for a user's subscribed channels, newest-first.
+def _get_user_stories(user_data: dict, user_id: str = "", offset: int = 0,
+                      limit: int | None = 200, lookback_days: int = 90) -> tuple[list[StoryDict], bool]:
+    """Return (stories, has_more) for a user's subscribed channels, newest-first.
 
     Stories are filtered by ``user_id``: if a story's ``**Users:**`` line is
     present, it is shown only to the listed users.  Stories without a
     ``**Users:**`` line (feed-level or legacy) are shown to everyone.
+
+    Only video directories whose mtime falls within ``lookback_days`` are
+    scanned. ``limit`` controls how many story files are actually read and
+    parsed; ``offset`` skips that many entries first. ``has_more`` is True
+    when additional stories exist beyond the current page. Pass ``limit=None``
+    to read everything in the lookback window (e.g. for mark-all-read).
     """
     subscribed = set(user_data.get("channels", {}).keys())
+    cutoff_mtime = time.time() - lookback_days * 86400
     raw: list[dict] = []
     for channel_dir in [d for d in STORAGE_ROOT.iterdir()
                         if d.is_dir() and d.name != "users" and not d.name.startswith("_")]:
@@ -1030,7 +1038,6 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             continue
         channel_id = channel_info.get("channel_id", "")
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
-        cutoff_mtime = time.time() - 90 * 86400
         for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
             try:
                 if meeting_dir.stat().st_mtime < cutoff_mtime:
@@ -1052,7 +1059,11 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 logger.warning(f"Skipping {meeting_dir}: {exc}")
                 continue
     raw.sort(key=lambda e: _get_timestamp_as_float(e["meta"].get("processed_at")), reverse=True)
-    raw = raw[:500]
+    if limit is not None:
+        has_more = len(raw) > offset + limit
+        raw = raw[offset:offset + limit]
+    else:
+        has_more = False
     stories = []
     for entry in raw:
         try:
@@ -1092,7 +1103,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
         except Exception as exc:
             logger.warning(f"Skipping corrupted story file {entry['file']}: {exc}")
             continue
-    return stories  # type: ignore[return-value]
+    return stories, has_more  # type: ignore[return-value]
 
 
 def _get_popular_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
@@ -1497,7 +1508,7 @@ def serve_feed_public(token: str):
             data = json.loads(user_json.read_text())
             if data.get("feed_token") == token:
                 uid = user_json.parent.name
-                stories = _get_user_stories(data, uid)
+                stories, _ = _get_user_stories(data, uid)
                 feed_name = data.get("feed_name") or f"{data['name']}'s TubeNews"
                 return render_template("feed.html", stories=stories, feed_name=feed_name,
                                        feed_path=f"/feed/{token}.xml",
@@ -1620,7 +1631,7 @@ def serve_feed():
         flash("Subscribe to channels to start reading your feed.", "info")
         return redirect(url_for("account"))
     read_set = set(current_user._data.get("read_articles", []))
-    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    all_stories, _ = _get_user_stories(current_user._data, current_user.get_id())
     stories = [s for s in all_stories if s.get("content_hash", "") not in read_set]
     read_count = len(all_stories) - len(stories)
     starred_hashes = set(current_user._data.get("starred_articles", []))
@@ -1657,17 +1668,25 @@ def serve_read():
     """Render the logged-in user's read (archived) stories."""
     if not current_user.channel_ids:
         return redirect(url_for("account"))
-    read_set = set(current_user._data.get("read_articles", []))
-    all_stories = _get_user_stories(current_user._data, current_user.get_id())
-    stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
+    page = max(0, int(request.args.get("page", 0)))
     query = request.args.get("q", "").strip()[:200]
+    read_set = set(current_user._data.get("read_articles", []))
     if query:
+        # Search scans full window without pagination so results aren't split across pages
+        all_stories, _ = _get_user_stories(current_user._data, current_user.get_id(),
+                                           limit=None, lookback_days=365)
+        stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
         q = query.lower()
         stories = [s for s in stories if
                    q in s["title"].lower() or
                    q in s["body_html"].lower() or
                    q in s["channel_name"].lower() or
                    q in s["dateline"].lower()]
+        has_more = False
+    else:
+        all_stories, has_more = _get_user_stories(current_user._data, current_user.get_id(),
+                                                   offset=page * 100, limit=100, lookback_days=365)
+        stories = [s for s in all_stories if s.get("content_hash", "") in read_set]
     starred_hashes = set(current_user._data.get("starred_articles", []))
     feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
@@ -1692,7 +1711,8 @@ def serve_read():
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_read"),
-                           lobotomy_enabled=lobotomy_enabled)
+                           lobotomy_enabled=lobotomy_enabled,
+                           page=page, has_more=has_more)
 
 
 @app.route("/all")
@@ -1701,15 +1721,21 @@ def serve_all():
     """Render all of the logged-in user's stories regardless of read status."""
     if not current_user.channel_ids:
         return redirect(url_for("account"))
-    stories = _get_user_stories(current_user._data, current_user.get_id())
+    page = max(0, int(request.args.get("page", 0)))
     query = request.args.get("q", "").strip()[:200]
     if query:
+        stories, _ = _get_user_stories(current_user._data, current_user.get_id(),
+                                        limit=None, lookback_days=365)
         q = query.lower()
         stories = [s for s in stories if
                    q in s["title"].lower() or
                    q in s["body_html"].lower() or
                    q in s["channel_name"].lower() or
                    q in s["dateline"].lower()]
+        has_more = False
+    else:
+        stories, has_more = _get_user_stories(current_user._data, current_user.get_id(),
+                                               offset=page * 100, limit=100, lookback_days=365)
     starred_hashes = set(current_user._data.get("starred_articles", []))
     feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
@@ -1735,7 +1761,8 @@ def serve_all():
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=current_view,
-                           lobotomy_enabled=lobotomy_enabled)
+                           lobotomy_enabled=lobotomy_enabled,
+                           page=page, has_more=has_more)
 
 
 @app.route("/starred")
@@ -1745,7 +1772,8 @@ def serve_starred():
     if not current_user.channel_ids:
         return redirect(url_for("account"))
     starred_set = set(current_user._data.get("starred_articles", []))
-    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    all_stories, _ = _get_user_stories(current_user._data, current_user.get_id(),
+                                        limit=None, lookback_days=365)
     stories = [s for s in all_stories if s.get("content_hash", "") in starred_set]
     feed_name = current_user._data.get("feed_name") or f"{current_user.name}'s TubeNews"
     counts = _channel_counts(stories)
@@ -1991,7 +2019,7 @@ def account_mark_all_read():
     """
     bundle_slug = request.form.get("bundle_slug", "").strip()
     channel_id = request.form.get("channel_id", "").strip()
-    all_stories = _get_user_stories(current_user._data, current_user.get_id())
+    all_stories, _ = _get_user_stories(current_user._data, current_user.get_id(), limit=None)
     if bundle_slug:
         bundle_cids = next(
             (set(b["channel_ids"]) for b in _user_bundles(current_user._data) if b["slug"] == bundle_slug), set()
@@ -2030,7 +2058,7 @@ def account_mark_all_unread():
         )
         bundle_hashes = {
             s["content_hash"]
-            for s in _get_user_stories(current_user._data, current_user.get_id())
+            for s in _get_user_stories(current_user._data, current_user.get_id(), limit=None)[0]
             if s.get("channel_id") in bundle_cids and s.get("content_hash")
         }
         read_set = set(current_user._data.get("read_articles", []))
@@ -2039,7 +2067,7 @@ def account_mark_all_unread():
     elif channel_id:
         channel_hashes = {
             s["content_hash"]
-            for s in _get_user_stories(current_user._data, current_user.get_id())
+            for s in _get_user_stories(current_user._data, current_user.get_id(), limit=None)[0]
             if s.get("channel_id") == channel_id and s.get("content_hash")
         }
         read_set = set(current_user._data.get("read_articles", []))
