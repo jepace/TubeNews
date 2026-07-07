@@ -1030,7 +1030,13 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             continue
         channel_id = channel_info.get("channel_id", "")
         channel_name = channel_info.get("channel_name", channel_dir.name.replace("_", " "))
+        cutoff_mtime = time.time() - 90 * 86400
         for meeting_dir in [d for d in channel_dir.iterdir() if d.is_dir()]:
+            try:
+                if meeting_dir.stat().st_mtime < cutoff_mtime:
+                    continue
+            except OSError:
+                continue
             meta_path = meeting_dir / "metadata.json"
             if not meta_path.exists():
                 continue
@@ -1046,6 +1052,7 @@ def _get_user_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
                 logger.warning(f"Skipping {meeting_dir}: {exc}")
                 continue
     raw.sort(key=lambda e: _get_timestamp_as_float(e["meta"].get("processed_at")), reverse=True)
+    raw = raw[:500]
     stories = []
     for entry in raw:
         try:
