@@ -1109,9 +1109,8 @@ def _get_user_stories(user_data: dict, user_id: str = "", offset: int = 0,
 def _get_popular_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
     """Return all stories (across all channels) with vote counts, sorted by upvotes then date.
 
-    Filters to stories with at least 1 upvote and excludes read stories.
+    Filters to stories with at least 1 upvote; read status is not filtered.
     """
-    read_set = set(user_data.get("read_articles", []))
     raw: list[dict] = []
 
     for channel_dir in [d for d in STORAGE_ROOT.iterdir()
@@ -1157,9 +1156,6 @@ def _get_popular_stories(user_data: dict, user_id: str = "") -> list[StoryDict]:
             story_user_ids = s.get("user_ids", [])
             # Apply user filter
             if story_user_ids and user_id not in story_user_ids:
-                continue
-            # Exclude read stories
-            if s.get("content_hash", "") in read_set:
                 continue
             vid = entry["meta"]["video_id"]
             vt = entry["meta"].get("video_title", "")
