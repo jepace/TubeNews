@@ -1821,7 +1821,8 @@ def serve_popular():
                            channel_counts=counts, active_channel_id=active_channel_id,
                            is_popular=True, current_view_url=url_for("serve_popular"),
                            hide_subscribe_on_current_channel=False,
-                           lobotomy_enabled=lobotomy_enabled)
+                           lobotomy_enabled=lobotomy_enabled,
+                           page=0, has_more=False)
 
 
 @app.route("/channel/<channel_id>")
@@ -1839,7 +1840,8 @@ def channel_feed(channel_id: str):
     archive_dir = _find_archive_dir_for_channel(channel_id)
     feed_path = f"/content/{archive_dir.name}/rss.xml" if archive_dir else None
     return render_template("feed.html", stories=stories, feed_name=display_name,
-                           feed_path=feed_path, channel_id=channel_id)
+                           feed_path=feed_path, channel_id=channel_id,
+                           page=0, has_more=False)
 
 
 # ---------------------------------------------------------------------------
@@ -2898,7 +2900,7 @@ def admin_all_stories():
                     continue
     stories.sort(key=lambda s: s["processed_at"], reverse=True)
     return render_template("feed.html", stories=stories, feed_name="All Channels",
-                           feed_path="/content/rss.xml")
+                           feed_path="/content/rss.xml", page=0, has_more=False)
 
 
 @app.route("/admin/feeds/add", methods=["GET", "POST"])
