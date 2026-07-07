@@ -1630,8 +1630,10 @@ def serve_feed():
     if not current_user.channel_ids:
         flash("Subscribe to channels to start reading your feed.", "info")
         return redirect(url_for("account"))
+    page = max(0, int(request.args.get("page", 0)))
     read_set = set(current_user._data.get("read_articles", []))
-    all_stories, _ = _get_user_stories(current_user._data, current_user.get_id())
+    all_stories, has_more = _get_user_stories(current_user._data, current_user.get_id(),
+                                               offset=page * 100, limit=100, lookback_days=365)
     stories = [s for s in all_stories if s.get("content_hash", "") not in read_set]
     read_count = len(all_stories) - len(stories)
     starred_hashes = set(current_user._data.get("starred_articles", []))
@@ -1659,7 +1661,8 @@ def serve_feed():
                            channel_counts=counts, active_channel_id=active_channel_id,
                            bundles=bundle_counts, active_bundle_slug=active_bundle_slug,
                            current_view_url=url_for("serve_feed"),
-                           lobotomy_enabled=lobotomy_enabled)
+                           lobotomy_enabled=lobotomy_enabled,
+                           page=page, has_more=has_more)
 
 
 @app.route("/read")

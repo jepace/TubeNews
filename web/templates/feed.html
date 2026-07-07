@@ -226,7 +226,7 @@
       {% endif %}
     </article>
     {% endfor %}
-    {% if (is_archive or is_all) and (page > 0 or has_more) %}
+    {% if page > 0 or has_more %}
     <nav class="pagination">
       {% if page > 0 %}
       <a class="pagination-prev" href="?page={{ page - 1 }}{% if active_channel_id %}&channel={{ active_channel_id }}{% endif %}{% if active_bundle_slug %}&bundle={{ active_bundle_slug }}{% endif %}">&#8592; Newer</a>
