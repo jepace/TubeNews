@@ -778,6 +778,79 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
 
 
 
+# ---------------------------------------------------------------------------
+# Supadata credit budget
+# ---------------------------------------------------------------------------
+
+# Supadata bills one credit per transcript request — including requests that
+# come back "no transcript". A single runaway retry loop can therefore drain a
+# whole month's allowance in a day, so every call is metered against a hard
+# daily cap before it leaves the process.
+_SUPADATA_DAILY_LIMIT_DEFAULT = 10
+_supadata_budget_lock = threading.Lock()
+
+
+def _supadata_usage_path() -> Path:
+    """Return the path of the rolling Supadata credit-usage file."""
+    return STATE_ROOT / "supadata_usage.json"
+
+
+def _read_supadata_usage() -> tuple[str, int]:
+    """Return ``(utc_date, calls_made_today)`` from the usage file.
+
+    A missing, corrupt, or stale-dated file reads as zero calls for today.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    path = _supadata_usage_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("date") == today:
+            return today, int(data.get("count", 0))
+    except (OSError, ValueError, TypeError):
+        pass
+    return today, 0
+
+
+def _supadata_daily_limit() -> int:
+    """Return the configured daily Supadata call cap.
+
+    ``supadata_daily_limit`` in ``TubeNews.json`` overrides the default. A
+    value of 0 or below disables metering entirely (not recommended).
+    """
+    with _config_lock:
+        raw = _daemon_config.get("supadata_daily_limit", _SUPADATA_DAILY_LIMIT_DEFAULT)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return _SUPADATA_DAILY_LIMIT_DEFAULT
+
+
+def _supadata_budget_reserve() -> bool:
+    """Reserve one Supadata credit for today.
+
+    Returns True when the call may proceed (the reservation is recorded), or
+    False when today's cap is already reached. Counting happens *before* the
+    request so a crash mid-call cannot un-count a credit the vendor charged.
+    """
+    limit = _supadata_daily_limit()
+    if limit <= 0:
+        return True
+    with _supadata_budget_lock:
+        today, count = _read_supadata_usage()
+        if count >= limit:
+            return False
+        path = _supadata_usage_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"date": today, "count": count + 1}), encoding="utf-8")
+            tmp.replace(path)
+        except OSError as exc:
+            # Never let bookkeeping failure block real work, but say so loudly.
+            logger.error(f"Supadata: Could not record credit usage ({path}): {exc}")
+        return True
+
+
 def fetch_transcript(
     video_id: str,
     supadata_client: Supadata,
@@ -809,6 +882,15 @@ def fetch_transcript(
     """
     # Format metadata as: VideoID: Channel: Title
     metadata = _format_video_metadata(video_id, feed_name, video_title)
+
+    if not _supadata_budget_reserve():
+        logger.error(
+            f"Supadata: Daily credit cap ({_supadata_daily_limit()}) reached — "
+            f"deferring transcript fetches until tomorrow (UTC) - {metadata}"
+        )
+        if transcript_rate_limit_event is not None:
+            transcript_rate_limit_event.set()
+        return None
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
@@ -1573,7 +1655,7 @@ def rebuild_user_feed_page(user: dict[str, Any], base_url: str = "", user_id: st
     rss_feed_path = f"/feed/{user['feed_token']}.xml"
     rss_link = f'<link rel="alternate" type="application/rss+xml" title="{page_title}" href="{rss_feed_path}">'
 
-    html = """<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1629,6 +1711,14 @@ def rebuild_user_feed_page(user: dict[str, Any], base_url: str = "", user_id: st
 
 MAX_FOCUSES_PER_CHANNEL = 10
 
+# Grace window for a freshly published video that Supadata reports as having no
+# captions, used by the RSS/--single-run path. Kept short on purpose: within the
+# window no metadata.json is written, so the video is re-fetched on every run at
+# one Supadata credit each. The daemon's queue schedule
+# (_NO_CAPTIONS_MAX_ATTEMPTS) covers roughly the same span with a bounded
+# number of attempts.
+_NO_CAPTIONS_GRACE_HOURS = 6
+
 
 def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     """Return True if *video_id* needs processing (no ``metadata.json`` exists for it).
@@ -1638,11 +1728,13 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
     - Its archive directory does not exist yet (new video).
     - The directory exists but has no ``metadata.json`` (transcript cached but
       the AI step failed on a previous run — recovery path).
-    - The directory has ``metadata.json`` but status is "no_transcript_available"
-      and less than 3 days have passed (retry in case captions are added later).
 
-    A video with ``metadata.json`` and a final status (e.g., content_written,
-    no_captions_final) is considered done and will not be reprocessed.
+    Any ``metadata.json`` with a status counts as final, including
+    "no_transcript_available".  Retrying a missing transcript is the queue
+    schedule's job (see ``_NO_CAPTIONS_MAX_ATTEMPTS``); a video only reaches
+    that status once those attempts are spent, and each further attempt costs
+    a Supadata credit.  Re-opening the question here layered a second,
+    unbounded retry loop on top of the first.
     """
     if not feed_dir.is_dir():
         return True
@@ -1652,22 +1744,11 @@ def _needs_processing(video_id: str, feed_dir: Path) -> bool:
             metadata_path = d / "metadata.json"
             if not metadata_path.exists():
                 return True
-
-            # Check if this is a "no_transcript_available" status from less than 3 days ago
             try:
-                metadata = json.loads(metadata_path.read_text())
-                status = metadata.get("status", "")
-                if status == "no_transcript_available":
-                    processed_at_ts = _get_timestamp_as_float(metadata.get("processed_at"))
-                    age_seconds = time.time() - processed_at_ts
-                    age_days = age_seconds / (24 * 3600)
-                    if age_days < 3:
-                        # Retry within 3 days; captions may have been added
-                        return True
-            except (json.JSONDecodeError, KeyError, ValueError):
+                json.loads(metadata_path.read_text())
+            except (json.JSONDecodeError, OSError, ValueError):
                 # If metadata is invalid, reprocess to recover
                 return True
-
             return False
 
     return True
@@ -1844,10 +1925,12 @@ def process_video(
             livestream_error=_livestream_error,
         )
         if transcript_text is False:
-            # Supadata says no transcript exists. For recently published videos
-            # (< 48 h) the captions may simply not be ready yet — live streams
-            # end hours after the push notification fires and YouTube takes time
-            # to process captions. Treat those as transient so the daemon retries.
+            # Supadata says no transcript exists. For a very recently published
+            # video the captions may simply not be ready yet, so leave a short
+            # grace window before writing the video off. The window is
+            # deliberately narrow: this path writes no metadata.json, so the
+            # video is retried on *every* run until it closes, at one Supadata
+            # credit per retry.
             # Exception: members-only/restricted and deleted videos are permanent
             # regardless of age — no amount of waiting will produce a transcript.
             _perm_reason = _transcript_failure_reason[0] if _transcript_failure_reason else ""
@@ -1867,7 +1950,7 @@ def process_video(
                     metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
                     logger.debug(f"TubeNews: Failed to parse video publish time: {exc} - {metadata_fmt}")
                     age_hours = float("inf")
-            if age_hours < 48:
+            if age_hours < _NO_CAPTIONS_GRACE_HOURS:
                 metadata_fmt = f"{video_id}: {channel_name}: {video_title}"
                 logger.info(
                     f"TubeNews: No transcript yet — video is only {age_hours:.0f}h old, will retry - {metadata_fmt}"
@@ -2459,7 +2542,20 @@ _TRANSCRIPT_RETRY_OFFSETS: tuple[int, ...] = (
     24 * 3600,    # attempt 15: T+24 hr
     30 * 3600,    # attempt 16: T+30 hr  (final; failure → permanent)
 )
-_TRANSCRIPT_MAX_ATTEMPTS: int = len(_TRANSCRIPT_RETRY_OFFSETS)  # 13
+_TRANSCRIPT_MAX_ATTEMPTS: int = len(_TRANSCRIPT_RETRY_OFFSETS)
+
+# Supadata answering "this video has no captions" is a definitive statement
+# about a video that already exists — unlike a network error, repeating it
+# rarely changes the answer, and every repeat costs a credit. YouTube's
+# auto-captions land within an hour or two of upload, so give them a few hours
+# and then stop. Livestreams are handled separately (see _LIVESTREAM_MAX_ATTEMPTS);
+# they are re-queued from their own error path and never reach this cap.
+# Uses the first N offsets above: T+5 min, T+1 h, T+2 h, T+3 h, T+4 h.
+_NO_CAPTIONS_MAX_ATTEMPTS: int = 5
+
+# A livestream that never ends (abandoned, or stuck "live" in YouTube's data)
+# would otherwise be re-queued hourly forever at one credit per attempt.
+_LIVESTREAM_MAX_ATTEMPTS: int = 12
 
 
 def _next_transcript_try(queued_at_iso: str, attempt: int) -> str:
@@ -2647,7 +2743,9 @@ def _requeue_video(
     the stream ends before fetching the transcript again.  Resets
     ``transcript_attempts`` to 0 — the stream not being over is not a
     transcript failure, and we want a fresh retry window once it ends.
-    Existing ``retry_count`` and ``queued_at`` are preserved.
+    Existing ``retry_count`` and ``queued_at`` are preserved, and
+    ``livestream_attempts`` is incremented so the caller can stop re-queueing a
+    stream that never ends.
 
     Args:
         video_id: YouTube video ID.
@@ -2687,6 +2785,9 @@ def _requeue_video(
                 "next_try_at": next_try_at,
                 "transcript_attempts": 0,  # fresh retry window after stream ends
                 "retry_count": existing_retry_count,
+                # Survives the reset above so an endless "still live" stream
+                # cannot be re-queued (and re-billed) forever.
+                "livestream_attempts": existing.get("livestream_attempts", 0) + 1,
             }
             by_vid[video_id] = entry
 
@@ -2775,8 +2876,10 @@ def _wsb_try_fetch_transcript(
         ``"success"``        — transcript fetched and written to transcript.txt.
         ``"permanent"``      — Supadata confirmed the video is members-only/restricted or
                                not found; metadata written immediately, video resolved.
-        ``"transient"``      — temporary failure (no_captions retries up to
-                               _TRANSCRIPT_MAX_ATTEMPTS before being written off).
+        ``"no_captions"``    — Supadata answered, but the video has no captions;
+                               retried up to _NO_CAPTIONS_MAX_ATTEMPTS times.
+        ``"transient"``      — temporary failure (network/service error); retried up
+                               to _TRANSCRIPT_MAX_ATTEMPTS times before being written off.
         ``"livestream"``     — video is a live stream still broadcasting.
         ``"quota_exhausted"``— Supadata credit quota is exhausted this session.
     """
@@ -2820,8 +2923,10 @@ def _wsb_try_fetch_transcript(
                 video_published_at=entry.get("published_at", ""),
             )
             return "permanent"
-        # no_captions: captions may appear later — retry per the normal schedule.
-        return "transient"
+        # Captions may still be generated for a very fresh upload, but each
+        # re-ask costs a credit — so this gets a much shorter leash than a
+        # network failure does.
+        return "no_captions"
 
     # Transcript text successfully returned — cache it for the Gemini phase.
     (meeting_dir / "transcript.txt").write_text(result, encoding="utf-8")
@@ -3323,6 +3428,23 @@ def _wsb_processor_thread(config: dict) -> None:
                     break  # Leave remaining entries in queue unchanged
 
                 elif fetch_result == "livestream":
+                    # A stream that never reports "ended" would otherwise be
+                    # re-queued hourly forever, at one Supadata credit a go.
+                    if entry.get("livestream_attempts", 0) >= _LIVESTREAM_MAX_ATTEMPTS:
+                        title = entry.get("title", "?")
+                        ch_name = feed_cfg.get("channel_name", "?")
+                        logger.warning(
+                            f"WebSub: Still live after {_LIVESTREAM_MAX_ATTEMPTS} checks, "
+                            f"marking permanent - {vid}: {ch_name}: {title}"
+                        )
+                        _write_no_transcript_metadata(
+                            vid, feed_dir, date_str[:10], entry.get("title", ""),
+                            skip_reason="livestream_never_ended",
+                            channel_name=feed_cfg.get("channel_name", ""),
+                            video_published_at=entry.get("published_at", ""),
+                        )
+                        resolved_ids.add(vid)
+                        continue
                     # Re-queue with next_try_at deferred past when the stream ends.
                     # Use scheduled_start if present; fall back to now + 1 hour.
                     scheduled_start = entry.get("scheduled_start")
@@ -3361,15 +3483,21 @@ def _wsb_processor_thread(config: dict) -> None:
                     # Metadata already written by _wsb_try_fetch_transcript.
                     resolved_ids.add(vid)
 
-                elif fetch_result == "transient":
-                    # Schedule next attempt per the retry table.
+                elif fetch_result in ("transient", "no_captions"):
+                    # Schedule next attempt per the retry table. "No captions" is a
+                    # definitive answer, so it gets a far shorter leash than a
+                    # network/service failure — each retry costs a Supadata credit.
+                    max_attempts = (
+                        _NO_CAPTIONS_MAX_ATTEMPTS if fetch_result == "no_captions"
+                        else _TRANSCRIPT_MAX_ATTEMPTS
+                    )
                     attempts = entry.get("transcript_attempts", 0) + 1
                     queued_at_str = entry.get("queued_at")
-                    if attempts >= _TRANSCRIPT_MAX_ATTEMPTS or not queued_at_str:
+                    if attempts >= max_attempts or not queued_at_str:
                         title = entry.get("title", "?")
                         ch_name = feed_cfg.get("channel_name", "?")
                         metadata_fmt = f"{vid}: {ch_name}: {title}"
-                        msg = f"No transcript after {_TRANSCRIPT_MAX_ATTEMPTS} attempts, marking permanent"
+                        msg = f"No transcript after {attempts} attempt(s), marking permanent"
                         logger.warning(f"WebSub: {msg} - {metadata_fmt}")
                         video_date = date_str[:10]
                         _write_no_transcript_metadata(
@@ -3823,8 +3951,13 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
 def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str, base_url: str) -> str:
     """Build the HTML body for a daily digest email.
 
-    *feed_url* must be an absolute URL (``base_url`` + ``/feed/<token>.html``).
-    Each story links to ``feed_url#s<video_id>-<start_seconds>``.
+    *feed_url* must be an absolute URL (``base_url`` + ``/feed/<token>.html``)
+    and is used for the "Open your full feed" link.
+
+    Each story links to the public article page
+    ``<base_url>/article/<video_id>/<start_seconds>`` — unlike a feed anchor,
+    that URL needs neither the feed token nor a logged-in session, so it works
+    straight from an email client.
     """
     import html as _html
     account_url = base_url.rstrip("/") + "/account" if base_url else ""

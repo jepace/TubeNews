@@ -303,7 +303,9 @@ def flask_env(tmp_path, monkeypatch):
         "locked": False,
     }))
 
-    # Regular target user whose edit page we'll inspect
+    # Regular target user whose edit page we'll inspect.
+    # Needs at least one subscription: the edit page only renders the sharing
+    # URLs (the thing these tests assert on) for a user who has one.
     target_id = str(uuid.uuid4())
     target_dir = users_root / target_id
     target_dir.mkdir()
@@ -311,7 +313,7 @@ def flask_env(tmp_path, monkeypatch):
         "name": "Target User",
         "email": "target@test.com",
         "password_hash": generate_password_hash("targetpassword1"),
-        "channel_ids": [],
+        "channels": {"UC_target_channel": []},
         "feed_token": "target-feed-token-abc",
         "created_at": now_utc_iso(),
         "locked": False,
@@ -451,12 +453,14 @@ def test_admin_edit_user_feed_page_url_uses_configured_base_url(flask_env, tmp_p
     assert "https://news.example.com/feed/target-feed-token-abc.html" in html
 
 
-def test_public_article_page_loads(flask_env):
+def test_public_article_page_loads(flask_env, tmp_path, monkeypatch):
     """Public article page should load without login."""
-    client, tmp_path, _ = flask_env
-    # Create a minimal story file
-    storage = tmp_path / "content" / "test_channel" / "2024-04-21"
+    client, _admin_id, _ = flask_env
+    # Meeting directories are named by video ID alone.
+    content_root = tmp_path / "content"
+    storage = content_root / "test_channel" / "test_vid_123"
     storage.mkdir(parents=True)
+    monkeypatch.setattr(_web_app, "STORAGE_ROOT", content_root)
 
     metadata = storage / "metadata.json"
     metadata.write_text(json.dumps({
@@ -489,19 +493,24 @@ Video published 2024-04-21T10:00:00Z
     assert "This is a test article body" in html
 
 
-def test_public_article_404_on_missing_video(flask_env):
+def test_public_article_404_on_missing_video(flask_env, tmp_path, monkeypatch):
     """Public article page should 404 if video_id doesn't exist."""
-    client, tmp_path, _ = flask_env
+    client, _admin_id, _ = flask_env
+    content_root = tmp_path / "content"
+    content_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(_web_app, "STORAGE_ROOT", content_root)
     resp = client.get("/article/nonexistent_video/120")
     assert resp.status_code == 404
 
 
-def test_public_article_404_on_missing_start_seconds(flask_env):
+def test_public_article_404_on_missing_start_seconds(flask_env, tmp_path, monkeypatch):
     """Public article page should 404 if start_seconds doesn't match any story."""
-    client, tmp_path, _ = flask_env
+    client, _admin_id, _ = flask_env
     # Create a story file
-    storage = tmp_path / "content" / "test_channel" / "2024-04-21"
+    content_root = tmp_path / "content"
+    storage = content_root / "test_channel" / "test_vid_123"
     storage.mkdir(parents=True)
+    monkeypatch.setattr(_web_app, "STORAGE_ROOT", content_root)
 
     metadata = storage / "metadata.json"
     metadata.write_text(json.dumps({

@@ -23,8 +23,12 @@
        Your personal RSS feed and blog will be ready once you've saved at least one channel.</p>
   </section>
   {% endif %}
+  {% endif %}
 
   <!-- ── Sharing URLs ───────────────────────────────────────── -->
+  {# Shown on both views: an admin needs a user's feed URLs to support them,
+     and the rotate-token control below is an admin remedy for a leaked token.
+     The route supplies rss_url/feed_url/rotate_token_action either way. #}
   <section class="admin-section">
     <h2>Sharing URLs</h2>
     {% if user.channel_ids %}
@@ -49,7 +53,6 @@
       <button type="submit" class="btn-danger-sm" style="margin-top:0.75rem;">Rotate token</button>
     </form>
   </section>
-  {% endif %}
 
   <!-- ── Account info ──────────────────────────────────────── -->
   <section class="admin-section">

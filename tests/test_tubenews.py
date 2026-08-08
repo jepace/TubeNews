@@ -42,6 +42,14 @@ from TubeNews import (
     _write_no_transcript_metadata,
     _TRANSCRIPT_RETRY_OFFSETS,
     _TRANSCRIPT_MAX_ATTEMPTS,
+    _NO_CAPTIONS_MAX_ATTEMPTS,
+    _LIVESTREAM_MAX_ATTEMPTS,
+    _needs_processing,
+    _requeue_video,
+    _wsb_try_fetch_transcript,
+    _read_supadata_usage,
+    _supadata_budget_reserve,
+    _supadata_daily_limit,
     now_utc_iso,
     unix_to_iso8601,
     _title_from_entry_el,
@@ -196,8 +204,11 @@ def test_call_gemini_api_multipart_response(monkeypatch):
     assert result[0]["title"] == "Story"
 
 
-def test_call_gemini_api_503_returns_false(monkeypatch):
-    """HTTP 503 from Gemini must return False (trigger AI backoff) and log at WARNING."""
+def test_call_gemini_api_503_returns_service_unavailable(monkeypatch):
+    """HTTP 503 returns "service_unavailable" so the caller can pick the longer backoff.
+
+    Distinct from the plain-False 429 RPM case, which recovers in minutes.
+    """
     import TubeNews
     from unittest.mock import MagicMock
     import logging
@@ -226,7 +237,7 @@ def test_call_gemini_api_503_returns_false(monkeypatch):
         model_name="gemini-test",
     )
 
-    assert result is False, "503 must return False to trigger AI backoff"
+    assert result == "service_unavailable", "503 must signal the long service backoff"
     assert any("503" in w and "Unavailable" in w for w in warnings), (
         f"Expected warning mentioning 503, got: {warnings}"
     )
@@ -2182,9 +2193,9 @@ def test_process_video_writes_no_transcript_metadata(tmp_path, monkeypatch):
     assert meta["status"] == "no_transcript_available"
     assert meta["video_id"] == "VID_NO_TX"
 
-    # _needs_processing must return True — the video will be retried within 3 days
-    # in case captions are added to the video on YouTube
-    assert _needs_processing("VID_NO_TX", feed_dir)
+    # Once the write-off is recorded the video is done: re-asking Supadata costs
+    # a credit per attempt, and the retry budget was already spent getting here.
+    assert _needs_processing("VID_NO_TX", feed_dir) is False
 
 
 # ---------------------------------------------------------------------------
@@ -3104,19 +3115,25 @@ def test_next_transcript_try_attempt_1_is_one_hour():
     assert result == "2026-04-08T11:00:00Z"
 
 
-def test_next_transcript_try_attempt_12_is_twelve_hours():
-    """Attempt 12 (final) schedules T+12 hours from queued_at."""
-    queued_at = "2026-04-08T10:00:00Z"
-    result = _next_transcript_try(queued_at, 12)
-    assert result == "2026-04-08T22:00:00Z"
+def test_next_transcript_try_final_attempt_matches_last_offset():
+    """The last attempt schedules the last offset in the table.
+
+    Derived from _TRANSCRIPT_RETRY_OFFSETS rather than hardcoded, so tuning the
+    schedule cannot silently leave this test asserting a stale value.
+    """
+    queued_at = datetime(2026, 4, 8, 10, 0, 0, tzinfo=timezone.utc)
+    last_index = len(_TRANSCRIPT_RETRY_OFFSETS) - 1
+    expected = (
+        queued_at + timedelta(seconds=_TRANSCRIPT_RETRY_OFFSETS[last_index])
+    ).isoformat(timespec="seconds").replace("+00:00", "Z")
+    assert _next_transcript_try("2026-04-08T10:00:00Z", last_index) == expected
 
 
 def test_next_transcript_try_clamps_beyond_max():
-    """Attempt index beyond the table length clamps to the last offset."""
-    queued_at = "2026-04-08T10:00:00Z"
-    # Index 99 should clamp to the last offset (12 hours)
-    result = _next_transcript_try(queued_at, 99)
-    assert result == "2026-04-08T22:00:00Z"
+    """An attempt index past the end of the table clamps to the last offset."""
+    last_index = len(_TRANSCRIPT_RETRY_OFFSETS) - 1
+    at_end = _next_transcript_try("2026-04-08T10:00:00Z", last_index)
+    assert _next_transcript_try("2026-04-08T10:00:00Z", 99) == at_end
 
 
 def test_next_transcript_try_malformed_queued_at_uses_now():
@@ -3130,7 +3147,12 @@ def test_next_transcript_try_malformed_queued_at_uses_now():
 def test_transcript_max_attempts_matches_offsets():
     """_TRANSCRIPT_MAX_ATTEMPTS must equal len(_TRANSCRIPT_RETRY_OFFSETS)."""
     assert _TRANSCRIPT_MAX_ATTEMPTS == len(_TRANSCRIPT_RETRY_OFFSETS)
-    assert _TRANSCRIPT_MAX_ATTEMPTS == 13
+
+
+def test_transcript_retry_offsets_strictly_increasing():
+    """The schedule must back off monotonically — a flat or shrinking step would
+    retry sooner than intended and burn Supadata credits faster."""
+    assert list(_TRANSCRIPT_RETRY_OFFSETS) == sorted(set(_TRANSCRIPT_RETRY_OFFSETS))
 
 
 # ---------------------------------------------------------------------------
@@ -3248,8 +3270,12 @@ def test_wsb_try_fetch_transcript_returns_transient_on_none(tmp_path, monkeypatc
     assert result == "transient"
 
 
-def test_wsb_try_fetch_transcript_returns_transient_on_false(tmp_path, monkeypatch):
-    """Returns 'transient' when fetch_transcript returns False (Supadata permanent errors are not trusted)."""
+def test_wsb_try_fetch_transcript_returns_no_captions_on_false(tmp_path, monkeypatch):
+    """Returns 'no_captions' when fetch_transcript returns False without a permanent reason.
+
+    Still retried — captions may appear later — but on the short schedule, because
+    every retry costs a Supadata credit.
+    """
     import TubeNews
     monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
     monkeypatch.setattr(TubeNews, "fetch_transcript", lambda *a, **kw: False)
@@ -3259,11 +3285,11 @@ def test_wsb_try_fetch_transcript_returns_transient_on_false(tmp_path, monkeypat
     feed_cfg = {"channel_name": "Chan"}
 
     result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
-    assert result == "transient"
+    assert result == "no_captions"
 
 
-def test_wsb_try_fetch_transcript_transient_for_no_captions(tmp_path, monkeypatch):
-    """Returns 'transient' even when failure_reason is no_captions (captions may appear later)."""
+def test_wsb_try_fetch_transcript_no_captions_reason_is_retryable(tmp_path, monkeypatch):
+    """failure_reason 'no_captions' is retryable, but on the short (billed) schedule."""
     import TubeNews
 
     def fake_fetch(*a, failure_reason=None, **kw):
@@ -3278,7 +3304,9 @@ def test_wsb_try_fetch_transcript_transient_for_no_captions(tmp_path, monkeypatc
     feed_cfg = {"channel_name": "Chan"}
 
     result = TubeNews._wsb_try_fetch_transcript(entry, feed_cfg, None, None)
-    assert result == "transient"
+    assert result == "no_captions"
+    # Not written off outright — the caller still gets a few tries.
+    assert _NO_CAPTIONS_MAX_ATTEMPTS > 1
 
 
 @pytest.mark.parametrize("reason", ["members_only_or_restricted", "video_not_found"])
@@ -3379,16 +3407,17 @@ def test_transcript_retry_schedule_advances_next_try_at(tmp_path, monkeypatch):
 
 
 def test_transcript_retry_schedule_final_attempt(tmp_path):
-    """After attempt 12 (the last), next_try_at is T+12h; any further failure should be permanent."""
-    queued_at = "2026-04-08T10:00:00Z"
+    """The last scheduled attempt uses the last offset; past it the processor
+    marks the video permanent rather than scheduling again."""
+    queued_at = datetime(2026, 4, 8, 10, 0, 0, tzinfo=timezone.utc)
+    last_index = _TRANSCRIPT_MAX_ATTEMPTS - 1
+    expected = (
+        queued_at + timedelta(seconds=_TRANSCRIPT_RETRY_OFFSETS[last_index])
+    ).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-    # Simulate attempt 12 (index 12 in the offsets table)
-    nta_12 = _next_transcript_try(queued_at, 12)
-    assert nta_12 == "2026-04-08T22:00:00Z"  # T+12hr
-
-    # _TRANSCRIPT_MAX_ATTEMPTS is 13 total attempts (indices 0–12)
-    # At attempts == _TRANSCRIPT_MAX_ATTEMPTS, the processor marks permanent
-    assert _TRANSCRIPT_MAX_ATTEMPTS == 13
+    assert _next_transcript_try("2026-04-08T10:00:00Z", last_index) == expected
+    # At attempts == _TRANSCRIPT_MAX_ATTEMPTS the processor stops rescheduling.
+    assert _TRANSCRIPT_MAX_ATTEMPTS == len(_TRANSCRIPT_RETRY_OFFSETS)
 
 
 # ---------------------------------------------------------------------------
@@ -3646,8 +3675,8 @@ def test_scan_stories_since_excludes_read_articles(tmp_path, monkeypatch):
 
 # -- _build_digest_html --
 
-def test_build_digest_html_contains_anchor_links():
-    """Each story headline links to the feed page anchor #s<video_id>-<start>."""
+def test_build_digest_html_links_to_public_article_urls():
+    """Each headline links to the public article page, which needs no token or login."""
     stories = [
         {"title": "Council Approves Budget", "channel_name": "Alpha City",
          "video_id": "AbCdEf12345", "start_seconds": 120},
@@ -3656,11 +3685,19 @@ def test_build_digest_html_contains_anchor_links():
     ]
     feed_url = "https://example.com/feed/mytoken.html"
     html = _tn_digest._build_digest_html("Alice", "alice@example.com", stories, feed_url, "https://example.com")
-    assert "#sAbCdEf12345-120" in html
-    assert "#sXyZ9876543w-0" in html
+    assert "https://example.com/article/AbCdEf12345/120" in html
+    assert "https://example.com/article/XyZ9876543w/0" in html
     assert "Council Approves Budget" in html
     assert "Zoning Vote Delayed" in html
+    # The full-feed link still points at the tokenised feed page.
     assert feed_url in html
+
+
+def test_build_digest_html_article_urls_relative_without_base_url():
+    """With no base_url configured the article links fall back to a relative path."""
+    stories = [{"title": "T", "channel_name": "C", "video_id": "VID1", "start_seconds": 30}]
+    html = _tn_digest._build_digest_html("Alice", "alice@example.com", stories, "/feed/tok.html", "")
+    assert 'href="/article/VID1/30"' in html
 
 
 def test_build_digest_html_escapes_html_in_title():
@@ -4385,3 +4422,178 @@ def test_merge_queue_entry_updates_published_at_from_new_notification():
     new_entry = {**existing, "published_at": "2026-04-01T08:00:00Z"}
     merged = _merge_queue_entry(existing, new_entry)
     assert merged["published_at"] == "2026-04-01T08:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# Supadata credit conservation
+#
+# Supadata bills one credit per transcript request, including requests that
+# come back empty. These tests pin the bounds that keep a retry loop from
+# draining a month's allowance.
+# ---------------------------------------------------------------------------
+
+def test_no_captions_cap_is_much_lower_than_transient_cap():
+    """A definitive "no captions" answer must not use the long network-error schedule."""
+    assert _NO_CAPTIONS_MAX_ATTEMPTS < _TRANSCRIPT_MAX_ATTEMPTS
+    # Each attempt is one billable credit; keep the caption case cheap.
+    assert _NO_CAPTIONS_MAX_ATTEMPTS <= 5
+
+
+def test_wsb_try_fetch_transcript_reports_no_captions_distinctly(tmp_path, monkeypatch):
+    """A caption-less video returns "no_captions", not the longer-leash "transient"."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+
+    def fake_fetch(video_id, client, **kwargs):
+        kwargs["failure_reason"].append("no_captions")
+        return False
+
+    monkeypatch.setattr(TubeNews, "fetch_transcript", fake_fetch)
+    result = _wsb_try_fetch_transcript(
+        {"video_id": "VID1", "date": "2026-08-04", "title": "T"},
+        {"channel_name": "Chan", "channel_id": "UCx"},
+        object(),
+        None,
+    )
+    assert result == "no_captions"
+
+
+def test_wsb_try_fetch_transcript_reports_transient_for_network_error(tmp_path, monkeypatch):
+    """A network failure keeps the long retry schedule — it costs no vendor credit to wait."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(TubeNews, "fetch_transcript", lambda video_id, client, **kw: None)
+    result = _wsb_try_fetch_transcript(
+        {"video_id": "VID1", "date": "2026-08-04", "title": "T"},
+        {"channel_name": "Chan", "channel_id": "UCx"},
+        object(),
+        None,
+    )
+    assert result == "transient"
+
+
+def test_needs_processing_final_once_no_transcript_recorded(tmp_path):
+    """A video written off as caption-less is not re-fetched later.
+
+    Regression: a 3-day re-fetch window here layered a second, unbounded retry
+    loop on top of the queue schedule, re-billing the video every run.
+    """
+    feed_dir = tmp_path / "Chan"
+    vid_dir = feed_dir / "VID1"
+    vid_dir.mkdir(parents=True)
+    (vid_dir / "metadata.json").write_text(json.dumps({
+        "video_id": "VID1",
+        "status": "no_transcript_available",
+        "processed_at": now_utc_iso(),   # just now — the old code retried for 3 days
+    }))
+    assert _needs_processing("VID1", feed_dir) is False
+
+
+def test_needs_processing_true_when_metadata_missing(tmp_path):
+    """A directory with no metadata.json is still an unfinished video."""
+    feed_dir = tmp_path / "Chan"
+    (feed_dir / "VID1").mkdir(parents=True)
+    assert _needs_processing("VID1", feed_dir) is True
+
+
+def test_needs_processing_true_when_metadata_corrupt(tmp_path):
+    """Unreadable metadata falls back to reprocessing so the video can recover."""
+    feed_dir = tmp_path / "Chan"
+    vid_dir = feed_dir / "VID1"
+    vid_dir.mkdir(parents=True)
+    (vid_dir / "metadata.json").write_text("{not json")
+    assert _needs_processing("VID1", feed_dir) is True
+
+
+def test_requeue_video_increments_livestream_attempts(tmp_path, monkeypatch):
+    """Livestream re-queues are counted so an endless stream cannot loop forever.
+
+    Regression: transcript_attempts is reset on every re-queue, so without a
+    separate counter a stream stuck "live" was re-billed hourly indefinitely.
+    """
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    queue_path = tmp_path / "queue" / "push_queue.json"
+
+    for expected in (1, 2, 3):
+        _requeue_video(
+            video_id="VID1", channel_id="UCx", title="T", date="2026-08-04",
+            scheduled_start=None, next_try_at="2026-08-04T12:00:00Z",
+        )
+        entry = json.loads(queue_path.read_text())[0]
+        assert entry["livestream_attempts"] == expected
+        # The transcript counter still resets — that is the intended behaviour.
+        assert entry["transcript_attempts"] == 0
+
+    assert _LIVESTREAM_MAX_ATTEMPTS > 0
+
+
+def test_supadata_budget_blocks_calls_past_daily_cap(tmp_path, monkeypatch):
+    """The daily cap is a hard stop — the backstop against any runaway retry loop."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 3)
+
+    assert [_supadata_budget_reserve() for _ in range(3)] == [True, True, True]
+    assert _supadata_budget_reserve() is False
+    assert _supadata_budget_reserve() is False
+
+    _, count = _read_supadata_usage()
+    assert count == 3   # refused calls are not counted
+
+
+def test_supadata_budget_resets_on_a_new_day(tmp_path, monkeypatch):
+    """Yesterday's tally does not carry over."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 2)
+
+    (tmp_path / "supadata_usage.json").write_text(json.dumps({
+        "date": "2000-01-01", "count": 999,
+    }))
+    date_today, count = _read_supadata_usage()
+    assert count == 0
+    assert date_today == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert _supadata_budget_reserve() is True
+
+
+def test_supadata_budget_survives_corrupt_usage_file(tmp_path, monkeypatch):
+    """A damaged counter must not wedge transcript fetching permanently."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 5)
+    (tmp_path / "supadata_usage.json").write_text("{corrupt")
+    assert _read_supadata_usage()[1] == 0
+    assert _supadata_budget_reserve() is True
+
+
+def test_supadata_budget_disabled_when_limit_not_positive(tmp_path, monkeypatch):
+    """A limit of 0 opts out of metering entirely."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 0)
+    assert _supadata_daily_limit() == 0
+    assert all(_supadata_budget_reserve() for _ in range(50))
+
+
+def test_fetch_transcript_skips_api_call_when_budget_spent(tmp_path, monkeypatch):
+    """Over budget, no request reaches Supadata and the quota event halts the cycle."""
+    import TubeNews
+    import threading
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 1)
+
+    calls = []
+
+    class _Client:
+        def transcript(self, **kwargs):
+            calls.append(kwargs)
+            raise AssertionError("Supadata must not be called once the cap is reached")
+
+    _supadata_budget_reserve()   # spend the single allotted credit
+    event = threading.Event()
+    result = fetch_transcript("VID1", _Client(), transcript_rate_limit_event=event)
+
+    assert result is None          # transient — the video stays queued for tomorrow
+    assert calls == []
+    assert event.is_set()

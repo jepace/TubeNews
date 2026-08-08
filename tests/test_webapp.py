@@ -1341,9 +1341,27 @@ def test_login_next_allows_local_path(client, archive, registered_user):
 # ntfy notifications
 # ---------------------------------------------------------------------------
 
+def _allow_registration(monkeypatch, tmp_dir):
+    """Satisfy the register route's email-verification prerequisites.
+
+    Registration refuses to create an account unless ``base_url`` and
+    ``resend_api_key`` are configured, then sends a verification email and rolls
+    the account back if that send fails. Tests supply the config and stub the
+    send so no network call happens.
+    """
+    cfg = Path(tmp_dir) / "register_config.json"
+    cfg.write_text(json.dumps({
+        "base_url": "https://news.example.com",
+        "resend_api_key": "test-resend-key",
+    }))
+    monkeypatch.setattr(webapp, "CONFIG_FILE", cfg)
+    monkeypatch.setattr(webapp, "_send_verification_email", lambda *a, **kw: True)
+
+
 def test_register_sends_ntfy(client, archive, monkeypatch):
     """Successful registration fires a ntfy notification."""
     sent = []
+    _allow_registration(monkeypatch, archive)
     monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
     client.post("/register", data={
         "name": "Alice",
@@ -1687,6 +1705,7 @@ def test_register_route_writes_index(archive, monkeypatch):
     import web.app as _wa
     monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
+    _allow_registration(monkeypatch, archive)
 
     flask_app.config["TESTING"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
@@ -2607,8 +2626,9 @@ def test_get_user_stories_includes_channel_id(archive, monkeypatch):
     monkeypatch.setattr(_wa, "STORAGE_ROOT", archive)
     monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
     user_data = {"channels": {"UC_ALPHA_ID": []}}
-    stories = _wa._get_user_stories(user_data)
+    stories, has_more = _wa._get_user_stories(user_data)
     assert stories, "Expected at least one story from alpha channel"
+    assert has_more is False, "A single-page archive has nothing beyond it"
     for s in stories:
         assert "channel_id" in s
         assert s["channel_id"] == "UC_ALPHA_ID"

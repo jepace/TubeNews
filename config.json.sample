@@ -4,6 +4,7 @@
   "gemini_api_key": "ADD-GEMINI-KEY",
   "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "ADD-SUPADATA-KEY",
+  "supadata_daily_limit": 10,
 
   "content_dir": "",
   "state_dir": "",
