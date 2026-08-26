@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -3094,6 +3095,152 @@ def test_recover_orphaned_videos_returns_count(tmp_path, monkeypatch):
 
     count = _recover_orphaned_videos()
     assert count == 2
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_stale_unverified_users
+# ---------------------------------------------------------------------------
+
+def _make_web_user(users_root: Path, email: str, verified: bool, sent_at: str | None,
+                    created_at: str | None = None) -> str:
+    """Create a state/users/<uuid>/user.json like the web app would, return the uuid."""
+    uid = str(uuid.uuid4())
+    user_dir = users_root / uid
+    user_dir.mkdir(parents=True)
+    data = {
+        "name": "Test User",
+        "email": email,
+        "password_hash": "irrelevant",
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": created_at or now_utc_iso(),
+        "email_verified": verified,
+    }
+    if not verified:
+        data["email_verification_token"] = "tok"
+        if sent_at is not None:
+            data["email_verification_sent_at"] = sent_at
+    (user_dir / "user.json").write_text(json.dumps(data))
+    return uid
+
+
+def test_cleanup_stale_unverified_users_removes_expired(tmp_path, monkeypatch):
+    """An unverified account past the grace window is deleted."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+
+    stale_sent_at = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat().replace("+00:00", "Z")
+    uid = _make_web_user(users_root, "spam@example.com", verified=False, sent_at=stale_sent_at)
+
+    n = TubeNews._cleanup_stale_unverified_users()
+    assert n == 1
+    assert not (users_root / uid).exists()
+
+
+def test_cleanup_stale_unverified_users_keeps_recent(tmp_path, monkeypatch):
+    """An unverified account still inside the grace window survives."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+
+    recent_sent_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    uid = _make_web_user(users_root, "recent@example.com", verified=False, sent_at=recent_sent_at)
+
+    n = TubeNews._cleanup_stale_unverified_users()
+    assert n == 0
+    assert (users_root / uid).exists()
+
+
+def test_cleanup_stale_unverified_users_keeps_verified(tmp_path, monkeypatch):
+    """A verified account is never touched, regardless of age."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+
+    old_created = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat().replace("+00:00", "Z")
+    uid = _make_web_user(users_root, "verified@example.com", verified=True, sent_at=None, created_at=old_created)
+
+    n = TubeNews._cleanup_stale_unverified_users()
+    assert n == 0
+    assert (users_root / uid).exists()
+
+
+def test_cleanup_stale_unverified_users_keeps_legacy_no_key(tmp_path, monkeypatch):
+    """An account predating email verification (no email_verified key) is kept.
+
+    Matches User.is_verified's backward-compatible default of True in web/app.py.
+    """
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    uid = str(uuid.uuid4())
+    user_dir = users_root / uid
+    user_dir.mkdir()
+    old_created = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat().replace("+00:00", "Z")
+    (user_dir / "user.json").write_text(json.dumps({
+        "name": "Legacy User", "email": "legacy@example.com", "password_hash": "x",
+        "channels": {}, "feed_token": str(uuid.uuid4()), "created_at": old_created,
+    }))
+
+    n = TubeNews._cleanup_stale_unverified_users()
+    assert n == 0
+    assert (users_root / uid).exists()
+
+
+def test_cleanup_stale_unverified_users_falls_back_to_created_at(tmp_path, monkeypatch):
+    """With no email_verification_sent_at, created_at is used as the reference point."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    old_created = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat().replace("+00:00", "Z")
+    uid = _make_web_user(users_root, "old@example.com", verified=False, sent_at=None, created_at=old_created)
+
+    n = TubeNews._cleanup_stale_unverified_users()
+    assert n == 1
+    assert not (users_root / uid).exists()
+
+
+def test_cleanup_stale_unverified_users_removes_index_entry(tmp_path, monkeypatch):
+    """Deleting a stale account also drops its entry from the email index."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    stale_sent_at = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat().replace("+00:00", "Z")
+    uid = _make_web_user(users_root, "spam@example.com", verified=False, sent_at=stale_sent_at)
+    (users_root / "index.json").write_text(json.dumps({"spam@example.com": uid, "keep@example.com": "other-uid"}))
+
+    TubeNews._cleanup_stale_unverified_users()
+
+    index = json.loads((users_root / "index.json").read_text())
+    assert "spam@example.com" not in index
+    assert index.get("keep@example.com") == "other-uid"
+
+
+def test_cleanup_stale_unverified_users_no_users_dir(tmp_path, monkeypatch):
+    """Missing state/users/ entirely is a no-op, not an error."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    assert TubeNews._cleanup_stale_unverified_users() == 0
+
+
+def test_cleanup_stale_unverified_users_skips_corrupt_json(tmp_path, monkeypatch):
+    """A corrupt user.json is skipped rather than raising."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    bad_dir = users_root / str(uuid.uuid4())
+    bad_dir.mkdir()
+    (bad_dir / "user.json").write_text("{not valid json")
+
+    assert TubeNews._cleanup_stale_unverified_users() == 0
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,14 @@
     <input type="password" id="confirm_password" name="confirm_password"
            autocomplete="new-password" required>
 
+    <!-- Honeypot: hidden from real users via CSS, left unfilled by them.
+         Bots that auto-fill every field trip it. Do not add a visible
+         label or "leave blank" hint — that defeats the purpose. -->
+    <div class="hp-field" aria-hidden="true">
+      <label for="website">Website</label>
+      <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+    </div>
+
     <button type="submit">Create account</button>
   </form>
 

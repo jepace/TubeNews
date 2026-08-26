@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import socket
 import stat
@@ -3031,6 +3032,84 @@ def _recover_orphaned_videos() -> int:
     return len(new_entries)
 
 
+# An account that never verifies its email is either a bot or an abandoned
+# signup — either way it should not sit on disk forever. The 24h token expiry
+# (web/app.py's verify_email route) already cuts off the original link, so
+# this window only needs to outlast a legitimate "resend verification" click,
+# not the original one.
+_UNVERIFIED_USER_MAX_AGE_HOURS = 72
+
+
+def _cleanup_stale_unverified_users() -> int:
+    """Delete user accounts that never completed email verification.
+
+    An account is stale when ``email_verified`` is ``False`` and more than
+    :data:`_UNVERIFIED_USER_MAX_AGE_HOURS` have passed since
+    ``email_verification_sent_at`` (falling back to ``created_at`` if that key
+    is absent). Resending the verification email refreshes
+    ``email_verification_sent_at``, so a real user who is just slow to check
+    their inbox gets a fresh window each time they ask for one.
+
+    Accounts predating the email-verification feature have no
+    ``email_verified`` key at all; ``User.is_verified`` in web/app.py defaults
+    that to ``True`` for backward compatibility, and this function honors the
+    same default — only accounts explicitly marked unverified are removed.
+
+    Returns the number of accounts deleted.
+    """
+    users_dir = STATE_ROOT / "users"
+    if not users_dir.is_dir():
+        return 0
+
+    cutoff = time.time() - _UNVERIFIED_USER_MAX_AGE_HOURS * 3600
+    deleted = 0
+
+    for user_dir in sorted(users_dir.iterdir()):
+        if not user_dir.is_dir():
+            continue
+        user_json = user_dir / "user.json"
+        if not user_json.exists():
+            continue
+        try:
+            data = json.loads(user_json.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.debug(f"Skipping {user_dir.name} during unverified-user cleanup: {exc}")
+            continue
+
+        if data.get("email_verified", True):
+            continue
+
+        reference = data.get("email_verification_sent_at") or data.get("created_at")
+        reference_ts = _get_timestamp_as_float(reference) if reference else 0
+        if reference_ts and reference_ts > cutoff:
+            continue  # still within the grace window
+
+        email = data.get("email", "?")
+        try:
+            shutil.rmtree(user_dir)
+        except Exception as exc:
+            logger.warning(f"Failed to remove stale unverified user {user_dir.name} ({email}): {exc}")
+            continue
+
+        # Best-effort: drop the email index entry too, so a future signup
+        # with the same address doesn't collide with a dangling reference.
+        index_path = users_dir / "index.json"
+        if index_path.exists():
+            try:
+                index = json.loads(index_path.read_text(encoding="utf-8"))
+                if index.pop(email, None) is not None:
+                    tmp = index_path.with_suffix(".tmp")
+                    tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
+                    tmp.replace(index_path)
+            except Exception as exc:
+                logger.debug(f"Could not update user index after deleting {email}: {exc}")
+
+        deleted += 1
+        logger.info(f"Unverified-user cleanup: removed {email} ({user_dir.name})")
+
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # --daemon mode — WebSub receiver + processor threads
 # ---------------------------------------------------------------------------
@@ -3244,6 +3323,16 @@ def _wsb_processor_thread(config: dict) -> None:
     except Exception as exc:
         logger.warning(f"WebSub: Orphan recovery failed - {exc}")
     _last_orphan_recovery: float = time.time()
+
+    # Same cadence for sweeping accounts that never completed email
+    # verification — mainly cleans up after registration spam/bots.
+    try:
+        n = _cleanup_stale_unverified_users()
+        if n:
+            logger.info(f"Unverified-user cleanup: removed {n} stale account(s)")
+    except Exception as exc:
+        logger.warning(f"Unverified-user cleanup failed - {exc}")
+    _last_user_cleanup: float = time.time()
     _last_digest_check: float = 0.0
     _last_podcast_check: float = 0.0
     _last_heartbeat: float = 0.0
@@ -3311,6 +3400,16 @@ def _wsb_processor_thread(config: dict) -> None:
             except Exception as exc:
                 logger.warning(f"WebSub: Orphan recovery failed - {exc}")
             _last_orphan_recovery = time.time()
+
+        # -- Unverified-user cleanup (once per 24 h) ---------------------------
+        if time.time() - _last_user_cleanup >= _SECONDS_PER_DAY:
+            try:
+                n = _cleanup_stale_unverified_users()
+                if n:
+                    logger.info(f"Unverified-user cleanup: removed {n} stale account(s)")
+            except Exception as exc:
+                logger.warning(f"Unverified-user cleanup failed - {exc}")
+            _last_user_cleanup = time.time()
 
         # -- Daily email digest -----------------------------------------------
         digest_send_hour = int(current_config.get("email_digest_send_hour", 7))

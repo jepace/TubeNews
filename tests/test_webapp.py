@@ -1358,8 +1358,14 @@ def _allow_registration(monkeypatch, tmp_dir):
     monkeypatch.setattr(webapp, "_send_verification_email", lambda *a, **kw: True)
 
 
-def test_register_sends_ntfy(client, archive, monkeypatch):
-    """Successful registration fires a ntfy notification."""
+def test_register_does_not_send_ntfy(client, archive, monkeypatch):
+    """Registration alone must not fire a ntfy notification.
+
+    Anyone can POST to /register with a throwaway address they don't control,
+    so notifying at that point just relays spam-bot noise to the admin. The
+    "new user" notification fires on email *verification* instead — see
+    test_verify_email_sends_ntfy.
+    """
     sent = []
     _allow_registration(monkeypatch, archive)
     monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
@@ -1369,9 +1375,52 @@ def test_register_sends_ntfy(client, archive, monkeypatch):
         "password": "securepassword1",
         "confirm_password": "securepassword1",
     })
+    assert sent == []
+
+
+def test_verify_email_sends_ntfy(client, archive, monkeypatch):
+    """Completing email verification fires the "new user" ntfy notification."""
+    users_root = archive / "state" / "users"
+    users_root.mkdir(parents=True, exist_ok=True)
+    user_dir = users_root / str(uuid.uuid4())
+    user_dir.mkdir()
+    (user_dir / "user.json").write_text(json.dumps({
+        "name": "Alice",
+        "email": "alice@example.com",
+        "password_hash": generate_password_hash("securepassword1"),
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": now_utc_iso(),
+        "email_verified": False,
+        "email_verification_token": "tok123",
+        "email_verification_sent_at": now_utc_iso(),
+    }))
+
+    sent = []
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    resp = client.get("/verify-email/tok123")
+    assert resp.status_code == 302
+
     assert len(sent) == 1
     assert "new user" in sent[0][0].lower()
     assert "alice@example.com" in sent[0][1]
+
+
+def test_register_honeypot_blocks_without_side_effects(client, archive, monkeypatch):
+    """A filled honeypot field must not create an account, email, or notification."""
+    sent = []
+    _allow_registration(monkeypatch, archive)
+    monkeypatch.setattr(webapp, "_web_ntfy", lambda title, msg, **kw: sent.append((title, msg)))
+    resp = client.post("/register", data={
+        "name": "Bot",
+        "email": "bot@example.com",
+        "password": "securepassword1",
+        "confirm_password": "securepassword1",
+        "website": "http://spam.example",
+    })
+    assert resp.status_code == 302
+    assert sent == []
+    assert webapp._find_user_by_email("bot@example.com") is None
 
 
 def test_register_no_ntfy_on_failure(client, archive, monkeypatch):
@@ -1738,6 +1787,97 @@ def test_admin_delete_removes_index_entry(archive, monkeypatch, admin_client):
 
     index = _wa._read_email_index()
     assert "victim@example.com" not in index
+
+
+def _make_uid(users_root: Path, email: str) -> str:
+    """Return the directory (uuid) name of the user with *email*, made via _make_user."""
+    return next(p.name for p in users_root.iterdir()
+                if (p / "user.json").exists() and
+                json.loads((p / "user.json").read_text()).get("email") == email)
+
+
+def test_admin_bulk_delete_removes_selected_accounts(archive, monkeypatch, admin_client):
+    """Bulk delete removes every selected account and its index entry."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
+    users_root = archive / "state" / "users"
+
+    _make_user(users_root, "Spam One", "spam1@example.com", [])
+    _make_user(users_root, "Spam Two", "spam2@example.com", [])
+    uid1 = _make_uid(users_root, "spam1@example.com")
+    uid2 = _make_uid(users_root, "spam2@example.com")
+    _wa._index_add("spam1@example.com", uid1)
+    _wa._index_add("spam2@example.com", uid2)
+
+    resp = admin_client.post("/admin/users/bulk-delete", data={"uids": [uid1, uid2]})
+    assert resp.status_code == 302
+
+    assert not (users_root / uid1).exists()
+    assert not (users_root / uid2).exists()
+    index = _wa._read_email_index()
+    assert "spam1@example.com" not in index
+    assert "spam2@example.com" not in index
+
+
+def test_admin_bulk_delete_skips_own_account(archive, monkeypatch, admin_client, admin_user):
+    """Bulk delete must never remove the acting admin's own account, even if selected."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
+    users_root = archive / "state" / "users"
+
+    _make_user(users_root, "Spam", "spam@example.com", [])
+    spam_uid = _make_uid(users_root, "spam@example.com")
+    admin_uid = _make_uid(users_root, "admin@example.com")
+
+    admin_client.post("/admin/users/bulk-delete", data={"uids": [spam_uid, admin_uid]})
+
+    assert not (users_root / spam_uid).exists()
+    assert (users_root / admin_uid).exists(), "admin's own account must survive"
+
+
+def test_admin_bulk_delete_requires_admin(logged_in_client, archive):
+    """A non-admin logged-in user must not be able to reach bulk delete."""
+    resp = logged_in_client.post("/admin/users/bulk-delete", data={"uids": ["whatever"]})
+    assert resp.status_code in (302, 403)
+
+
+def test_admin_bulk_delete_requires_login(client, archive):
+    """An anonymous request must not be able to reach bulk delete."""
+    resp = client.post("/admin/users/bulk-delete", data={"uids": ["whatever"]}, follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/login" in resp.headers["Location"]
+
+
+def test_admin_users_page_renders_with_unverified_pill(archive, monkeypatch, admin_client):
+    """GET /admin must render without error and show an Unverified status pill
+    (and its checkbox) for an account that hasn't confirmed its email."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
+    users_root = archive / "state" / "users"
+
+    user_dir = users_root / str(uuid.uuid4())
+    user_dir.mkdir(parents=True)
+    (user_dir / "user.json").write_text(json.dumps({
+        "name": "Spammy", "email": "spammy@example.com",
+        "password_hash": generate_password_hash("whatever123"),
+        "channels": {}, "feed_token": str(uuid.uuid4()),
+        "created_at": now_utc_iso(), "email_verified": False,
+    }))
+
+    resp = admin_client.get("/admin")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Unverified" in body
+    assert 'name="uids"' in body
+    assert 'id="bulk-delete-btn"' in body
+
+
+def test_admin_bulk_delete_empty_selection_no_op(archive, monkeypatch, admin_client):
+    """Submitting with nothing selected must not error and must delete nothing."""
+    import web.app as _wa
+    monkeypatch.setattr(_wa, "USERS_ROOT", archive / "state" / "users")
+    resp = admin_client.post("/admin/users/bulk-delete", data={})
+    assert resp.status_code == 302
 
 
 def test_admin_email_change_updates_index(archive, monkeypatch, admin_client):
@@ -2476,6 +2616,47 @@ def test_login_locked_account_does_not_authenticate(client, archive):
 
     client.post("/login", data={"email": "locked2@example.com", "password": "correctpassword1"})
     # After "login", accessing a login-required page must still redirect to login
+    r = client.get("/feed", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def _make_unverified_user(archive: Path, email: str, password: str = "correctpassword1") -> None:
+    data = {
+        "name": "Unverified User",
+        "email": email,
+        "password_hash": generate_password_hash(password),
+        "channels": {},
+        "feed_token": str(uuid.uuid4()),
+        "created_at": now_utc_iso(),
+        "email_verified": False,
+        "email_verification_token": str(uuid.uuid4()),
+        "email_verification_sent_at": now_utc_iso(),
+    }
+    user_dir = archive / "state" / "users" / str(uuid.uuid4())
+    user_dir.mkdir(parents=True)
+    (user_dir / "user.json").write_text(json.dumps(data))
+
+
+def test_login_unverified_account_shows_error(client, archive):
+    """An account that hasn't verified its email must be rejected at login with
+    a message telling the user why — not a silent, unexplained bounce."""
+    _make_unverified_user(archive, "unverified@example.com")
+
+    r = client.post("/login", data={
+        "email": "unverified@example.com",
+        "password": "correctpassword1",
+    }, follow_redirects=True)
+
+    assert r.status_code == 200
+    assert b"verify your email" in r.data.lower()
+
+
+def test_login_unverified_account_does_not_authenticate(client, archive):
+    """An unverified account must not be granted a session even with correct credentials."""
+    _make_unverified_user(archive, "unverified2@example.com")
+
+    client.post("/login", data={"email": "unverified2@example.com", "password": "correctpassword1"})
     r = client.get("/feed", follow_redirects=False)
     assert r.status_code == 302
     assert "/login" in r.headers["Location"]

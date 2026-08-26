@@ -48,6 +48,7 @@ html.dark .user-table tbody tr:hover { background: #374151; }
 html.dark .pill-active           { background: #064e3b; color: #6ee7b7; }
 html.dark .pill-locked           { background: #7f1d1d; color: #fca5a5; }
 html.dark .pill-admin            { background: #1e3a5f; color: #93c5fd; }
+html.dark .pill-unverified       { background: #78350f; color: #fde68a; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -405,6 +406,16 @@ main {
   margin-bottom: 1.5rem;
 }
 
+/* Honeypot field on the registration form — off-screen, not display:none,
+   since some bots skip fields hidden that way. Real browsers never show it. */
+.hp-field {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
 /* Forms */
 form {
   display: flex;
@@ -734,9 +745,17 @@ html.dark .alert-danger { background: #2d1515; }
   padding: 0.1rem 0.55rem;
   text-transform: uppercase;
 }
-.pill-active { background: #d1fae5; color: #065f46; }
-.pill-locked { background: #fee2e2; color: #991b1b; }
-.pill-admin  { background: #dbeafe; color: #1e40af; }
+.pill-active     { background: #d1fae5; color: #065f46; }
+.pill-locked     { background: #fee2e2; color: #991b1b; }
+.pill-admin      { background: #dbeafe; color: #1e40af; }
+.pill-unverified { background: #fef3c7; color: #92400e; }
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
 
 /* User table */
 .user-table {

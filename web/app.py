@@ -1297,6 +1297,10 @@ def login():
         if user and check_password_hash(user._data["password_hash"], password):
             if user.is_locked:
                 flash("This account has been locked. Contact an administrator.", "error")
+            elif not user.is_verified:
+                # login_user() below would also refuse an inactive user, but
+                # silently — surface why instead of leaving them wondering.
+                flash("Please verify your email before logging in. Check your inbox for the link.", "error")
             else:
                 login_user(user, remember=remember)
                 if not user.channel_ids:
@@ -1310,12 +1314,21 @@ def login():
 
 
 @app.route("/register", methods=["GET", "POST"])
-@limiter.limit("5 per minute")
+@limiter.limit("5 per hour")
 def register():
     if current_user.is_authenticated:
         return redirect(url_for("account"))
 
     if request.method == "POST":
+        # Honeypot: a field hidden from real users via CSS. Bots that
+        # auto-fill every form field trip it. Pretend success without
+        # creating an account, writing to disk, or sending email — the
+        # goal is to make the bot think it worked and move on, not to
+        # burn a real registration's worth of resources confirming it didn't.
+        if request.form.get("website", "").strip():
+            logger.info("Registration blocked: honeypot field filled")
+            return redirect(url_for("verify_email_pending"))
+
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
         confirm = request.form.get("confirm_password", "")
@@ -1360,9 +1373,12 @@ def register():
                 (user_dir / "user.json").write_text(json.dumps(data, indent=2))
                 _index_add(email, user_uuid)
 
-                # Send verification email
+                # Send verification email. The "new user" notification fires
+                # on successful *verification* (see verify_email()), not here —
+                # anyone can POST to this route with a throwaway address, so
+                # notifying at this point just relays spam-bot noise straight
+                # to the admin's phone.
                 if _send_verification_email(email, verification_token, base_url):
-                    _web_ntfy("TubeNews: new user", f"{name} ({email}) registered. Awaiting email verification.")
                     flash("Account created! Check your email to verify and activate your account.", "success")
                     return redirect(url_for("verify_email_pending"))
                 else:
@@ -1432,6 +1448,7 @@ def verify_email(token: str):
     user._data.pop("email_verification_sent_at", None)
     user._save()
 
+    _web_ntfy("TubeNews: new user", f"{user.name} ({user.email}) verified their email.")
     flash("Email verified! Log in to continue.", "success")
     return redirect(url_for("login"))
 
@@ -2638,6 +2655,46 @@ def admin_user_delete(uid: str):
     shutil.rmtree(user._dir, ignore_errors=True)
     _web_ntfy("TubeNews: user deleted", f"{current_user.email} deleted account for {deleted_email}.")
     flash(f"Account for {deleted_email} deleted.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/bulk-delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_users_bulk_delete():
+    """Delete several accounts at once — e.g. a batch of spam/bot registrations.
+
+    Unlike the single-account delete route this has no per-account email
+    confirmation (typing dozens of addresses defeats the point of "bulk"); the
+    guard instead is that only admins can reach this route at all, plus the
+    browser-side confirm() dialog before the form submits.
+    """
+    uids = request.form.getlist("uids")
+    deleted: list[str] = []
+    skipped_self = False
+    for uid in uids:
+        user = _find_user_by_id(uid)
+        if not user:
+            continue
+        if user.email == current_user.email:
+            skipped_self = True
+            continue
+        deleted_email = user.email
+        _index_remove(deleted_email)
+        shutil.rmtree(user._dir, ignore_errors=True)
+        deleted.append(deleted_email)
+
+    if deleted:
+        _web_ntfy(
+            "TubeNews: bulk user delete",
+            f"{current_user.email} deleted {len(deleted)} account(s): {', '.join(deleted[:20])}"
+            + (f" (+{len(deleted) - 20} more)" if len(deleted) > 20 else ""),
+        )
+        flash(f"Deleted {len(deleted)} account(s).", "success")
+    elif not skipped_self:
+        flash("No accounts selected.", "error")
+    if skipped_self:
+        flash("Skipped your own account.", "info")
     return redirect(url_for("admin_users"))
 
 

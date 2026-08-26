@@ -51,6 +51,7 @@ Pipeline: YouTube RSS → Supadata transcripts → Gemini stories (`.md`) → RS
 - **`metadata.json` `processed_at`** is an ISO 8601 string (`"2026-04-07T00:14:36Z"`), not a float.
 - **Web app generates feeds dynamically** — `build_user_feed_xml()` and `_get_user_stories()` scan `content/` on every request. It returns `(stories, has_more)` and takes `offset`/`limit`/`lookback_days`; pass `limit=None` for a full scan. `rebuild_user_feed*` functions are CLI-only.
 - **A `metadata.json` with any status is final.** `_needs_processing()` returns False for it — including `no_transcript_available`. Retry scheduling belongs to the queue, never to a second age-based window layered on top.
+- **Registration abuse controls.** `/register` has a honeypot field (`website`, hidden via CSS not `display:none`), a tightened rate limit (5/hour/IP), and the "new user" ntfy notification fires on **verification** (`verify_email()`), not on the raw `POST /register` — anyone can hit that route with an address they don't own. Unverified accounts older than `_UNVERIFIED_USER_MAX_AGE_HOURS` (72h) are swept up by `_cleanup_stale_unverified_users()` once a day. Admin UI has a bulk-delete for clearing out an existing spam wave (`/admin/users/bulk-delete`, checkboxes + "Select unverified").
 
 ---
 

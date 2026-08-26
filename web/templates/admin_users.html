@@ -6,9 +6,20 @@
   <h1>Users <span class="badge">{{ users|length }}</span></h1>
 
   {% if users %}
+  <form id="bulk-delete-form" method="post" action="{{ url_for('admin_users_bulk_delete') }}"
+        onsubmit="return confirm('Permanently delete ' + document.querySelectorAll('.row-checkbox:checked').length + ' account(s)? This cannot be undone.')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  </form>
+
+  <div class="bulk-actions">
+    <button type="button" class="btn-sm" id="select-unverified">Select unverified</button>
+    <button type="submit" form="bulk-delete-form" class="btn-danger-sm" id="bulk-delete-btn" disabled>Delete selected</button>
+  </div>
+
   <table class="user-table">
     <thead>
       <tr>
+        <th><input type="checkbox" id="select-all" aria-label="Select all"></th>
         <th>Name</th>
         <th>Email</th>
         <th>Subscriptions</th>
@@ -21,6 +32,13 @@
     <tbody>
       {% for u in users %}
       <tr class="{{ 'row-locked' if u.is_locked }}">
+        <td>
+          {% if u.email != current_user.email %}
+          <input type="checkbox" name="uids" value="{{ u.get_id() }}" form="bulk-delete-form"
+                 class="row-checkbox" data-unverified="{{ 'true' if not u.is_verified else 'false' }}"
+                 aria-label="Select {{ u.email }}">
+          {% endif %}
+        </td>
         <td>{{ u.name }}</td>
         <td class="mono">{{ u.email }}</td>
         <td>
@@ -38,6 +56,8 @@
         <td>
           {% if u.is_locked %}
             <span class="pill pill-locked">Locked</span>
+          {% elif not u.is_verified %}
+            <span class="pill pill-unverified">Unverified</span>
           {% elif u.is_admin %}
             <span class="pill pill-admin">Admin</span>
           {% else %}
@@ -67,6 +87,35 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <script>
+    (function () {
+      var selectAll = document.getElementById('select-all');
+      var selectUnverified = document.getElementById('select-unverified');
+      var bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+      var checkboxes = Array.prototype.slice.call(document.querySelectorAll('.row-checkbox'));
+
+      function refreshBulkButton() {
+        var anyChecked = checkboxes.some(function (cb) { return cb.checked; });
+        bulkDeleteBtn.disabled = !anyChecked;
+      }
+      checkboxes.forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          refreshBulkButton();
+          if (!cb.checked) selectAll.checked = false;
+        });
+      });
+      selectAll.addEventListener('change', function () {
+        checkboxes.forEach(function (cb) { cb.checked = selectAll.checked; });
+        refreshBulkButton();
+      });
+      selectUnverified.addEventListener('click', function () {
+        checkboxes.forEach(function (cb) { cb.checked = cb.dataset.unverified === 'true'; });
+        selectAll.checked = false;
+        refreshBulkButton();
+      });
+    })();
+  </script>
   {% else %}
     <p class="muted">No user accounts yet.</p>
   {% endif %}
