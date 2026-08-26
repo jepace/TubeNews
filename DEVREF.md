@@ -169,7 +169,13 @@ Defined in `web/app.py`:
 | `process_feed(feed, ..., ai_rate_limit_event=None, transcript_rate_limit_event=None)` | Collects focuses via `_collect_channel_focuses`, processes all videos needing work for any focus; returns `(content_changed, ai_rate_limited, stories_written)`. Breaks out of the video loop immediately when `transcript_rate_limit_event` is set. |
 | `_read_channels(config)` | Reads channel list from `state/channels.json`; falls back to `config.get("feeds", [])` when `channels.json` does not exist (migration compatibility). |
 | `_check_supadata_quota(config)` | Reads `state/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
-| `_supadata_budget_reserve()` | Reserves one Supadata credit for today against `supadata_daily_limit`. Returns `True` (call may proceed, reservation recorded) or `False` (cap reached). Counts *before* the request so a crash mid-call cannot un-count a credit the vendor already charged. Called by `fetch_transcript` on every path. |
+| `_supadata_budget_reserve()` | Reserves one Supadata credit against **both** `supadata_daily_limit` and `supadata_monthly_limit`. Returns `True` (call may proceed, reservation recorded) or `False` (a cap is reached), logging which bound was hit since the remedy differs — wait until tomorrow vs. wait for the plan to reset. Counts *before* the request so a crash mid-call cannot un-count a credit the vendor already charged. Called by `fetch_transcript` on every path. |
+| `_supadata_cycle_start(now=None)` | Returns the ISO date the current billing cycle began, from `supadata_billing_cycle_day`. Clamps a cycle day past the end of a short month to that month's last day. |
+| `_supadata_monthly_limit()` | Reads `supadata_monthly_limit` from the live daemon config (hot-reloadable); `<= 0` disables the cycle bound. |
+| `supadata_budget_status()` | Returns current usage against both bounds (`used_today`/`daily_limit`, `used_this_cycle`/`monthly_limit`, `cycle_start`) for logging and the admin UI. Logged in the daemon heartbeat every 5 minutes. |
+| `_is_video_too_old(date_str, config=None)` | True when a queued video is older than `max_video_age_days`. Empty, malformed, or future dates return False — better to spend one credit than silently discard a video over an unparseable timestamp. |
+| `_max_video_age_days(config=None)` | Reads `max_video_age_days`; falls back to `_MAX_VIDEO_AGE_DAYS_DEFAULT` (14) on a missing or non-numeric value. |
+| `_write_too_old_metadata(video_id, feed_dir, video_date, video_title, video_published_at="")` | Writes a final `ignored_too_old` metadata.json for a stale queued video — the same status the new-feed backlog guard uses, so feed builders already skip it and `_needs_processing` treats it as done (no re-queue by orphan recovery). |
 | `_read_supadata_usage()` | Returns `(utc_date, calls_made_today)` from `state/supadata_usage.json`. A missing, corrupt, or stale-dated file reads as zero. |
 | `_supadata_daily_limit()` | Reads `supadata_daily_limit` from the live daemon config (hot-reloadable); `<= 0` disables metering. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
@@ -273,7 +279,7 @@ state/
 ├── subscriptions.json          # WebSub subscription tracking (keyed by channel_id)
 ├── .tubenews.lock              # Process lock file
 ├── supadata_balance.json       # Cached Supadata credit balance (written at end of each run)
-├── supadata_usage.json         # Rolling per-UTC-day count of Supadata requests (daily cap enforcement)
+├── supadata_usage.json         # Supadata request counters: date/count (daily cap) + cycle_start/cycle_count (billing-cycle cap)
 ├── run_logs/                   # Run data (replaces content/_run_logs/)
 │   ├── run_log.json            # Rolling summary of last 30 runs (written by TubeNews.py)
 │   └── run-<pid>.log           # Full stdout/stderr for a single run (written by admin_run_now)
@@ -369,7 +375,10 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `gemini_api_key` | Yes | Google Gemini API key from AI Studio |
 | `gemini_model` | Yes | Gemini model name (e.g. `gemini-2.5-flash`) |
 | `supadata_api_key` | Yes | Supadata API key for transcript fetching |
-| `supadata_daily_limit` | No | Hard cap on Supadata requests per UTC day (default `10`). Supadata bills one credit per request including "no transcript" answers, so this is the backstop against a runaway retry loop draining the monthly plan. Usage is tracked in `state/supadata_usage.json`. Set `0` to disable metering. |
+| `supadata_daily_limit` | No | Hard cap on Supadata requests per UTC day (default `10`). Bounds the blast radius of a runaway retry loop to one day's worth. Set `0` to disable this bound (the cycle bound still applies). |
+| `supadata_monthly_limit` | No | Hard cap on Supadata requests per billing cycle (default `300`). This is the number the vendor actually bills against — a daily cap alone cannot honour a monthly plan, since 10/day over a 31-day cycle is 310 requests against a 300-credit plan. Set to the plan size. `0` disables this bound. |
+| `supadata_billing_cycle_day` | No | Day of month the vendor's plan resets (default `1`). Supadata bills from the signup date, not the 1st. A value past the end of a short month clamps to that month's last day. |
+| `max_video_age_days` | No | Skip queued videos published more than this many days ago (default `14`), marking them `ignored_too_old`. Costs no credit — the age is decided from the queue entry. Prevents a backlog that accumulated while the daemon was down from consuming a fresh allowance before reaching current uploads. `0` disables. |
 | `content_dir` | No | Path to the content directory (default: `content/` next to `TubeNews.py`). Use an absolute path (e.g. `/var/www/html/tubenews`) or a path relative to `TubeNews.py` to point it at your web server's document root. |
 | `state_dir` | No | Path to the state directory (default: `state/` next to `TubeNews.py`). Stores users, run logs, channel config, lock file, and Supadata balance — never web-served. Use an absolute path or a path relative to `TubeNews.py`. |
 | `request_timeout` | No | Seconds before giving up on YouTube RSS and Supadata API calls (default: `15`). Increase on slow or high-latency connections |

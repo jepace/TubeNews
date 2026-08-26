@@ -5,6 +5,9 @@
   "gemini_model": "gemini-2.5-flash",
   "supadata_api_key": "ADD-SUPADATA-KEY",
   "supadata_daily_limit": 10,
+  "supadata_monthly_limit": 300,
+  "supadata_billing_cycle_day": 1,
+  "max_video_age_days": 14,
 
   "content_dir": "",
   "state_dir": "",

@@ -20,6 +20,7 @@ Configuration lives in config.json (see config.json.sample).
 # ---------------------------------------------------------------------------
 import argparse
 import base64
+import calendar
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import html
@@ -785,9 +786,19 @@ def discover_videos(channel_id: str, feed_name: str = "") -> list[VideoInfo]:
 
 # Supadata bills one credit per transcript request — including requests that
 # come back "no transcript". A single runaway retry loop can therefore drain a
-# whole month's allowance in a day, so every call is metered against a hard
-# daily cap before it leaves the process.
+# whole month's allowance in a day, so every call is metered before it leaves
+# the process.
+#
+# Two bounds, because they protect against different failures:
+#   • daily  — limits the blast radius of a runaway loop to one day's worth.
+#   • cycle  — the number the vendor actually bills against. A daily cap alone
+#              cannot honour a monthly plan: 10/day over a 31-day cycle is 310
+#              requests against a 300-credit plan.
 _SUPADATA_DAILY_LIMIT_DEFAULT = 10
+_SUPADATA_MONTHLY_LIMIT_DEFAULT = 300
+# Day-of-month the vendor's plan resets. Supadata bills from the signup date,
+# not the 1st, so this is configurable via ``supadata_billing_cycle_day``.
+_SUPADATA_CYCLE_DAY_DEFAULT = 1
 _supadata_budget_lock = threading.Lock()
 
 
@@ -796,27 +807,62 @@ def _supadata_usage_path() -> Path:
     return STATE_ROOT / "supadata_usage.json"
 
 
+def _load_supadata_usage() -> dict:
+    """Return the raw usage record, or an empty dict if missing/corrupt."""
+    try:
+        data = json.loads(_supadata_usage_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def _read_supadata_usage() -> tuple[str, int]:
     """Return ``(utc_date, calls_made_today)`` from the usage file.
 
     A missing, corrupt, or stale-dated file reads as zero calls for today.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    path = _supadata_usage_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("date") == today:
+    data = _load_supadata_usage()
+    if data.get("date") == today:
+        try:
             return today, int(data.get("count", 0))
-    except (OSError, ValueError, TypeError):
-        pass
+        except (TypeError, ValueError):
+            return today, 0
     return today, 0
+
+
+def _supadata_cycle_start(now: datetime | None = None) -> str:
+    """Return the ISO date (YYYY-MM-DD) on which the current billing cycle began.
+
+    The cycle runs from ``supadata_billing_cycle_day`` of one month to the day
+    before that day in the next. A cycle day past the end of a short month
+    (e.g. 31 in February) clamps to that month's last day.
+    """
+    now = now or datetime.now(timezone.utc)
+    with _config_lock:
+        raw = _daemon_config.get("supadata_billing_cycle_day", _SUPADATA_CYCLE_DAY_DEFAULT)
+    try:
+        cycle_day = int(raw)
+    except (TypeError, ValueError):
+        cycle_day = _SUPADATA_CYCLE_DAY_DEFAULT
+    cycle_day = max(1, min(31, cycle_day))
+
+    def _clamped(year: int, month: int) -> date:
+        last = calendar.monthrange(year, month)[1]
+        return date(year, month, min(cycle_day, last))
+
+    this_month = _clamped(now.year, now.month)
+    if now.date() >= this_month:
+        return this_month.isoformat()
+    prev_year, prev_month = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
+    return _clamped(prev_year, prev_month).isoformat()
 
 
 def _supadata_daily_limit() -> int:
     """Return the configured daily Supadata call cap.
 
-    ``supadata_daily_limit`` in ``TubeNews.json`` overrides the default. A
-    value of 0 or below disables metering entirely (not recommended).
+    ``supadata_daily_limit`` in ``config.json`` overrides the default. A value
+    of 0 or below disables the daily bound (the cycle bound still applies).
     """
     with _config_lock:
         raw = _daemon_config.get("supadata_daily_limit", _SUPADATA_DAILY_LIMIT_DEFAULT)
@@ -826,25 +872,102 @@ def _supadata_daily_limit() -> int:
         return _SUPADATA_DAILY_LIMIT_DEFAULT
 
 
+def _supadata_monthly_limit() -> int:
+    """Return the configured per-billing-cycle Supadata call cap.
+
+    ``supadata_monthly_limit`` in ``config.json`` overrides the default. A
+    value of 0 or below disables the cycle bound (the daily bound still applies).
+    Set this to the plan size so the daemon never bills past it.
+    """
+    with _config_lock:
+        raw = _daemon_config.get("supadata_monthly_limit", _SUPADATA_MONTHLY_LIMIT_DEFAULT)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return _SUPADATA_MONTHLY_LIMIT_DEFAULT
+
+
+def supadata_budget_status() -> dict:
+    """Return current credit usage against both bounds, for logging and the admin UI.
+
+    Keys: ``date``, ``used_today``, ``daily_limit``, ``cycle_start``,
+    ``used_this_cycle``, ``monthly_limit``. A limit of 0 means that bound is
+    disabled.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cycle_start = _supadata_cycle_start()
+    data = _load_supadata_usage()
+
+    def _int(key: str) -> int:
+        try:
+            return int(data.get(key, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "date": today,
+        "used_today": _int("count") if data.get("date") == today else 0,
+        "daily_limit": _supadata_daily_limit(),
+        "cycle_start": cycle_start,
+        "used_this_cycle": _int("cycle_count") if data.get("cycle_start") == cycle_start else 0,
+        "monthly_limit": _supadata_monthly_limit(),
+    }
+
+
 def _supadata_budget_reserve() -> bool:
-    """Reserve one Supadata credit for today.
+    """Reserve one Supadata credit against both the daily and cycle bounds.
 
     Returns True when the call may proceed (the reservation is recorded), or
-    False when today's cap is already reached. Counting happens *before* the
-    request so a crash mid-call cannot un-count a credit the vendor charged.
+    False when either cap is already reached — logging which one, since the
+    remedy differs (wait until tomorrow vs. wait for the plan to reset).
+
+    Counting happens *before* the request so a crash mid-call cannot un-count a
+    credit the vendor has already charged.
     """
-    limit = _supadata_daily_limit()
-    if limit <= 0:
+    daily_limit = _supadata_daily_limit()
+    monthly_limit = _supadata_monthly_limit()
+    if daily_limit <= 0 and monthly_limit <= 0:
         return True
+
     with _supadata_budget_lock:
-        today, count = _read_supadata_usage()
-        if count >= limit:
+        data = _load_supadata_usage()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cycle_start = _supadata_cycle_start()
+
+        def _int(key: str) -> int:
+            try:
+                return int(data.get(key, 0))
+            except (TypeError, ValueError):
+                return 0
+
+        # A counter only carries forward while its period is unchanged.
+        day_count = _int("count") if data.get("date") == today else 0
+        cycle_count = _int("cycle_count") if data.get("cycle_start") == cycle_start else 0
+
+        if monthly_limit > 0 and cycle_count >= monthly_limit:
+            logger.error(
+                f"Supadata: Billing-cycle cap reached ({cycle_count}/{monthly_limit} since "
+                f"{cycle_start}) — no further transcript fetches until the plan resets"
+            )
             return False
+        if daily_limit > 0 and day_count >= daily_limit:
+            logger.error(
+                f"Supadata: Daily cap reached ({day_count}/{daily_limit}) — "
+                f"deferring transcript fetches until tomorrow (UTC). "
+                f"{cycle_count}/{monthly_limit or '∞'} used this billing cycle."
+            )
+            return False
+
         path = _supadata_usage_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"date": today, "count": count + 1}), encoding="utf-8")
+            tmp.write_text(json.dumps({
+                "date": today,
+                "count": day_count + 1,
+                "cycle_start": cycle_start,
+                "cycle_count": cycle_count + 1,
+            }), encoding="utf-8")
             tmp.replace(path)
         except OSError as exc:
             # Never let bookkeeping failure block real work, but say so loudly.
@@ -884,11 +1007,9 @@ def fetch_transcript(
     # Format metadata as: VideoID: Channel: Title
     metadata = _format_video_metadata(video_id, feed_name, video_title)
 
+    # _supadata_budget_reserve logs which bound was hit (daily vs billing cycle).
     if not _supadata_budget_reserve():
-        logger.error(
-            f"Supadata: Daily credit cap ({_supadata_daily_limit()}) reached — "
-            f"deferring transcript fetches until tomorrow (UTC) - {metadata}"
-        )
+        logger.info(f"Supadata: Skipping fetch, credit budget spent - {metadata}")
         if transcript_rate_limit_event is not None:
             transcript_rate_limit_event.set()
         return None
@@ -2849,6 +2970,69 @@ def _write_no_transcript_metadata(
     )
 
 
+# How far back the daemon will still spend a credit on a queued video. This is
+# the guard against a backlog burst: a queue that accumulated while the daemon
+# was down, or while credits were exhausted, would otherwise spend the whole
+# fresh allowance on stale videos before reaching today's uploads. 0 disables it.
+_MAX_VIDEO_AGE_DAYS_DEFAULT = 14
+
+
+def _max_video_age_days(config: dict | None = None) -> int:
+    """Return the configured cutoff, in days, for processing a queued video."""
+    if config is None:
+        with _config_lock:
+            raw = _daemon_config.get("max_video_age_days", _MAX_VIDEO_AGE_DAYS_DEFAULT)
+    else:
+        raw = config.get("max_video_age_days", _MAX_VIDEO_AGE_DAYS_DEFAULT)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return _MAX_VIDEO_AGE_DAYS_DEFAULT
+
+
+def _is_video_too_old(date_str: str, config: dict | None = None) -> bool:
+    """Return True when *date_str* is older than the configured cutoff.
+
+    An empty, malformed, or future date returns False — better to spend one
+    credit than to silently discard a video over an unparseable timestamp.
+    """
+    max_age = _max_video_age_days(config)
+    if max_age <= 0 or not date_str:
+        return False
+    try:
+        pub = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - pub) > timedelta(days=max_age)
+
+
+def _write_too_old_metadata(
+    video_id: str,
+    feed_dir: Path,
+    video_date: str,
+    video_title: str,
+    video_published_at: str = "",
+) -> None:
+    """Write a final ``ignored_too_old`` metadata.json for a stale queued video.
+
+    Uses the same status the new-feed backlog guard writes, so feed builders
+    already know to skip it and ``_needs_processing`` treats it as done — the
+    video will not be re-queued by orphan recovery.
+    """
+    meeting_dir = feed_dir / video_id
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+    (meeting_dir / "metadata.json").write_text(json.dumps({
+        "video_id": video_id,
+        "video_title": video_title,
+        "video_date": video_date,
+        "video_published_at": video_published_at,
+        "status": "ignored_too_old",
+        "processed_at": now_utc_iso(),
+    }))
+
+
 def _wsb_try_fetch_transcript(
     entry: dict,
     feed_cfg: FeedConfig,
@@ -3514,6 +3698,25 @@ def _wsb_processor_thread(config: dict) -> None:
                     resolved_ids.add(vid)
                     continue
 
+                # Write off videos that are simply too old to be news. Without
+                # this, a queue that built up while the daemon was down (or
+                # while credits were exhausted) spends the whole fresh
+                # allowance on stale backlog before reaching today's uploads.
+                # Costs no credit: the age is decided from the queue entry.
+                if _is_video_too_old(date_str, current_config):
+                    title = entry.get("title", "") or "[title unknown]"
+                    ch_name = feed_cfg.get("channel_name", "?")
+                    logger.info(
+                        f"WebSub: Video older than {_max_video_age_days(current_config)}d "
+                        f"— skipping without spending a credit - {vid}: {ch_name}: {title}"
+                    )
+                    _write_too_old_metadata(
+                        vid, feed_dir, date_str[:10], entry.get("title", ""),
+                        video_published_at=entry.get("published_at", ""),
+                    )
+                    resolved_ids.add(vid)
+                    continue
+
                 # Try to obtain the transcript (returns immediately if cached).
                 fetch_result = _wsb_try_fetch_transcript(
                     entry, feed_cfg, supadata_client, transcript_event
@@ -3739,7 +3942,12 @@ def _wsb_processor_thread(config: dict) -> None:
         # Heartbeat log every 5 minutes so we know the daemon is alive
         now = time.time()
         if now - _last_heartbeat >= _heartbeat_interval:
-            logger.info("WebSub: Daemon alive and monitoring...")
+            b = supadata_budget_status()
+            logger.info(
+                f"WebSub: Daemon alive and monitoring... "
+                f"[Supadata {b['used_today']}/{b['daily_limit'] or '∞'} today, "
+                f"{b['used_this_cycle']}/{b['monthly_limit'] or '∞'} since {b['cycle_start']}]"
+            )
             _last_heartbeat = now
 
         time.sleep(interval)

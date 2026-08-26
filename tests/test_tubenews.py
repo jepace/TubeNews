@@ -51,6 +51,12 @@ from TubeNews import (
     _read_supadata_usage,
     _supadata_budget_reserve,
     _supadata_daily_limit,
+    _supadata_monthly_limit,
+    _supadata_cycle_start,
+    supadata_budget_status,
+    _is_video_too_old,
+    _max_video_age_days,
+    _write_too_old_metadata,
     now_utc_iso,
     unix_to_iso8601,
     _title_from_entry_el,
@@ -4744,3 +4750,179 @@ def test_fetch_transcript_skips_api_call_when_budget_spent(tmp_path, monkeypatch
     assert result is None          # transient — the video stays queued for tomorrow
     assert calls == []
     assert event.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Supadata billing-cycle budget
+#
+# The daily cap bounds a runaway loop; the cycle cap is what the vendor
+# actually bills against. A daily cap alone cannot honour a monthly plan —
+# 10/day over a 31-day cycle is 310 requests against a 300-credit plan.
+# ---------------------------------------------------------------------------
+
+def test_daily_cap_alone_would_overshoot_a_monthly_plan():
+    """The reason the cycle bound exists, pinned as an assertion."""
+    import TubeNews as T
+    assert T._SUPADATA_DAILY_LIMIT_DEFAULT * 31 > T._SUPADATA_MONTHLY_LIMIT_DEFAULT
+    # ...and the cycle bound is what keeps the total inside the plan.
+    assert T._SUPADATA_MONTHLY_LIMIT_DEFAULT == 300
+
+
+def test_supadata_cycle_start_on_or_after_cycle_day(monkeypatch):
+    """On/after the billing day, the cycle started this month."""
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 27)
+    assert _supadata_cycle_start(datetime(2026, 8, 27, 0, 0, tzinfo=timezone.utc)) == "2026-08-27"
+    assert _supadata_cycle_start(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)) == "2026-08-27"
+
+
+def test_supadata_cycle_start_before_cycle_day_uses_previous_month(monkeypatch):
+    """Before the billing day, the cycle started last month."""
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 27)
+    assert _supadata_cycle_start(datetime(2026, 9, 26, 23, 0, tzinfo=timezone.utc)) == "2026-08-27"
+    assert _supadata_cycle_start(datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)) == "2025-12-27"
+
+
+def test_supadata_cycle_start_clamps_to_short_month(monkeypatch):
+    """A cycle day past the end of a short month clamps to its last day."""
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 31)
+    # March 15 is before the 31st, so the cycle began in February — clamped to the 28th.
+    assert _supadata_cycle_start(datetime(2026, 3, 15, tzinfo=timezone.utc)) == "2026-02-28"
+    # On a 31-day month, the 31st is reachable as-is.
+    assert _supadata_cycle_start(datetime(2026, 3, 31, tzinfo=timezone.utc)) == "2026-03-31"
+
+
+def test_supadata_monthly_cap_blocks_even_when_daily_has_room(tmp_path, monkeypatch):
+    """The cycle bound holds independently of the daily bound."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 100)   # plenty of daily room
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 3)
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 1)
+
+    assert [_supadata_budget_reserve() for _ in range(3)] == [True, True, True]
+    assert _supadata_budget_reserve() is False
+
+    status = supadata_budget_status()
+    assert status["used_this_cycle"] == 3
+    assert status["used_today"] == 3
+
+
+def test_supadata_cycle_counter_survives_a_day_rollover(tmp_path, monkeypatch):
+    """A new day resets the daily counter but not the cycle counter."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 5)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 1)
+
+    cycle = _supadata_cycle_start()
+    # Yesterday's record: daily counter spent, cycle counter well under way.
+    (tmp_path / "supadata_usage.json").write_text(json.dumps({
+        "date": "2000-01-01", "count": 5,
+        "cycle_start": cycle, "cycle_count": 120,
+    }))
+
+    assert _supadata_budget_reserve() is True   # new day, daily counter reset
+    status = supadata_budget_status()
+    assert status["used_today"] == 1            # daily rolled over
+    assert status["used_this_cycle"] == 121     # cycle carried forward
+
+
+def test_supadata_cycle_counter_resets_on_new_cycle(tmp_path, monkeypatch):
+    """A record from a previous billing cycle does not count against this one."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 1)
+
+    (tmp_path / "supadata_usage.json").write_text(json.dumps({
+        "date": "2000-01-01", "count": 10,
+        "cycle_start": "1999-01-01", "cycle_count": 300,   # last cycle, fully spent
+    }))
+    assert _supadata_budget_reserve() is True
+    assert supadata_budget_status()["used_this_cycle"] == 1
+
+
+def test_supadata_budget_reads_legacy_file_without_cycle_keys(tmp_path, monkeypatch):
+    """A usage file written before cycle tracking existed is still readable."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 10)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (tmp_path / "supadata_usage.json").write_text(json.dumps({"date": today, "count": 4}))
+
+    status = supadata_budget_status()
+    assert status["used_today"] == 4        # daily count preserved
+    assert status["used_this_cycle"] == 0   # no cycle history — starts fresh
+    assert _supadata_budget_reserve() is True
+
+
+def test_supadata_both_bounds_disabled_allows_everything(tmp_path, monkeypatch):
+    """Zeroing both limits opts out of metering entirely."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 0)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 0)
+    assert all(_supadata_budget_reserve() for _ in range(50))
+
+
+def test_supadata_monthly_limit_default_when_key_absent():
+    """A live config.json predating this feature still gets the plan-sized cap."""
+    import TubeNews as T
+    T._daemon_config.pop("supadata_monthly_limit", None)
+    assert _supadata_monthly_limit() == T._SUPADATA_MONTHLY_LIMIT_DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# Stale-backlog guard — _is_video_too_old / _write_too_old_metadata
+# ---------------------------------------------------------------------------
+
+def test_is_video_too_old_beyond_cutoff():
+    """A video past the cutoff is not worth a credit."""
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    assert _is_video_too_old(old, {"max_video_age_days": 14}) is True
+
+
+def test_is_video_too_old_within_cutoff():
+    """A recent video is still processed."""
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    assert _is_video_too_old(recent, {"max_video_age_days": 14}) is False
+
+
+def test_is_video_too_old_disabled_by_zero():
+    """A cutoff of 0 turns the guard off."""
+    ancient = "2001-01-01"
+    assert _is_video_too_old(ancient, {"max_video_age_days": 0}) is False
+
+
+def test_is_video_too_old_tolerates_bad_input():
+    """Empty or malformed dates spend a credit rather than silently discard a video."""
+    assert _is_video_too_old("", {"max_video_age_days": 14}) is False
+    assert _is_video_too_old("not-a-date", {"max_video_age_days": 14}) is False
+    assert _is_video_too_old(None, {"max_video_age_days": 14}) is False
+
+
+def test_max_video_age_days_default_and_override():
+    """Config overrides the default; a bad value falls back to it."""
+    import TubeNews as T
+    assert _max_video_age_days({}) == T._MAX_VIDEO_AGE_DAYS_DEFAULT
+    assert _max_video_age_days({"max_video_age_days": 3}) == 3
+    assert _max_video_age_days({"max_video_age_days": "nonsense"}) == T._MAX_VIDEO_AGE_DAYS_DEFAULT
+
+
+def test_write_too_old_metadata_is_final(tmp_path):
+    """A too-old video is marked ignored_too_old and never reprocessed."""
+    import TubeNews as T
+    feed_dir = tmp_path / "Chan"
+    _write_too_old_metadata("VIDOLD", feed_dir, "2026-01-01", "Ancient Meeting")
+
+    meta = json.loads((feed_dir / "VIDOLD" / "metadata.json").read_text())
+    assert meta["status"] == "ignored_too_old"
+    assert meta["video_id"] == "VIDOLD"
+    # Final: orphan recovery and the processor both skip it from here on.
+    assert T._needs_processing("VIDOLD", feed_dir) is False

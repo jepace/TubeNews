@@ -59,16 +59,24 @@ Pipeline: YouTube RSS → Supadata transcripts → Gemini stories (`.md`) → RS
 
 Supadata bills **one credit per transcript request**, including requests that come back "no transcript". The plan is small (e.g. 300/month), so an unbounded retry loop can drain a month in a day.
 
-Three independent bounds, outermost last:
+Bounds, outermost last:
 
 | Bound | Constant | Applies to |
 |---|---|---|
 | Caption retries | `_NO_CAPTIONS_MAX_ATTEMPTS` (5) | Supadata says the video has no captions — a definitive answer, so a short leash (~T+4h) |
 | Transient retries | `_TRANSCRIPT_MAX_ATTEMPTS` (len of `_TRANSCRIPT_RETRY_OFFSETS`) | Network/service failures only — no answer received, worth waiting out |
 | Livestream re-queues | `_LIVESTREAM_MAX_ATTEMPTS` (12) | Stream still broadcasting. Counted in `livestream_attempts`, which survives the `transcript_attempts` reset in `_requeue_video` |
-| **Hard daily cap** | `supadata_daily_limit` (config, default 10) | *Every* call. `fetch_transcript` reserves a credit via `_supadata_budget_reserve()` before the request; when spent it sets the quota event and returns `None`. Counter lives in `state/supadata_usage.json`, keyed by UTC date. `0` disables metering. |
+| Stale backlog | `max_video_age_days` (config, default 14) | Costs **no** credit — decided from the queue entry's date. A queue that built up while the daemon was down would otherwise spend the whole fresh allowance on stale videos before reaching today's uploads. Written off as `ignored_too_old`. `0` disables. |
+| **Hard daily cap** | `supadata_daily_limit` (config, default 10) | *Every* call. Bounds the blast radius of a runaway loop to one day's worth. |
+| **Hard cycle cap** | `supadata_monthly_limit` (config, default 300) | *Every* call. The number the vendor actually bills against. |
 
-The daily cap is the backstop: it holds even if a future retry path is added without a bound of its own. Tests must not meter against it — `tests/conftest.py` disables it suite-wide.
+`fetch_transcript` reserves a credit via `_supadata_budget_reserve()` before each request; when either cap is spent it logs *which one*, sets the quota event, and returns `None`. Counters live in `state/supadata_usage.json` (`date`/`count` for the day, `cycle_start`/`cycle_count` for the billing cycle).
+
+**A daily cap alone cannot honour a monthly plan** — 10/day over a 31-day cycle is 310 requests against a 300-credit plan. That is why the cycle bound exists. Vendors bill from the signup date, not the 1st, so set `supadata_billing_cycle_day` to match the plan's reset day.
+
+The hard caps are the backstop: they hold even if a future retry path is added without a bound of its own. Tests must not meter against them — `tests/conftest.py` disables metering suite-wide.
+
+Current usage appears in the daemon heartbeat log every 5 minutes.
 
 ---
 
