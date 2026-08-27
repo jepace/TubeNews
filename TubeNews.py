@@ -799,7 +799,71 @@ _SUPADATA_MONTHLY_LIMIT_DEFAULT = 300
 # Day-of-month the vendor's plan resets. Supadata bills from the signup date,
 # not the 1st, so this is configurable via ``supadata_billing_cycle_day``.
 _SUPADATA_CYCLE_DAY_DEFAULT = 1
+
+# When Supadata itself refuses service, retrying on the next processor cycle is
+# pointless — the answer will not have changed minutes later. Without a backoff
+# that retry loop burns one budget slot per cycle until the daily cap trips,
+# which lets a single unfetchable video consume the whole day's allowance.
+# Persisted to the usage file so it also survives a daemon restart.
+_SUPADATA_QUOTA_BACKOFF_SECONDS = 6 * 3600   # plan exhausted — hours, not minutes
+_SUPADATA_RATE_BACKOFF_SECONDS = 300         # per-minute rate limit — recovers quickly
 _supadata_budget_lock = threading.Lock()
+
+
+def _supadata_write_usage(data: dict) -> None:
+    """Atomically persist the usage record. Caller must hold the budget lock."""
+    path = _supadata_usage_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        # Never let bookkeeping failure block real work, but say so loudly.
+        logger.error(f"Supadata: Could not record credit usage ({path}): {exc}")
+
+
+def _supadata_backoff_remaining() -> float:
+    """Return seconds left on the vendor-imposed backoff, or 0 when clear."""
+    raw = _load_supadata_usage().get("backoff_until")
+    if not raw:
+        return 0.0
+    try:
+        until = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+    return max(0.0, until - time.time())
+
+
+def _supadata_set_backoff(seconds: int, reason: str) -> None:
+    """Stop calling Supadata for *seconds*, because the vendor refused service."""
+    until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    with _supadata_budget_lock:
+        data = _load_supadata_usage()
+        data["backoff_until"] = until.isoformat(timespec="seconds").replace("+00:00", "Z")
+        data["backoff_reason"] = reason
+        _supadata_write_usage(data)
+    logger.warning(
+        f"Supadata: Pausing transcript fetches for {seconds // 3600}h{(seconds % 3600) // 60:02d}m "
+        f"({reason}); will resume after {data['backoff_until']}"
+    )
+
+
+def _supadata_budget_refund() -> None:
+    """Give back a reserved credit the vendor never actually served.
+
+    A request rejected for quota or rate-limit reasons returns no transcript
+    and is not billed, so it must not count against the local budget — else a
+    single unfetchable video eats the day's allowance on retries alone.
+    """
+    with _supadata_budget_lock:
+        data = _load_supadata_usage()
+        for key in ("count", "cycle_count"):
+            try:
+                data[key] = max(0, int(data.get(key, 0)) - 1)
+            except (TypeError, ValueError):
+                data[key] = 0
+        _supadata_write_usage(data)
 
 
 def _supadata_usage_path() -> Path:
@@ -924,6 +988,17 @@ def _supadata_budget_reserve() -> bool:
     Counting happens *before* the request so a crash mid-call cannot un-count a
     credit the vendor has already charged.
     """
+    # The vendor has already refused service recently — do not spend a slot
+    # rediscovering that. Checked before the limits so it applies even when
+    # metering is disabled.
+    remaining = _supadata_backoff_remaining()
+    if remaining > 0:
+        logger.info(
+            f"Supadata: In backoff for another {int(remaining // 60)}m "
+            f"({_load_supadata_usage().get('backoff_reason', 'vendor refused')}) — skipping fetch"
+        )
+        return False
+
     daily_limit = _supadata_daily_limit()
     monthly_limit = _supadata_monthly_limit()
     if daily_limit <= 0 and monthly_limit <= 0:
@@ -958,20 +1033,14 @@ def _supadata_budget_reserve() -> bool:
             )
             return False
 
-        path = _supadata_usage_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({
-                "date": today,
-                "count": day_count + 1,
-                "cycle_start": cycle_start,
-                "cycle_count": cycle_count + 1,
-            }), encoding="utf-8")
-            tmp.replace(path)
-        except OSError as exc:
-            # Never let bookkeeping failure block real work, but say so loudly.
-            logger.error(f"Supadata: Could not record credit usage ({path}): {exc}")
+        # Preserve any other keys (e.g. a cleared backoff marker) already present.
+        data.update({
+            "date": today,
+            "count": day_count + 1,
+            "cycle_start": cycle_start,
+            "cycle_count": cycle_count + 1,
+        })
+        _supadata_write_usage(data)
         return True
 
 
@@ -1048,17 +1117,26 @@ def fetch_transcript(
         return False
     except Exception as exc:
         exc_str = str(exc).lower()
-        # Detect quota / credit exhaustion from SupadataError or HTTP 402/429.
+        # Record what Supadata actually said. Logging only our interpretation
+        # made it impossible to tell a spent plan from a per-minute rate limit.
+        vendor_error = (getattr(exc, "error", "") or "").lower()
+        vendor_detail = f"[{getattr(exc, 'error', '') or type(exc).__name__}] {exc}"
+
+        # A per-minute rate limit is transient and recovers in minutes; an
+        # exhausted plan does not. Both used to match the same broad "limit"
+        # keyword and get treated as terminal.
+        is_rate_limit = "rate" in vendor_error or "rate limit" in exc_str
         is_quota_error = False
         http_status = None
         if isinstance(exc, SupadataError):
-            is_quota_error = any(
-                kw in (exc.error or "").lower()
+            is_quota_error = not is_rate_limit and any(
+                kw in vendor_error
                 for kw in ("credit", "quota", "payment", "limit", "billing")
             )
         elif isinstance(exc, requests.exceptions.HTTPError):
             status = getattr(getattr(exc, "response", None), "status_code", None)
             http_status = status
+            is_rate_limit = is_rate_limit or status == 429
             is_quota_error = status == 402
 
         # Detect service unavailability (5xx errors) — don't give up after 12 hours
@@ -1071,11 +1149,24 @@ def fetch_transcript(
             or "not-found" in (exc.error or "")
         )
 
-        if is_quota_error:
-            logger.error(
-                f"Supadata: Quota exhausted — no credits remaining. "
-                f"Halting transcript fetches for this cycle - {metadata}"
-            )
+        if is_quota_error or is_rate_limit:
+            # The vendor served nothing and does not bill a refused request, so
+            # give the reserved credit back — otherwise one unfetchable video
+            # spends the whole daily allowance on retries.
+            _supadata_budget_refund()
+            if is_rate_limit:
+                logger.warning(
+                    f"Supadata: Rate limited — {vendor_detail} - {metadata}"
+                )
+                _supadata_set_backoff(_SUPADATA_RATE_BACKOFF_SECONDS, "rate limited")
+            else:
+                logger.error(
+                    f"Supadata: Refused for credit/quota reasons — {vendor_detail}. "
+                    f"Check the real balance at https://supadata.ai — the local counter "
+                    f"({supadata_budget_status()['used_this_cycle']} this cycle) tracks only "
+                    f"what this daemon spent - {metadata}"
+                )
+                _supadata_set_backoff(_SUPADATA_QUOTA_BACKOFF_SECONDS, "vendor reports no credits")
             if transcript_rate_limit_event is not None:
                 transcript_rate_limit_event.set()
         elif is_service_error:
@@ -3943,10 +4034,13 @@ def _wsb_processor_thread(config: dict) -> None:
         now = time.time()
         if now - _last_heartbeat >= _heartbeat_interval:
             b = supadata_budget_status()
+            paused = _supadata_backoff_remaining()
+            pause_note = f", PAUSED {int(paused // 60)}m more" if paused > 0 else ""
             logger.info(
                 f"WebSub: Daemon alive and monitoring... "
                 f"[Supadata {b['used_today']}/{b['daily_limit'] or '∞'} today, "
-                f"{b['used_this_cycle']}/{b['monthly_limit'] or '∞'} since {b['cycle_start']}]"
+                f"{b['used_this_cycle']}/{b['monthly_limit'] or '∞'} since {b['cycle_start']}"
+                f"{pause_note}]"
             )
             _last_heartbeat = now
 

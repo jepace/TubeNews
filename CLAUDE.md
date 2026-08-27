@@ -72,6 +72,10 @@ Bounds, outermost last:
 
 `fetch_transcript` reserves a credit via `_supadata_budget_reserve()` before each request; when either cap is spent it logs *which one*, sets the quota event, and returns `None`. Counters live in `state/supadata_usage.json` (`date`/`count` for the day, `cycle_start`/`cycle_count` for the billing cycle).
 
+**When Supadata itself refuses a request** (no credits, or rate limited), the reserved credit is refunded — the vendor served nothing and does not bill a refusal — and a persisted backoff (`backoff_until` in the same file) stops further calls for `_SUPADATA_QUOTA_BACKOFF_SECONDS` (6 h) or `_SUPADATA_RATE_BACKOFF_SECONDS` (5 min). Without that backoff the processor retried every cycle, and because the credit was reserved *before* the call, a single unfetchable video walked the daily counter to its cap and blocked every other video for the rest of the day. The backoff applies even when metering is disabled: it is about the vendor refusing, not about the local budget.
+
+A per-minute rate limit (`rate` in the error code, or HTTP 429) is **not** an exhausted plan — both once matched the same broad `"limit"` keyword. Vendor error codes are now logged verbatim, so the two can be told apart from the logs.
+
 **A daily cap alone cannot honour a monthly plan** — 10/day over a 31-day cycle is 310 requests against a 300-credit plan. That is why the cycle bound exists. Vendors bill from the signup date, not the 1st, so set `supadata_billing_cycle_day` to match the plan's reset day.
 
 The hard caps are the backstop: they hold even if a future retry path is added without a bound of its own. Tests must not meter against them — `tests/conftest.py` disables metering suite-wide.

@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import threading
 import uuid
 from pathlib import Path
 
@@ -53,6 +54,9 @@ from TubeNews import (
     _supadata_daily_limit,
     _supadata_monthly_limit,
     _supadata_cycle_start,
+    _supadata_backoff_remaining,
+    _supadata_set_backoff,
+    _supadata_budget_refund,
     supadata_budget_status,
     _is_video_too_old,
     _max_video_age_days,
@@ -4926,3 +4930,142 @@ def test_write_too_old_metadata_is_final(tmp_path):
     assert meta["video_id"] == "VIDOLD"
     # Final: orphan recovery and the processor both skip it from here on.
     assert T._needs_processing("VIDOLD", feed_dir) is False
+
+
+# ---------------------------------------------------------------------------
+# Vendor-refusal backoff
+#
+# Regression: when Supadata itself refused service, the daemon retried on every
+# processor cycle. Each retry reserved a credit before the call, so a single
+# unfetchable video walked the daily counter up 1/10, 2/10 ... 10/10 and then
+# blocked every other video for the rest of the day.
+# ---------------------------------------------------------------------------
+
+def _supadata_raising_client(error_code: str, message: str = "Request refused"):
+    """A client whose transcript() raises a real SupadataError with *error_code*."""
+    import TubeNews as T
+
+    class _Client:
+        calls = 0
+
+        def transcript(self, **kwargs):
+            _Client.calls += 1
+            raise T.SupadataError(
+                error=error_code,
+                message=message,
+                details=f"simulated {error_code}",
+            )
+
+    return _Client()
+
+
+def test_vendor_quota_refusal_does_not_spend_a_credit(tmp_path, monkeypatch):
+    """A refused request is not billed, so it must not count against the budget."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 10)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+
+    fetch_transcript("VID1", _supadata_raising_client("insufficient-credits"),
+                     transcript_rate_limit_event=threading.Event())
+
+    status = supadata_budget_status()
+    assert status["used_today"] == 0, "refused request must be refunded"
+    assert status["used_this_cycle"] == 0
+
+
+def test_vendor_quota_refusal_stops_the_retry_loop(tmp_path, monkeypatch):
+    """After a refusal the daemon backs off instead of retrying next cycle.
+
+    This is the regression: 10 processor cycles used to mean 10 reserved
+    credits and a spent daily budget.
+    """
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 10)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+
+    client = _supadata_raising_client("insufficient-credits")
+    for _ in range(10):                      # ten processor cycles
+        fetch_transcript("VID1", client, transcript_rate_limit_event=threading.Event())
+
+    assert type(client).calls == 1, "only the first cycle should reach the vendor"
+    assert _supadata_backoff_remaining() > 0
+    status = supadata_budget_status()
+    assert status["used_today"] == 0
+    # The whole daily allowance is still available for other videos.
+    assert _supadata_budget_reserve.__name__  # sanity: function present
+
+
+def test_rate_limit_gets_a_short_backoff_not_the_quota_one(tmp_path, monkeypatch):
+    """A per-minute rate limit recovers quickly and must not be read as a spent plan.
+
+    Both used to match the same broad "limit" keyword.
+    """
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 10)
+
+    fetch_transcript("VID1", _supadata_raising_client("rate-limit-exceeded"),
+                     transcript_rate_limit_event=threading.Event())
+
+    remaining = _supadata_backoff_remaining()
+    assert 0 < remaining <= T._SUPADATA_RATE_BACKOFF_SECONDS
+    assert remaining < T._SUPADATA_QUOTA_BACKOFF_SECONDS
+
+
+def test_backoff_blocks_reserve_even_when_metering_disabled(tmp_path, monkeypatch):
+    """The vendor's refusal is about the vendor, not our local budget."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 0)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 0)
+
+    _supadata_set_backoff(3600, "vendor reports no credits")
+    assert _supadata_budget_reserve() is False
+
+
+def test_backoff_expires(tmp_path, monkeypatch):
+    """Once the window passes, fetching resumes."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 10)
+
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(
+        timespec="seconds").replace("+00:00", "Z")
+    (tmp_path / "supadata_usage.json").write_text(json.dumps({"backoff_until": past}))
+
+    assert _supadata_backoff_remaining() == 0
+    assert _supadata_budget_reserve() is True
+
+
+def test_backoff_survives_a_restart(tmp_path, monkeypatch):
+    """The backoff is persisted, so restarting the daemon does not clear it."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    _supadata_set_backoff(T._SUPADATA_QUOTA_BACKOFF_SECONDS, "vendor reports no credits")
+    saved = json.loads((tmp_path / "supadata_usage.json").read_text())
+    assert "backoff_until" in saved
+    assert _supadata_backoff_remaining() > 0
+
+
+def test_budget_refund_never_goes_negative(tmp_path, monkeypatch):
+    """Refunding more than was spent must not produce a negative counter."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    for _ in range(3):
+        _supadata_budget_refund()
+    status = supadata_budget_status()
+    assert status["used_today"] == 0
+    assert status["used_this_cycle"] == 0
+
+
+def test_reserve_preserves_backoff_marker(tmp_path, monkeypatch):
+    """Recording a spend must not silently wipe an unrelated key in the file."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 10)
+    (tmp_path / "supadata_usage.json").write_text(json.dumps({"backoff_reason": "kept"}))
+
+    assert _supadata_budget_reserve() is True
+    assert json.loads((tmp_path / "supadata_usage.json").read_text())["backoff_reason"] == "kept"

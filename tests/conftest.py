@@ -3,16 +3,25 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _disable_supadata_budget(monkeypatch):
+def _isolate_supadata_budget(tmp_path_factory, monkeypatch):
     """Keep the Supadata credit meter out of the way of unrelated tests.
 
-    ``fetch_transcript`` reserves a credit before every call. Left enabled, the
-    suite would write a counter into the real ``state/`` directory and then trip
-    the daily cap partway through, failing whichever transcript tests happened to
-    run last. A limit of 0 disables metering and short-circuits before any I/O.
+    ``fetch_transcript`` reserves a credit before every call and consults a
+    persisted backoff marker, both stored under ``STATE_ROOT``. Two things go
+    wrong without isolation:
 
-    Tests that exercise the budget itself set their own limit, which takes effect
-    after this fixture and therefore wins.
+    * Tests that never patch ``STATE_ROOT`` write counters into the repo's real
+      ``state/`` directory.
+    * A backoff written by one test blocks every later test that calls
+      ``fetch_transcript``, since the vendor backoff deliberately applies even
+      when metering is disabled.
+
+    Point ``STATE_ROOT`` at a per-test temp directory and zero the limits.
+    Tests that patch ``STATE_ROOT`` themselves run after this and win; tests
+    that exercise the budget set their own limits, which likewise take effect
+    after this fixture.
     """
     import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path_factory.mktemp("state"))
     monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 0)
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_monthly_limit", 0)

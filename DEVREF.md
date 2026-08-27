@@ -170,6 +170,9 @@ Defined in `web/app.py`:
 | `_read_channels(config)` | Reads channel list from `state/channels.json`; falls back to `config.get("feeds", [])` when `channels.json` does not exist (migration compatibility). |
 | `_check_supadata_quota(config)` | Reads `state/supadata_balance.json` (written at the end of the previous run) and returns `(ok, balance)`. If `ok` is False, `_main_body` records `transcript_quota_exhausted: True` in the run log and exits without processing any videos. No live API call is made — uses only the cached file. |
 | `_supadata_budget_reserve()` | Reserves one Supadata credit against **both** `supadata_daily_limit` and `supadata_monthly_limit`. Returns `True` (call may proceed, reservation recorded) or `False` (a cap is reached), logging which bound was hit since the remedy differs — wait until tomorrow vs. wait for the plan to reset. Counts *before* the request so a crash mid-call cannot un-count a credit the vendor already charged. Called by `fetch_transcript` on every path. |
+| `_supadata_backoff_remaining()` | Seconds left on a vendor-imposed pause, or 0. Read by `_supadata_budget_reserve()` **before** the limit checks, so it applies even when metering is disabled — a vendor refusal is about the vendor, not the local budget. |
+| `_supadata_set_backoff(seconds, reason)` | Persists `backoff_until`/`backoff_reason` so the pause survives a daemon restart. Called on a credit refusal (6 h) or a rate limit (5 min). |
+| `_supadata_budget_refund()` | Gives back a reserved credit the vendor never served. A refused request is not billed, so counting it would let one unfetchable video spend the whole daily allowance on retries. Floors at 0. |
 | `_supadata_cycle_start(now=None)` | Returns the ISO date the current billing cycle began, from `supadata_billing_cycle_day`. Clamps a cycle day past the end of a short month to that month's last day. |
 | `_supadata_monthly_limit()` | Reads `supadata_monthly_limit` from the live daemon config (hot-reloadable); `<= 0` disables the cycle bound. |
 | `supadata_budget_status()` | Returns current usage against both bounds (`used_today`/`daily_limit`, `used_this_cycle`/`monthly_limit`, `cycle_start`) for logging and the admin UI. Logged in the daemon heartbeat every 5 minutes. |
@@ -279,7 +282,7 @@ state/
 ├── subscriptions.json          # WebSub subscription tracking (keyed by channel_id)
 ├── .tubenews.lock              # Process lock file
 ├── supadata_balance.json       # Cached Supadata credit balance (written at end of each run)
-├── supadata_usage.json         # Supadata request counters: date/count (daily cap) + cycle_start/cycle_count (billing-cycle cap)
+├── supadata_usage.json         # Supadata counters: date/count (daily) + cycle_start/cycle_count (billing cycle) + backoff_until/backoff_reason (vendor refusal)
 ├── run_logs/                   # Run data (replaces content/_run_logs/)
 │   ├── run_log.json            # Rolling summary of last 30 runs (written by TubeNews.py)
 │   └── run-<pid>.log           # Full stdout/stderr for a single run (written by admin_run_now)
