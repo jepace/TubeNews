@@ -2655,6 +2655,36 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
         return False
 
 
+def _read_subscriptions() -> dict:
+    """Return the recorded WebSub subscriptions, or {} if absent/corrupt."""
+    path = STATE_ROOT / "subscriptions.json"
+    try:
+        subs = json.loads(path.read_text())
+        return subs if isinstance(subs, dict) else {}
+    except Exception:
+        return {}
+
+
+def _wsb_lease_healthy(channel_id: str, subs: dict, callback_url: str) -> bool:
+    """Return True when *channel_id* already holds a lease worth keeping.
+
+    "Worth keeping" means recorded, pointing at the current callback URL, and
+    not due for renewal within the next 24 hours — the same threshold the
+    processor's renewal check uses, so startup and renewal agree.
+
+    A changed ``websub_callback_url`` invalidates the record: the hub would
+    still be pushing to the old address.
+    """
+    info = subs.get(channel_id)
+    if not isinstance(info, dict):
+        return False
+    if info.get("callback_url") != callback_url:
+        return False
+    subscribed_at = _get_timestamp_as_float(info.get("subscribed_at", 0))
+    expires = subscribed_at + info.get("lease_seconds", _WSB_LEASE)
+    return expires > time.time() + _SECONDS_PER_DAY
+
+
 def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
     """Unsubscribe from WebSub push notifications for *channel_id*.
 
@@ -4233,18 +4263,48 @@ def _run_daemon(config: dict) -> None:
         logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
         return
 
-    logger.info(f"TubeNews daemon: subscribing {len(channels)} channel(s) to WebSub...")
-    for ch in channels:
-        ok = _wsb_subscribe(ch["channel_id"], config)
-        status = "OK" if ok else "skipped (not configured or failed)"
-        logger.info(f"  {ch['channel_name']}: {status}")
+    # Only talk to the hub about channels whose state actually needs changing.
+    # A restart used to re-subscribe every enabled channel and unsubscribe every
+    # disabled one unconditionally, so each restart cost a round trip per channel
+    # (plus a verification callback per subscribe) to re-assert what was already
+    # true. subscriptions.json already records the leases; consult it.
+    subs = _read_subscriptions()
+    callback_url = config.get("websub_callback_url", "")
 
-    # Unsubscribe from disabled channels
-    if disabled_channels:
-        logger.info(f"TubeNews daemon: unsubscribing {len(disabled_channels)} disabled channel(s) from WebSub...")
-        for ch in disabled_channels:
+    needs_subscribe = [ch for ch in channels
+                       if not _wsb_lease_healthy(ch["channel_id"], subs, callback_url)]
+    already_live = len(channels) - len(needs_subscribe)
+
+    if needs_subscribe:
+        logger.info(
+            f"TubeNews daemon: subscribing {len(needs_subscribe)} channel(s) to WebSub"
+            + (f" ({already_live} already have a current lease)" if already_live else "")
+            + "..."
+        )
+        for ch in needs_subscribe:
+            ok = _wsb_subscribe(ch["channel_id"], config)
+            status = "OK" if ok else "skipped (not configured or failed)"
+            logger.info(f"  {ch['channel_name']}: {status}")
+    else:
+        logger.info(
+            f"TubeNews daemon: all {len(channels)} channel(s) already hold a current "
+            f"WebSub lease — nothing to subscribe"
+        )
+
+    # Unsubscribe only from disabled channels the hub still thinks we want.
+    stale_subscriptions = [ch for ch in disabled_channels if ch["channel_id"] in subs]
+    if stale_subscriptions:
+        logger.info(
+            f"TubeNews daemon: unsubscribing {len(stale_subscriptions)} disabled channel(s) from WebSub..."
+        )
+        for ch in stale_subscriptions:
             _wsb_unsubscribe(ch["channel_id"], config)
             logger.info(f"  {ch['channel_name']}: unsubscribed")
+    elif disabled_channels:
+        logger.info(
+            f"TubeNews daemon: {len(disabled_channels)} disabled channel(s), none currently "
+            f"subscribed — nothing to unsubscribe"
+        )
 
     t1 = threading.Thread(target=_wsb_receiver_thread, args=(config,), daemon=True)
     t2 = threading.Thread(target=_wsb_processor_thread, args=(config,), daemon=True)

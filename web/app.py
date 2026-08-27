@@ -455,6 +455,22 @@ def _base_url() -> str:
         return ""
 
 
+def _wants_json() -> bool:
+    """True when the caller is a fetch()/XHR rather than a form navigation.
+
+    Routes that update a page in place answer JSON so the browser never has to
+    follow a redirect. Fetching with ``redirect: 'manual'`` returns an *opaque*
+    response (``status === 0``), which is indistinguishable from a failure — so
+    the client-side success check treated a working request as an error and left
+    the UI stale. Returning JSON avoids the redirect entirely, while a plain
+    form POST (no JS) still gets the redirect-and-flash behaviour.
+    """
+    return (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
 def _get_user_timezone(user) -> str:
     """Get user's timezone, fallback to UTC."""
     if user and user._data.get("preferences", {}).get("timezone"):
@@ -3100,6 +3116,8 @@ def admin_feed_delete(channel_id: str):
     config = _load_config()
     _wsb_unsubscribe(removed["channel_id"], config)
     _save_channels(channels)
+    if _wants_json():
+        return jsonify({"ok": True, "channel_name": removed["channel_name"]})
     flash(f"Feed '{removed['channel_name']}' removed.", "success")
     return redirect(url_for("admin_feeds"))
 
@@ -3126,6 +3144,14 @@ def admin_feed_toggle(channel_id: str):
         status = "disabled"
         logger.info(f"Feed '{feed['channel_name']}' ({channel_id}) disabled; WebSub unsubscribe requested")
     _save_channels(channels)
+    if _wants_json():
+        # The page updates the row in place from this response, so return the
+        # authoritative new state rather than letting the client infer it.
+        return jsonify({
+            "ok": True,
+            "disabled": status == "disabled",
+            "channel_name": feed["channel_name"],
+        })
     flash(f"Feed '{feed['channel_name']}' {status}.", "success")
     return redirect(url_for("admin_feeds"))
 

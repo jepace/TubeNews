@@ -62,32 +62,34 @@
       this.disabled = true;
       this.textContent = 'Working…';
 
+      // X-Requested-With makes the route answer JSON instead of redirecting.
+      // Do NOT use redirect:'manual' here — a redirect would come back as an
+      // opaque response with status 0, which reads as a failure even though
+      // the change succeeded, leaving the row stale.
       fetch('{{ url_for("admin_feed_toggle", channel_id="__CHANNEL__") }}'.replace('__CHANNEL__', channelId), {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest'
         },
-        body: 'csrf_token=' + encodeURIComponent(csrfToken),
-        redirect: 'manual'
+        body: 'csrf_token=' + encodeURIComponent(csrfToken)
       })
         .then(function (r) {
-          // Accept 200-299 (ok) or 302/303 (redirect) as success
-          if (r.status < 200 || r.status >= 400) throw new Error('HTTP ' + r.status);
-          return r.text();
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
         })
-        .then(function () {
-          if (wasDisabled) {
-            // was disabled → now enabled
-            row.style.opacity = '1';
-            statusCell.innerHTML = 'Active';
-            btn.textContent = 'Disable';
-            btn.dataset.disabled = 'false';
-          } else {
-            // was enabled → now disabled
+        .then(function (data) {
+          // Trust the server's state rather than assuming the flip succeeded.
+          if (data.disabled) {
             row.style.opacity = '0.6';
             statusCell.innerHTML = '<span style="color: var(--color-danger);">Disabled</span>';
             btn.textContent = 'Enable';
             btn.dataset.disabled = 'true';
+          } else {
+            row.style.opacity = '1';
+            statusCell.innerHTML = 'Active';
+            btn.textContent = 'Disable';
+            btn.dataset.disabled = 'false';
           }
           btn.disabled = false;
         })
@@ -113,12 +115,14 @@
 
       fetch('{{ url_for("admin_feed_delete", channel_id="__CHANNEL__") }}'.replace('__CHANNEL__', channelId), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'csrf_token=' + encodeURIComponent(csrfToken),
-        redirect: 'manual'
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: 'csrf_token=' + encodeURIComponent(csrfToken)
       })
         .then(function (r) {
-          if (r.status < 200 || r.status >= 400) throw new Error('HTTP ' + r.status);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
           row.remove();
           var badge = document.querySelector('h1 .badge');
           if (badge) badge.textContent = parseInt(badge.textContent, 10) - 1;

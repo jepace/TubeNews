@@ -38,6 +38,8 @@ from TubeNews import (
     _remove_from_queue,
     _update_queue_entries,
     _wsb_record_subscription,
+    _wsb_lease_healthy,
+    _read_subscriptions,
     _wsb_remove_subscription,
     _recover_orphaned_videos,
     _next_transcript_try,
@@ -5069,3 +5071,73 @@ def test_reserve_preserves_backoff_marker(tmp_path, monkeypatch):
 
     assert _supadata_budget_reserve() is True
     assert json.loads((tmp_path / "supadata_usage.json").read_text())["backoff_reason"] == "kept"
+
+
+# ---------------------------------------------------------------------------
+# _wsb_lease_healthy — avoid re-asserting subscriptions on every restart
+#
+# Startup used to subscribe every enabled channel and unsubscribe every
+# disabled one unconditionally, so each restart cost a hub round trip per
+# channel (plus a verification callback per subscribe) to re-state what was
+# already true. subscriptions.json already records the leases.
+# ---------------------------------------------------------------------------
+
+_CB = "https://news.example.com/websub"
+
+
+def _subs_entry(age_seconds: float = 0, callback: str = _CB) -> dict:
+    return {
+        "subscribed_at": unix_to_iso8601(time.time() - age_seconds),
+        "lease_seconds": 604800,   # _WSB_LEASE, 7 days
+        "callback_url": callback,
+    }
+
+
+def test_wsb_lease_healthy_for_a_fresh_subscription():
+    """A lease with days left needs no hub traffic on restart."""
+    subs = {"UC1": _subs_entry(age_seconds=60)}
+    assert _wsb_lease_healthy("UC1", subs, _CB) is True
+
+
+def test_wsb_lease_not_healthy_when_due_for_renewal():
+    """Inside the 24h renewal window it must resubscribe — same threshold the
+    processor's renewal check uses, so startup and renewal agree."""
+    subs = {"UC1": _subs_entry(age_seconds=604800 - 3600)}   # expires in 1h
+    assert _wsb_lease_healthy("UC1", subs, _CB) is False
+
+
+def test_wsb_lease_not_healthy_when_callback_url_changed():
+    """A changed websub_callback_url invalidates the record — the hub would
+    otherwise keep pushing to the old address."""
+    subs = {"UC1": _subs_entry()}
+    assert _wsb_lease_healthy("UC1", subs, "https://moved.example.com/websub") is False
+
+
+def test_wsb_lease_not_healthy_when_unrecorded():
+    """A channel with no record has no lease to keep."""
+    assert _wsb_lease_healthy("UC_UNKNOWN", {}, _CB) is False
+
+
+def test_wsb_lease_not_healthy_on_malformed_record():
+    """A corrupt entry resubscribes rather than raising."""
+    assert _wsb_lease_healthy("UC1", {"UC1": "not-a-dict"}, _CB) is False
+    assert _wsb_lease_healthy("UC1", {"UC1": {}}, _CB) is False
+
+
+def test_read_subscriptions_missing_or_corrupt(tmp_path, monkeypatch):
+    """A missing or unparseable subscriptions.json reads as empty, not an error."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    assert _read_subscriptions() == {}
+    (tmp_path / "subscriptions.json").write_text("{not json")
+    assert _read_subscriptions() == {}
+    (tmp_path / "subscriptions.json").write_text(json.dumps(["wrong", "shape"]))
+    assert _read_subscriptions() == {}
+
+
+def test_read_subscriptions_roundtrip(tmp_path, monkeypatch):
+    """_wsb_record_subscription writes what _wsb_lease_healthy can read back."""
+    import TubeNews
+    monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
+    _wsb_record_subscription("UC1", _CB)
+    assert _wsb_lease_healthy("UC1", _read_subscriptions(), _CB) is True

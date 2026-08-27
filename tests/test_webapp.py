@@ -1584,6 +1584,54 @@ def test_admin_feed_delete_unknown_channel_returns_404(admin_client, archive):
     assert r.status_code == 404
 
 
+# -- Feed toggle / delete: JSON for fetch(), redirect for a plain form POST ----
+#
+# Regression: these routes only ever redirected. The page fetched them with
+# redirect:'manual', which yields an opaque response (status 0) — the success
+# check read that as a failure, so the row never updated even though the
+# server had applied the change.
+
+_XHR = {"X-Requested-With": "XMLHttpRequest"}
+
+
+def test_admin_feed_toggle_returns_json_for_xhr(admin_client, archive):
+    """A fetch() toggle gets JSON carrying the authoritative new state."""
+    r = admin_client.post("/admin/feeds/UC_ALPHA_ID/toggle", headers=_XHR)
+    assert r.status_code == 200, "must not redirect an XHR — an opaque redirect reads as failure"
+    assert r.is_json
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["disabled"] is True          # was enabled, now disabled
+    assert body["channel_name"] == "Alpha City Council"
+
+    # And it round-trips back.
+    body2 = admin_client.post("/admin/feeds/UC_ALPHA_ID/toggle", headers=_XHR).get_json()
+    assert body2["disabled"] is False
+
+
+def test_admin_feed_toggle_json_matches_saved_state(admin_client, archive):
+    """The JSON the page renders from must agree with what was persisted."""
+    body = admin_client.post("/admin/feeds/UC_ALPHA_ID/toggle", headers=_XHR).get_json()
+    saved = next(ch for ch in webapp._load_channels() if ch["channel_id"] == "UC_ALPHA_ID")
+    assert body["disabled"] == saved.get("disabled", False)
+
+
+def test_admin_feed_toggle_still_redirects_without_xhr(admin_client, archive):
+    """A plain form POST (no JS) keeps the redirect-and-flash behaviour."""
+    r = admin_client.post("/admin/feeds/UC_ALPHA_ID/toggle", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/admin/feeds" in r.headers["Location"]
+
+
+def test_admin_feed_delete_returns_json_for_xhr(admin_client, archive):
+    """A fetch() delete gets JSON, so the row can be removed without a reload."""
+    r = admin_client.post("/admin/feeds/UC_BETA__ID/delete", headers=_XHR)
+    assert r.status_code == 200
+    assert r.is_json
+    assert r.get_json()["ok"] is True
+    assert "UC_BETA__ID" not in [ch["channel_id"] for ch in webapp._load_channels()]
+
+
 # ---------------------------------------------------------------------------
 # /blog — _get_user_stories() user-id filtering via Flask route
 # ---------------------------------------------------------------------------
