@@ -35,7 +35,7 @@ Pipeline: YouTube RSS → Supadata transcripts → Gemini stories (`.md`) → RS
 - **WebSub daemon (default mode).** YouTube pushes new video notifications; processor thread wakes every ~1 min and works through `state/queue/push_queue.json`. Use `--single-run` for cron-style use.
 - **AI backoff.** Gemini errors map to different backoffs: 429 RPM → 2 min, 429 RPD → 12 h, 503 → 5 min. `retry_count` is NOT incremented during backoff (only genuine per-video Gemini failures count).
 - **Transcript caching.** `transcript.txt` existence skips Supadata. Delete it to re-fetch.
-- **Supadata costs one credit per request** — including requests that answer "no transcript". Every retry is billed, so retry caps are cost controls, not just politeness. `fetch_transcript` meters each call against `supadata_daily_limit` (default 10/day) and refuses once spent; see "Supadata credit budget" below.
+- **Supadata cost depends on `supadata_transcript_mode`.** In `native` (the default here) a request is ~1 credit, including one that answers "no transcript". In `auto`/`generate` — the SDK's own default is `auto` — it falls back to speech-to-text billed **by video duration**; a multi-hour meeting has cost 1430 credits. Never call `client.transcript()` without passing `mode`. See "Supadata Credit Budget" below.
 - **Config hot-reload.** Most `config.json` keys reload each processor cycle. Immutable: `websub_callback_url`, `websub_secret`, `websub_daemon_port`. Reloadable podcast keys: `tts_provider`, `tts_api_key`, `tts_voice_id`, `tts_language_code`, `podcast_generation_hour`, `podcast_retention_days`.
 
 ---
@@ -58,7 +58,13 @@ Pipeline: YouTube RSS → Supadata transcripts → Gemini stories (`.md`) → RS
 
 ## Supadata Credit Budget
 
-Supadata bills **one credit per transcript request**, including requests that come back "no transcript". The plan is small (e.g. 300/month), so an unbounded retry loop can drain a month in a day.
+Supadata bills **one credit per transcript request** — *but only in `native` mode*. This is the single most important thing to know about this integration.
+
+**`supadata_transcript_mode` (default `native`) is the difference between 1 credit and 1400.** The SDK's own default is `"auto"`, which silently falls back to speech-to-text when a video has no captions, and generation is **billed by video duration, not per request**. Two multi-hour council meetings cost 1430 credits each against a 300/month plan. Always pass `mode` explicitly; never rely on the SDK default.
+
+Because of this, the request caps below are only a budget in `native` mode — they count *requests*, and a request is only ~1 credit when generation is off. If you ever set `auto`/`generate`, these caps stop bounding spend. A response carrying a `job_id` (HTTP 202) means a generation job was billed; `fetch_transcript` treats that as permanent and never retries, since each retry starts another paid job.
+
+The plan is small (e.g. 300/month), so an unbounded retry loop can also drain a month in a day.
 
 Bounds, outermost last:
 

@@ -55,6 +55,8 @@ from TubeNews import (
     _supadata_budget_reserve,
     _supadata_daily_limit,
     _supadata_monthly_limit,
+    _supadata_transcript_mode,
+    _PERMANENT_SKIP_REASONS,
     _supadata_cycle_start,
     _supadata_backoff_remaining,
     _supadata_set_backoff,
@@ -5141,3 +5143,94 @@ def test_read_subscriptions_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path)
     _wsb_record_subscription("UC1", _CB)
     assert _wsb_lease_healthy("UC1", _read_subscriptions(), _CB) is True
+
+
+# ---------------------------------------------------------------------------
+# Transcript mode — the difference between 1 credit and 1430
+#
+# Supadata's SDK defaults to mode="auto", which falls back to speech-to-text
+# when a video has no captions. Generation is billed by video duration, not
+# per request: two multi-hour meetings cost 1430 credits each against a
+# 300/month plan. This pipeline treats "no captions" as an ordinary outcome,
+# so it must ask for native captions only.
+# ---------------------------------------------------------------------------
+
+def test_transcript_mode_defaults_to_native():
+    """Never opt into duration-billed generation by omission."""
+    import TubeNews as T
+    T._daemon_config.pop("supadata_transcript_mode", None)
+    assert _supadata_transcript_mode() == "native"
+
+
+def test_fetch_transcript_requests_native_mode(tmp_path, monkeypatch):
+    """The mode must actually reach the SDK — leaving it unset selects "auto"."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    seen = {}
+
+    class _Client:
+        def transcript(self, **kwargs):
+            seen.update(kwargs)
+            raise RuntimeError("stop here")
+
+    fetch_transcript("VID1", _Client())
+    assert seen.get("mode") == "native"
+
+
+def test_transcript_mode_override_and_bad_value(monkeypatch):
+    """An operator can opt into generation; nonsense falls back to native."""
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_transcript_mode", "generate")
+    assert _supadata_transcript_mode() == "generate"
+    monkeypatch.setitem(T._daemon_config, "supadata_transcript_mode", "AUTO")
+    assert _supadata_transcript_mode() == "auto"
+    monkeypatch.setitem(T._daemon_config, "supadata_transcript_mode", "nonsense")
+    assert _supadata_transcript_mode() == "native"
+
+
+def test_async_job_response_is_not_silently_discarded(tmp_path, monkeypatch):
+    """An HTTP 202 async job was billed — surface the job id, don't treat it as
+    a plain "no captions" answer."""
+    import TubeNews as T
+    from supadata.types import BatchJob
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+
+    class _Client:
+        def transcript(self, **kwargs):
+            return BatchJob(job_id="f8a1383c-3e71-4095-b710-515447a5e725")
+
+    reason, jobs = [], []
+    result = fetch_transcript("VID1", _Client(), failure_reason=reason, job_id_out=jobs)
+
+    assert result is False
+    assert reason == ["generation_job_unretrieved"]
+    assert jobs == ["f8a1383c-3e71-4095-b710-515447a5e725"], "the paid job id must be recoverable"
+
+
+def test_async_job_is_never_retried(tmp_path, monkeypatch):
+    """Each retry of a generation job starts another duration-billed job, so
+    this reason must be permanent — not folded in with retryable no-captions."""
+    import TubeNews as T
+    from supadata.types import BatchJob
+    monkeypatch.setattr(T, "STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+
+    def fake_fetch(video_id, client, **kwargs):
+        if kwargs.get("failure_reason") is not None:
+            kwargs["failure_reason"].append("generation_job_unretrieved")
+        return False
+
+    monkeypatch.setattr(T, "fetch_transcript", fake_fetch)
+    result = T._wsb_try_fetch_transcript(
+        {"video_id": "VID1", "date": "2026-08-29", "title": "Long Meeting"},
+        {"channel_name": "Chan", "channel_id": "UCx"},
+        object(), None,
+    )
+    assert result == "permanent", "must not go down the retryable no_captions path"
+    assert "generation_job_unretrieved" in _PERMANENT_SKIP_REASONS
+
+
+def test_no_captions_stays_retryable():
+    """The ordinary no-captions answer is still retried — only the billed
+    async job is settled on the first response."""
+    assert "no_captions" not in _PERMANENT_SKIP_REASONS

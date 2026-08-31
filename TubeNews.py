@@ -922,6 +922,36 @@ def _supadata_cycle_start(now: datetime | None = None) -> str:
     return _clamped(prev_year, prev_month).isoformat()
 
 
+# Supadata's transcript endpoint takes a mode:
+#   "native"   — return existing captions only; 1 credit, or a clean "no captions".
+#   "auto"     — native if present, otherwise fall back to speech-to-text.
+#   "generate" — always run speech-to-text.
+# Generation is billed by video length, not per request: a single multi-hour
+# meeting has cost >1400 credits against a 300/month plan. The SDK defaults to
+# "auto", so omitting this silently opts into that. This pipeline is built
+# around "no captions" being an ordinary, handled outcome, so it asks for
+# native only unless the operator deliberately chooses otherwise.
+_SUPADATA_TRANSCRIPT_MODE_DEFAULT = "native"
+
+
+def _supadata_transcript_mode() -> str:
+    """Return the configured Supadata transcript mode.
+
+    Override with ``supadata_transcript_mode`` in ``config.json``. Only change
+    this if you understand that "auto" and "generate" bill by video duration.
+    """
+    with _config_lock:
+        raw = _daemon_config.get("supadata_transcript_mode", _SUPADATA_TRANSCRIPT_MODE_DEFAULT)
+    mode = str(raw).strip().lower()
+    if mode not in ("native", "auto", "generate"):
+        logger.warning(
+            f"Supadata: Unknown transcript mode {raw!r}; using "
+            f"{_SUPADATA_TRANSCRIPT_MODE_DEFAULT!r}"
+        )
+        return _SUPADATA_TRANSCRIPT_MODE_DEFAULT
+    return mode
+
+
 def _supadata_daily_limit() -> int:
     """Return the configured daily Supadata call cap.
 
@@ -1052,6 +1082,7 @@ def fetch_transcript(
     transcript_rate_limit_event: threading.Event | None = None,
     failure_reason: list[str] | None = None,
     livestream_error: list[bool] | None = None,
+    job_id_out: list[str] | None = None,
 ) -> str | None | bool:
     """Fetch timed transcript segments from the Supadata API.
 
@@ -1067,10 +1098,21 @@ def fetch_transcript(
     *livestream_error* is set to [True] to signal that the video should be
     deferred without incrementing retry_count.
 
+    Requests ``mode="native"`` by default so Supadata only ever returns
+    captions that already exist. The SDK's own default is ``"auto"``, which
+    silently falls back to speech-to-text billed by video duration — see
+    :func:`_supadata_transcript_mode`.
+
+    Args:
+        job_id_out: Optional list; receives the job id when Supadata answers
+            with an async transcription job instead of captions. That job was
+            billed, so the id is worth surfacing.
+
     Returns:
         str  — formatted transcript on success.
         None — transient failure (network error, rate limit, livestream, etc.); will retry next run.
-        False — permanent no-transcript (Supadata confirmed the video has no captions);
+        False — permanent no-transcript (Supadata confirmed the video has no captions,
+                or answered with a billed async job we will not retry);
                 caller should write ``status: "no_transcript_available"`` and stop retrying.
     """
     # Format metadata as: VideoID: Channel: Title
@@ -1086,7 +1128,9 @@ def fetch_transcript(
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
         try:
-            transcript_response = supadata_client.transcript(url=url, lang="en", text=False)
+            transcript_response = supadata_client.transcript(
+                url=url, lang="en", text=False, mode=_supadata_transcript_mode()
+            )
         except TypeError as te:
             # Supadata library error: likely a version mismatch in error constructor
             # e.g., "SupadataError.__init__() got an unexpected keyword argument 'type'"
@@ -1094,6 +1138,30 @@ def fetch_transcript(
                 logger.error(f"Supadata: Library error (version mismatch?) - {metadata}: {te}")
                 return None
             raise
+
+        # HTTP 202: Supadata queued an asynchronous speech-to-text job rather
+        # than returning existing captions. That is billed by video length —
+        # a multi-hour meeting has cost >1400 credits against a 300/month plan.
+        # This should not happen under mode="native", so treat it as a
+        # configuration alarm, and never retry: each retry starts a new
+        # paid job. The job_id is logged and recorded so the transcript that
+        # was paid for can still be retrieved with client.get_results(job_id).
+        job_id = getattr(transcript_response, "job_id", None)
+        if job_id:
+            logger.error(
+                f"Supadata: Billed for an async transcription job instead of returning "
+                f"captions (job_id={job_id}, mode={_supadata_transcript_mode()!r}). "
+                f"This is charged by video length and can cost hundreds of credits. "
+                f"Not retrying — set 'supadata_transcript_mode' to 'native' to only ever "
+                f"fetch existing captions. Retrieve the paid result with "
+                f"client.get_results({job_id!r}) - {metadata}"
+            )
+            if failure_reason is not None:
+                failure_reason.append("generation_job_unretrieved")
+            if job_id_out is not None:
+                job_id_out.append(job_id)
+            return False
+
         if hasattr(transcript_response, "content") and transcript_response.content:
             segments = transcript_response.content
             lang_received = getattr(transcript_response, "lang", "") or ""
@@ -2147,7 +2215,7 @@ def process_video(
             # Exception: members-only/restricted and deleted videos are permanent
             # regardless of age — no amount of waiting will produce a transcript.
             _perm_reason = _transcript_failure_reason[0] if _transcript_failure_reason else ""
-            if _perm_reason in {"members_only_or_restricted", "video_not_found"}:
+            if _perm_reason in _PERMANENT_SKIP_REASONS:
                 age_hours = float("inf")  # force permanent write-off immediately
             else:
                 try:
@@ -2796,6 +2864,15 @@ _TRANSCRIPT_MAX_ATTEMPTS: int = len(_TRANSCRIPT_RETRY_OFFSETS)
 # Uses the first N offsets above: T+5 min, T+1 h, T+2 h, T+3 h, T+4 h.
 _NO_CAPTIONS_MAX_ATTEMPTS: int = 5
 
+# Reasons that are settled the moment Supadata reports them — retrying cannot
+# change the answer, and for a billed async job each retry starts another
+# paid transcription.
+_PERMANENT_SKIP_REASONS = frozenset({
+    "members_only_or_restricted",
+    "video_not_found",
+    "generation_job_unretrieved",
+})
+
 # A livestream that never ends (abandoned, or stuck "live" in YouTube's data)
 # would otherwise be re-queued hourly forever at one credit per attempt.
 _LIVESTREAM_MAX_ATTEMPTS: int = 12
@@ -3219,7 +3296,7 @@ def _wsb_try_fetch_transcript(
 
     if result is False:
         reason = failure_reason[0] if failure_reason else ""
-        if reason in {"members_only_or_restricted", "video_not_found"}:
+        if reason in _PERMANENT_SKIP_REASONS:
             # Genuinely permanent: paywall or deleted video will never have a transcript.
             video_date = entry.get("date", "")[:10]
             _write_no_transcript_metadata(
