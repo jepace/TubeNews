@@ -87,7 +87,16 @@ A per-minute rate limit (`rate` in the error code, or HTTP 429) is **not** an ex
 
 The hard caps are the backstop: they hold even if a future retry path is added without a bound of its own. Tests must not meter against them — `tests/conftest.py` disables metering suite-wide.
 
-Current usage appears in the daemon heartbeat log every 5 minutes.
+Current usage appears in the daemon heartbeat log every 5 minutes, and the effective mode plus both caps are logged once at startup (`_log_supadata_cost_posture`) — a non-native mode logs a WARNING, because the caps count requests and cannot bound spend when generation is on.
+
+### Rule for any paid API
+
+**Pass every cost-relevant argument explicitly; never inherit an SDK default.**
+A default you did not choose is a spending decision made for you. `tests/test_tubenews.py`
+enforces this for Supadata: `test_supadata_sdk_has_no_unreviewed_parameters` fails if
+`Supadata.transcript()` gains a parameter this code neither passes nor has vetted, so a
+new knob cannot reach production without someone checking what it costs. Apply the same
+pattern to any future metered dependency.
 
 ---
 

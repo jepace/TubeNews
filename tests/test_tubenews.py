@@ -5234,3 +5234,94 @@ def test_no_captions_stays_retryable():
     """The ordinary no-captions answer is still retried — only the billed
     async job is settled on the first response."""
     assert "no_captions" not in _PERMANENT_SKIP_REASONS
+
+
+# ---------------------------------------------------------------------------
+# Guard against the *class* of bug that caused the 1430-credit charge
+#
+# The root cause was not a typo — it was calling a paid third-party API without
+# accounting for a parameter we never passed. `mode` defaulted to "auto" inside
+# the SDK, which silently authorises duration-billed speech-to-text. Nothing in
+# the codebase or its tests could have noticed.
+#
+# These tests fail if the SDK's surface changes under us, forcing a human to
+# decide what a new parameter costs before it ships.
+# ---------------------------------------------------------------------------
+
+# Every parameter of Supadata.transcript must be in exactly one of these sets.
+# Adding to either is a deliberate act that says "I checked what this costs".
+_SDK_PARAMS_WE_PASS = {"url", "lang", "text", "mode"}
+_SDK_PARAMS_REVIEWED_SAFE = {
+    "self",
+    # chunk_size only splits the returned text; it does not change billing.
+    "chunk_size",
+}
+
+
+def test_supadata_sdk_has_no_unreviewed_parameters():
+    """Fail when the SDK gains a parameter we neither pass nor have vetted.
+
+    Regression guard for the 1430-credit incident: `mode` defaulted to "auto"
+    (fall back to speech-to-text, billed by video duration) and we never passed
+    it. A silent default on a paid API is a spending decision made for us.
+    """
+    import inspect
+    from supadata import Supadata
+
+    params = set(inspect.signature(Supadata.transcript).parameters)
+    unreviewed = params - _SDK_PARAMS_WE_PASS - _SDK_PARAMS_REVIEWED_SAFE
+    assert not unreviewed, (
+        f"Supadata.transcript() gained parameter(s) {sorted(unreviewed)} that this "
+        f"code neither passes explicitly nor has reviewed. Check the Supadata docs "
+        f"for what each one costs BEFORE adding it to a set in this test — the last "
+        f"time an SDK default went unexamined it billed 1430 credits against a "
+        f"300-credit plan."
+    )
+
+
+def test_supadata_sdk_still_has_the_parameters_we_rely_on():
+    """The other direction: a parameter we pass must not vanish.
+
+    If `mode` were dropped or renamed, the call would raise TypeError rather
+    than quietly reverting to a billed default — but catch it here first.
+    """
+    import inspect
+    from supadata import Supadata
+
+    params = set(inspect.signature(Supadata.transcript).parameters)
+    missing = _SDK_PARAMS_WE_PASS - params
+    assert not missing, f"Supadata.transcript() no longer accepts {sorted(missing)}"
+
+
+def test_fetch_transcript_passes_every_cost_relevant_argument(tmp_path, monkeypatch):
+    """The call site must pass all of them explicitly — never inherit a default."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    seen = {}
+
+    class _Client:
+        def transcript(self, **kwargs):
+            seen.update(kwargs)
+            raise RuntimeError("stop here")
+
+    fetch_transcript("VID1", _Client())
+    assert set(seen) == _SDK_PARAMS_WE_PASS - {"self"}, (
+        f"expected every cost-relevant argument to be explicit; got {sorted(seen)}"
+    )
+
+
+def test_sdk_default_mode_is_still_the_expensive_one():
+    """Documents *why* passing mode matters, and notices if that ever changes.
+
+    If Supadata makes "native" the SDK default, this fails and the comment
+    about never relying on the default can be revisited — deliberately.
+    """
+    import inspect
+    from supadata import Supadata
+
+    sdk_default = inspect.signature(Supadata.transcript).parameters["mode"].default
+    assert sdk_default == "auto", (
+        f"Supadata's SDK default for mode is now {sdk_default!r}, not 'auto'. "
+        f"This code passes mode explicitly and should keep doing so, but the "
+        f"reasoning in CLAUDE.md assumes the default is the expensive one."
+    )

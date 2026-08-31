@@ -952,6 +952,32 @@ def _supadata_transcript_mode() -> str:
     return mode
 
 
+def _log_supadata_cost_posture() -> None:
+    """Log, at startup, exactly what a transcript fetch can cost.
+
+    The 1430-credit incident was invisible while it happened: nothing in the
+    logs said which billing mode was in effect, so an expensive default looked
+    identical to a cheap one. State it plainly, once, every run — and shout if
+    the configuration allows duration-billed generation, because the request
+    caps below cannot bound spend in that mode.
+    """
+    mode = _supadata_transcript_mode()
+    b = supadata_budget_status()
+    logger.info(
+        f"Supadata: transcript mode={mode!r}; caps {b['daily_limit'] or '∞'}/day, "
+        f"{b['monthly_limit'] or '∞'}/cycle (used {b['used_today']} today, "
+        f"{b['used_this_cycle']} since {b['cycle_start']})"
+    )
+    if mode != "native":
+        logger.warning(
+            f"Supadata: mode={mode!r} permits speech-to-text generation, which is "
+            f"BILLED BY VIDEO DURATION — a multi-hour video can cost >1000 credits. "
+            f"The request caps count requests, not credits, so they do NOT bound "
+            f"spend in this mode. Set 'supadata_transcript_mode' to 'native' unless "
+            f"this is deliberate."
+        )
+
+
 def _supadata_daily_limit() -> int:
     """Return the configured daily Supadata call cap.
 
@@ -4339,6 +4365,8 @@ def _run_daemon(config: dict) -> None:
     if not channels:
         logger.error("TubeNews daemon: no channels configured — nothing to subscribe to.")
         return
+
+    _log_supadata_cost_posture()
 
     # Only talk to the hub about channels whose state actually needs changing.
     # A restart used to re-subscribe every enabled channel and unsubscribe every
