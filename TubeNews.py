@@ -2530,7 +2530,10 @@ def process_feed(
             elif result == "service_unavailable":
                 error_type = "service_unavailable"
             elif result == "transcript_quota_exhausted":
-                break
+                # Don't abandon the rest of the list: a later video whose
+                # transcript is already cached needs no Supadata call, and
+                # process_video returns this status before making one.
+                continue
         return content_changed, error_type, stories_written
 
     all_videos = discover_videos(feed["channel_id"], feed_name=channel_name)
@@ -2629,8 +2632,11 @@ def process_feed(
         elif result == "service_unavailable":
             error_type = "service_unavailable"
         elif result == "transcript_quota_exhausted":
-            # Event already set by process_video; stop wasting time on this feed.
-            break
+            # Event already set by process_video, so no further fetch will be
+            # attempted. Keep going anyway: videos later in the list may have a
+            # cached transcript, which costs nothing and should still produce
+            # stories. process_video returns this status before calling Supadata.
+            continue
 
     return content_changed, error_type, stories_written
 
@@ -3879,6 +3885,11 @@ def _wsb_processor_thread(config: dict) -> None:
             # Phase 1 — Transcript fetching (no Gemini cap)
             # ----------------------------------------------------------------
             transcript_ready: list[dict] = []
+            # Set once Supadata is out of budget. Fetching stops, but scanning
+            # does not: a video whose transcript.txt is already on disk needs no
+            # Supadata call at all, so an unrelated video exhausting the quota
+            # must not keep it from reaching the Gemini phase.
+            transcript_budget_spent = False
 
             for entry in ripe:
                 vid = entry.get("video_id", "")
@@ -3941,6 +3952,15 @@ def _wsb_processor_thread(config: dict) -> None:
                     resolved_ids.add(vid)
                     continue
 
+                # Out of Supadata budget: skip the fetch, but a transcript
+                # already on disk costs nothing and must still be processed.
+                if transcript_budget_spent:
+                    if (feed_dir / vid / "transcript.txt").exists():
+                        transcript_ready.append(entry)
+                    # Anything needing a fetch stays queued, untouched — no
+                    # attempt is charged against it for a budget it never used.
+                    continue
+
                 # Try to obtain the transcript (returns immediately if cached).
                 fetch_result = _wsb_try_fetch_transcript(
                     entry, feed_cfg, supadata_client, transcript_event
@@ -3950,8 +3970,12 @@ def _wsb_processor_thread(config: dict) -> None:
                     transcript_ready.append(entry)
 
                 elif fetch_result == "quota_exhausted":
-                    logger.warning("WebSub: Supadata quota exhausted — halting transcript fetches")
-                    break  # Leave remaining entries in queue unchanged
+                    logger.warning(
+                        "WebSub: Supadata budget spent — no more fetches this cycle; "
+                        "still processing videos with a cached transcript"
+                    )
+                    transcript_budget_spent = True
+                    continue  # not break: later entries may already be cached
 
                 elif fetch_result == "livestream":
                     # A stream that never reports "ended" would otherwise be

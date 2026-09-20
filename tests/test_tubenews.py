@@ -5325,3 +5325,116 @@ def test_sdk_default_mode_is_still_the_expensive_one():
         f"This code passes mode explicitly and should keep doing so, but the "
         f"reasoning in CLAUDE.md assumes the default is the expensive one."
     )
+
+
+# ---------------------------------------------------------------------------
+# Cached transcripts must survive a spent Supadata budget
+#
+# Regression: Phase 1 `break`-ed out of the whole ripe list the moment one
+# video exhausted the budget. Entries after it were never even examined —
+# including ones whose transcript.txt was already on disk and needed no
+# Supadata call at all. They sat unprocessed until the caps were raised, at
+# which point they finally showed up as "Found cached transcript".
+# ---------------------------------------------------------------------------
+
+class _StopLoop(Exception):
+    """Break out of the processor's `while True` after one cycle."""
+
+
+def _run_one_processor_cycle(tmp_path, monkeypatch, ripe, cached_ids):
+    """Drive the real _wsb_processor_thread for a single cycle.
+
+    Returns the list of entries handed to the Gemini phase.
+    """
+    import TubeNews as T
+
+    monkeypatch.setattr(T, "STORAGE_ROOT", tmp_path / "content")
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path / "state")
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+
+    channel = {"channel_id": "UCx", "channel_name": "Chan"}
+    feed_dir = tmp_path / "content" / T.slugify(channel["channel_name"])
+    for vid in cached_ids:
+        d = feed_dir / vid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "transcript.txt").write_text("0s --> cached text", encoding="utf-8")
+
+    monkeypatch.setattr(T, "_read_channels", lambda: [channel])
+    monkeypatch.setattr(T, "_read_push_queue", lambda: list(ripe))
+    monkeypatch.setattr(T, "_acquire_lock", lambda: True)
+    monkeypatch.setattr(T, "_release_lock", lambda: None)
+    monkeypatch.setattr(T, "_reload_config_from_disk", lambda: {})
+    monkeypatch.setattr(T, "_recover_orphaned_videos", lambda: 0)
+    monkeypatch.setattr(T, "_cleanup_stale_unverified_users", lambda: 0)
+    monkeypatch.setattr(T, "_remove_from_queue", lambda *a, **kw: None)
+    monkeypatch.setattr(T, "_update_queue_entries", lambda *a, **kw: None)
+    monkeypatch.setattr(T, "rebuild_feed", lambda *a, **kw: None)
+    monkeypatch.setattr(T, "rebuild_aggregate_feed", lambda *a, **kw: None)
+    monkeypatch.setattr(T, "Supadata", lambda **kw: object())
+
+    # Budget is spent: any video needing a fetch reports quota_exhausted.
+    def fake_try_fetch(entry, feed_cfg, client, event):
+        vid = entry.get("video_id", "")
+        if (feed_dir / vid / "transcript.txt").exists():
+            return "cached"
+        if event is not None:
+            event.set()
+        return "quota_exhausted"
+
+    monkeypatch.setattr(T, "_wsb_try_fetch_transcript", fake_try_fetch)
+
+    handed_to_gemini: list[dict] = []
+
+    def fake_process_feed(feed, client, cfg, ai_event, transcript_event, forced_videos=None):
+        handed_to_gemini.extend(forced_videos or [])
+        return False, "", 0
+
+    monkeypatch.setattr(T, "process_feed", fake_process_feed)
+    monkeypatch.setattr(T, "time", type("_T", (), {
+        "time": staticmethod(lambda: 1_800_000_000.0),
+        "sleep": staticmethod(lambda _s: (_ for _ in ()).throw(_StopLoop())),
+    }))
+
+    try:
+        T._wsb_processor_thread({"supadata_api_key": "k"})
+    except _StopLoop:
+        pass
+    return handed_to_gemini
+
+
+def test_cached_transcripts_processed_after_budget_is_spent(tmp_path, monkeypatch):
+    """A video that exhausts the budget must not starve cached ones behind it."""
+    ripe = [
+        {"video_id": "NEEDS_FETCH", "channel_id": "UCx", "date": "", "title": "Uncached"},
+        {"video_id": "CACHED_A", "channel_id": "UCx", "date": "", "title": "Cached A"},
+        {"video_id": "CACHED_B", "channel_id": "UCx", "date": "", "title": "Cached B"},
+    ]
+    handed = _run_one_processor_cycle(tmp_path, monkeypatch, ripe,
+                                      cached_ids=["CACHED_A", "CACHED_B"])
+    ids = [e["id"] for e in handed]
+    assert ids == ["CACHED_A", "CACHED_B"], (
+        "cached transcripts behind a budget-exhausting video must still reach Gemini"
+    )
+
+
+def test_cached_transcript_before_the_exhausting_video_still_works(tmp_path, monkeypatch):
+    """Ordering must not matter — cached entries on either side are processed."""
+    ripe = [
+        {"video_id": "CACHED_A", "channel_id": "UCx", "date": "", "title": "Cached A"},
+        {"video_id": "NEEDS_FETCH", "channel_id": "UCx", "date": "", "title": "Uncached"},
+        {"video_id": "CACHED_B", "channel_id": "UCx", "date": "", "title": "Cached B"},
+    ]
+    handed = _run_one_processor_cycle(tmp_path, monkeypatch, ripe,
+                                      cached_ids=["CACHED_A", "CACHED_B"])
+    assert [e["id"] for e in handed] == ["CACHED_A", "CACHED_B"]
+
+
+def test_uncached_entries_are_left_queued_when_budget_is_spent(tmp_path, monkeypatch):
+    """Videos needing a fetch must not be handed to Gemini without a transcript."""
+    ripe = [
+        {"video_id": "NEEDS_A", "channel_id": "UCx", "date": "", "title": "Uncached A"},
+        {"video_id": "NEEDS_B", "channel_id": "UCx", "date": "", "title": "Uncached B"},
+        {"video_id": "CACHED", "channel_id": "UCx", "date": "", "title": "Cached"},
+    ]
+    handed = _run_one_processor_cycle(tmp_path, monkeypatch, ripe, cached_ids=["CACHED"])
+    assert [e["id"] for e in handed] == ["CACHED"]
