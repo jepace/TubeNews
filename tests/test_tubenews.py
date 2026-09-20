@@ -1,5 +1,6 @@
 """Unit tests for TubeNews.py — run with: pytest tests/ -v"""
 import json
+import logging
 import os
 import re
 import sys
@@ -5704,3 +5705,62 @@ def test_successful_subscribe_is_unaffected(monkeypatch, tmp_path):
     assert T._wsb_subscribe("UC_ok", cfg) is True
     assert _wsb_hub_backoff_remaining() == 0
     assert "UC_ok" in _read_subscriptions()
+
+
+# ---------------------------------------------------------------------------
+# Retry behaviour while the hub is throttling us
+#
+# From a live run: after the hub returned Retry-After 120, the processor's
+# missing-subscription retry still walked all 22 channels, each logging its
+# own cool-off line — 22 lines per cycle for as long as the throttle lasted.
+# It also stamped a one-hour per-channel cooldown on requests that were
+# refused locally and never reached the hub, so nothing would retry for an
+# hour after the 120s cool-off expired.
+# ---------------------------------------------------------------------------
+
+def test_retry_defers_once_while_hub_is_throttling(tmp_path, monkeypatch, caplog):
+    """One line per cycle, not one per channel."""
+    import TubeNews as T
+    channels = [{"channel_id": f"UC_{i}", "channel_name": f"Chan {i}"} for i in range(22)]
+    # Stamp the cool-off against the harness clock, not the wall clock, or it
+    # reads as long expired and the deferral path never runs.
+    monkeypatch.setattr(T, "_wsb_hub_backoff_until", _FAKE_NOW + 120)
+
+    with caplog.at_level(logging.INFO, logger="TubeNews"):
+        caplog.clear()
+        attempted = _run_cycle_capturing_subscribes(tmp_path, monkeypatch, channels, {})
+
+    assert attempted == [], "no channel should be attempted during a hub cool-off"
+    cooloff_lines = [r for r in caplog.records if "cool-off" in r.message]
+    assert len(cooloff_lines) == 1, (
+        f"expected a single deferral line, got {len(cooloff_lines)}: "
+        f"{[r.message for r in cooloff_lines]}"
+    )
+
+
+def test_local_refusal_does_not_burn_the_channel_cooldown(tmp_path, monkeypatch):
+    """A cool-off must skip the loop entirely, so no channel cooldown is stamped.
+
+    Previously the retry marked _last_subscribe_attempt before calling
+    _wsb_subscribe, so a request refused locally still parked that channel for
+    an hour — well past the 120s the hub actually asked for.
+    """
+    import TubeNews as T
+    channels = [{"channel_id": "UC_a", "channel_name": "Chan A"}]
+    monkeypatch.setattr(T, "_wsb_hub_backoff_until", _FAKE_NOW + 120)
+
+    attempted = _run_cycle_capturing_subscribes(tmp_path, monkeypatch, channels, {})
+    assert attempted == [], (
+        "the cool-off must be checked before the per-channel loop, so no "
+        "attempt — and therefore no hour-long cooldown — is recorded"
+    )
+
+
+def test_startup_distinguishes_cool_off_from_real_failure():
+    """The per-channel startup line must not blame config for a hub cool-off."""
+    import inspect
+    src = inspect.getsource(TubeNews._run_daemon)
+    assert "hub cool-off" in src, (
+        "startup should report a hub cool-off as such, not as "
+        "'skipped (not configured or failed)'"
+    )

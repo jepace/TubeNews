@@ -3887,7 +3887,16 @@ def _wsb_processor_thread(config: dict) -> None:
         # rate-limited per channel so a persistently unreachable hub is not
         # hammered every cycle.
         _cb_url = current_config.get("websub_callback_url", "")
-        if _cb_url:
+        _hub_waiting = _wsb_hub_backoff_remaining()
+        if _cb_url and _hub_waiting > 0:
+            # Say it once. Falling through would call _wsb_subscribe per channel,
+            # each logging its own cool-off line — 22 lines every cycle for as
+            # long as the hub is throttling us.
+            logger.info(
+                f"WebSub: hub cool-off, {int(_hub_waiting)}s left — deferring "
+                f"subscription retries"
+            )
+        elif _cb_url:
             _subs_now = _read_subscriptions()
             for ch in [c for c in _read_channels() if not c.get("disabled", False)]:
                 cid = ch["channel_id"]
@@ -3898,12 +3907,19 @@ def _wsb_processor_thread(config: dict) -> None:
                 last = _last_subscribe_attempt.get(cid, 0.0)
                 if time.time() - last < _WSB_RENEWAL_RETRY_COOLDOWN:
                     continue
-                _last_subscribe_attempt[cid] = time.time()
                 logger.info(
                     f"WebSub: No subscription on record for {ch['channel_name']} "
                     f"({cid}) — retrying"
                 )
+                # Safe to start the per-channel cooldown here: the hub backoff
+                # was clear when this loop began, and the break below leaves it
+                # the moment that changes — so this request does reach the hub.
+                _last_subscribe_attempt[cid] = time.time()
                 _wsb_subscribe(cid, current_config)
+                if _wsb_hub_backoff_remaining() > 0:
+                    # The hub just told us to stop; don't walk the rest of the list.
+                    logger.info("WebSub: hub throttled us — deferring the remaining retries")
+                    break
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
         if time.time() - _last_orphan_recovery >= _SECONDS_PER_DAY:
@@ -4549,8 +4565,18 @@ def _run_daemon(config: dict) -> None:
         )
         for ch in needs_subscribe:
             ok = _wsb_subscribe(ch["channel_id"], config)
-            status = "OK" if ok else "skipped (not configured or failed)"
-            logger.info(f"  {ch['channel_name']}: {status}")
+            if ok:
+                logger.info(f"  {ch['channel_name']}: OK")
+                continue
+            # Distinguish "the hub told us to wait" from a real failure; the
+            # former is not this channel's fault and needs no investigation.
+            waiting = _wsb_hub_backoff_remaining()
+            if waiting > 0:
+                logger.info(
+                    f"  {ch['channel_name']}: deferred, hub cool-off {int(waiting)}s"
+                )
+            else:
+                logger.info(f"  {ch['channel_name']}: skipped (not configured or failed)")
     else:
         logger.info(
             f"TubeNews daemon: all {len(channels)} channel(s) already hold a current "
