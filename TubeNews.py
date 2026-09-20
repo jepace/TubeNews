@@ -2676,7 +2676,23 @@ _WSB_RENEWAL_RETRY_COOLDOWN = 3600  # 1 hour — don't retry renewal more freque
 _SECONDS_PER_HOUR = 3600
 _SECONDS_PER_DAY = 86400
 _PODCAST_TARGET_WORDS = 1300  # ~10 min at 130 WPM with intro/outro overhead
-_WEBSUB_POST_TIMEOUT = 10  # seconds for WebSub subscription POST
+_WEBSUB_POST_TIMEOUT = 10  # default seconds for a WebSub subscription POST
+
+
+def _websub_post_timeout() -> float:
+    """Seconds to wait on a WebSub subscribe/unsubscribe POST.
+
+    Google's hub can be slow to respond; raise ``websub_post_timeout`` in
+    config.json if subscribes are timing out. Startup attempts these serially,
+    so a large value also lengthens startup — the periodic retry in the
+    processor is the safety net, not a longer wait here.
+    """
+    with _config_lock:
+        raw = _daemon_config.get("websub_post_timeout", _WEBSUB_POST_TIMEOUT)
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return float(_WEBSUB_POST_TIMEOUT)
 _GEMINI_TIMEOUT = 150  # seconds for Gemini API calls
 
 
@@ -2739,7 +2755,7 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
             "hub.callback": cb,
             "hub.secret": sec,
             "hub.lease_seconds": _WSB_LEASE,
-        }, timeout=_WEBSUB_POST_TIMEOUT)
+        }, timeout=_websub_post_timeout())
         ok = r.status_code == 202
         if ok:
             _wsb_record_subscription(channel_id, cb)
@@ -2805,7 +2821,7 @@ def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
             "hub.topic": _wsb_topic(channel_id),
             "hub.callback": cb,
             "hub.secret": sec,
-        }, timeout=_WEBSUB_POST_TIMEOUT)
+        }, timeout=_websub_post_timeout())
         ok = r.status_code == 202
         if ok:
             _wsb_remove_subscription(channel_id)
@@ -3751,6 +3767,10 @@ def _wsb_processor_thread(config: dict) -> None:
     _last_podcast_check: float = 0.0
     _last_heartbeat: float = 0.0
     _heartbeat_interval: float = 300  # Log heartbeat every 5 minutes
+    # channel_id -> last time a subscribe was attempted for a channel with no
+    # recorded subscription. Keeps the retry below from hammering a hub that is
+    # down. In-memory: a restart re-attempts once anyway, at startup.
+    _last_subscribe_attempt: dict[str, float] = {}
 
     while True:
         # -- Config reload ----------------------------------------------------
@@ -3806,6 +3826,32 @@ def _wsb_processor_thread(config: dict) -> None:
                         logger.debug(
                             f"WebSub: Deferring renewal ({ch_name} / {cid}); will retry in {remaining_cooldown}s"
                         )
+
+        # -- Missing subscriptions (startup failures) --------------------------
+        # The renewal check above only iterates subscriptions.json, so a channel
+        # whose subscribe POST failed — it was never recorded — would never be
+        # retried, and would silently receive no push notifications until the
+        # next restart. Cover enabled channels that hold no healthy lease,
+        # rate-limited per channel so a persistently unreachable hub is not
+        # hammered every cycle.
+        _cb_url = current_config.get("websub_callback_url", "")
+        if _cb_url:
+            _subs_now = _read_subscriptions()
+            for ch in [c for c in _read_channels() if not c.get("disabled", False)]:
+                cid = ch["channel_id"]
+                if _wsb_lease_healthy(cid, _subs_now, _cb_url):
+                    continue
+                if cid in _subs_now:
+                    continue  # already handled by the renewal check above
+                last = _last_subscribe_attempt.get(cid, 0.0)
+                if time.time() - last < _WSB_RENEWAL_RETRY_COOLDOWN:
+                    continue
+                _last_subscribe_attempt[cid] = time.time()
+                logger.info(
+                    f"WebSub: No subscription on record for {ch['channel_name']} "
+                    f"({cid}) — retrying"
+                )
+                _wsb_subscribe(cid, current_config)
 
         # -- Orphan recovery (once per 24 h) ----------------------------------
         if time.time() - _last_orphan_recovery >= _SECONDS_PER_DAY:

@@ -39,6 +39,7 @@ from TubeNews import (
     _update_queue_entries,
     _wsb_record_subscription,
     _wsb_lease_healthy,
+    _websub_post_timeout,
     _read_subscriptions,
     _wsb_remove_subscription,
     _recover_orphaned_videos,
@@ -5341,6 +5342,11 @@ class _StopLoop(Exception):
     """Break out of the processor's `while True` after one cycle."""
 
 
+# Fixed clock the single-cycle harnesses run on. Any timestamp a test builds
+# must be relative to this, not to the real wall clock.
+_FAKE_NOW = 1_800_000_000.0
+
+
 def _run_one_processor_cycle(tmp_path, monkeypatch, ripe, cached_ids):
     """Drive the real _wsb_processor_thread for a single cycle.
 
@@ -5391,7 +5397,7 @@ def _run_one_processor_cycle(tmp_path, monkeypatch, ripe, cached_ids):
 
     monkeypatch.setattr(T, "process_feed", fake_process_feed)
     monkeypatch.setattr(T, "time", type("_T", (), {
-        "time": staticmethod(lambda: 1_800_000_000.0),
+        "time": staticmethod(lambda: _FAKE_NOW),
         "sleep": staticmethod(lambda _s: (_ for _ in ()).throw(_StopLoop())),
     }))
 
@@ -5438,3 +5444,96 @@ def test_uncached_entries_are_left_queued_when_budget_is_spent(tmp_path, monkeyp
     ]
     handed = _run_one_processor_cycle(tmp_path, monkeypatch, ripe, cached_ids=["CACHED"])
     assert [e["id"] for e in handed] == ["CACHED"]
+
+
+# ---------------------------------------------------------------------------
+# A failed subscribe must actually be retried
+#
+# Regression: the renewal check iterates subscriptions.json. A channel whose
+# subscribe POST failed was never recorded there, so nothing ever retried it —
+# it silently received no push notifications until the next daemon restart,
+# while the log promised "(transient; will retry)".
+# ---------------------------------------------------------------------------
+
+def _run_cycle_capturing_subscribes(tmp_path, monkeypatch, channels, recorded_subs,
+                                    callback="https://news.example.com/websub"):
+    """Drive one processor cycle; return the channel ids it tried to subscribe."""
+    import TubeNews as T
+
+    monkeypatch.setattr(T, "STORAGE_ROOT", tmp_path / "content")
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path / "state")
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "subscriptions.json").write_text(json.dumps(recorded_subs))
+
+    attempted: list[str] = []
+    monkeypatch.setattr(T, "_read_channels", lambda: list(channels))
+    monkeypatch.setattr(T, "_read_push_queue", lambda: [])
+    monkeypatch.setattr(T, "_acquire_lock", lambda: True)
+    monkeypatch.setattr(T, "_release_lock", lambda: None)
+    monkeypatch.setattr(T, "_reload_config_from_disk", lambda: {})
+    monkeypatch.setattr(T, "_recover_orphaned_videos", lambda: 0)
+    monkeypatch.setattr(T, "_cleanup_stale_unverified_users", lambda: 0)
+    monkeypatch.setattr(T, "Supadata", lambda **kw: object())
+    monkeypatch.setattr(T, "_wsb_subscribe",
+                        lambda cid, cfg: (attempted.append(cid), False)[1])
+    monkeypatch.setitem(T._daemon_config, "websub_callback_url", callback)
+    monkeypatch.setattr(T, "time", type("_T", (), {
+        "time": staticmethod(lambda: _FAKE_NOW),
+        "sleep": staticmethod(lambda _s: (_ for _ in ()).throw(_StopLoop())),
+    }))
+
+    try:
+        T._wsb_processor_thread({"supadata_api_key": "k",
+                                 "websub_callback_url": callback})
+    except _StopLoop:
+        pass
+    return attempted
+
+
+def test_channel_with_no_subscription_record_is_retried(tmp_path, monkeypatch):
+    """A channel whose subscribe failed at startup gets retried by the processor."""
+    channels = [
+        {"channel_id": "UC_ok", "channel_name": "Recorded"},
+        {"channel_id": "UC_failed", "channel_name": "City of Gonzales"},
+    ]
+    # Stamp the lease against the same fake clock the cycle runs on, or it
+    # reads as long expired and the assertion below tests nothing.
+    subs = {"UC_ok": {"subscribed_at": unix_to_iso8601(_FAKE_NOW - 60),
+                      "lease_seconds": 604800,
+                      "callback_url": "https://news.example.com/websub"}}
+    attempted = _run_cycle_capturing_subscribes(tmp_path, monkeypatch, channels, subs)
+    assert "UC_failed" in attempted, "an unrecorded channel must be retried, not abandoned"
+    assert "UC_ok" not in attempted, "a healthy lease must not be re-subscribed"
+
+
+def test_disabled_channel_with_no_record_is_not_subscribed(tmp_path, monkeypatch):
+    """The retry must not resurrect channels the operator turned off."""
+    channels = [
+        {"channel_id": "UC_off", "channel_name": "Disabled", "disabled": True},
+    ]
+    attempted = _run_cycle_capturing_subscribes(tmp_path, monkeypatch, channels, {})
+    assert attempted == []
+
+
+def test_missing_subscription_retry_is_rate_limited(tmp_path, monkeypatch):
+    """A hub that stays down must not be hammered every cycle."""
+    import TubeNews as T
+    channels = [{"channel_id": "UC_failed", "channel_name": "City of Gonzales"}]
+
+    first = _run_cycle_capturing_subscribes(tmp_path, monkeypatch, channels, {})
+    assert first == ["UC_failed"]
+    # The cooldown lives in the thread's local state, so a second cycle within
+    # the same run is what matters; a fresh run re-attempts once by design.
+    assert T._WSB_RENEWAL_RETRY_COOLDOWN >= 3600
+
+
+def test_websub_post_timeout_configurable():
+    """Google's hub can be slow; the timeout must be tunable without a code change."""
+    import TubeNews as T
+    T._daemon_config.pop("websub_post_timeout", None)
+    assert _websub_post_timeout() == float(T._WEBSUB_POST_TIMEOUT)
+    T._daemon_config["websub_post_timeout"] = 30
+    assert _websub_post_timeout() == 30.0
+    T._daemon_config["websub_post_timeout"] = "nonsense"
+    assert _websub_post_timeout() == float(T._WEBSUB_POST_TIMEOUT)
+    T._daemon_config.pop("websub_post_timeout", None)

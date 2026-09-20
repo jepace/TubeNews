@@ -3,6 +3,7 @@
 
   "gemini_api_key": "ADD-GEMINI-KEY",
   "gemini_model": "gemini-2.5-flash",
+  "websub_post_timeout": 10,
   "supadata_api_key": "ADD-SUPADATA-KEY",
   "_comment_transcript_mode": "native = existing captions only (1 credit). auto/generate fall back to speech-to-text, which is BILLED BY VIDEO LENGTH — a multi-hour meeting can cost >1400 credits.",
   "supadata_transcript_mode": "native",
