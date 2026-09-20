@@ -2676,7 +2676,43 @@ _WSB_RENEWAL_RETRY_COOLDOWN = 3600  # 1 hour — don't retry renewal more freque
 _SECONDS_PER_HOUR = 3600
 _SECONDS_PER_DAY = 86400
 _PODCAST_TARGET_WORDS = 1300  # ~10 min at 130 WPM with intro/outro overhead
-_WEBSUB_POST_TIMEOUT = 10  # default seconds for a WebSub subscription POST
+_WEBSUB_POST_TIMEOUT = 30  # default seconds for a WebSub subscription POST.
+# Measured: the hub took 20.2s to return a 503. At the previous 10s this client
+# hung up before the answer arrived, so throttling looked like a network hang.
+
+
+# The hub is shared and rate-limits: it answers 429/503 with a Retry-After.
+# Honour it hub-wide rather than per channel — the limit is on us as a client,
+# so continuing down a list of 22 channels just deepens the hole.
+_wsb_hub_backoff_until: float = 0.0
+_wsb_hub_lock = threading.Lock()
+_WSB_HUB_BACKOFF_MAX = 3600  # cap a hostile/garbled Retry-After at an hour
+_WSB_HUB_BACKOFF_FALLBACK = 120  # used when Retry-After is absent or unparseable
+
+
+def _wsb_hub_backoff_remaining() -> float:
+    """Seconds left on the hub's requested cool-off, or 0 when clear."""
+    with _wsb_hub_lock:
+        return max(0.0, _wsb_hub_backoff_until - time.time())
+
+
+def _wsb_note_hub_throttle(retry_after: str | None, channel_id: str) -> None:
+    """Record the hub's Retry-After so we stop asking until it expires."""
+    global _wsb_hub_backoff_until
+    secs = _WSB_HUB_BACKOFF_FALLBACK
+    if retry_after:
+        try:
+            secs = int(float(str(retry_after).strip()))
+        except (TypeError, ValueError):
+            # Retry-After may also be an HTTP date; fall back rather than guess.
+            secs = _WSB_HUB_BACKOFF_FALLBACK
+    secs = max(1, min(secs, _WSB_HUB_BACKOFF_MAX))
+    with _wsb_hub_lock:
+        _wsb_hub_backoff_until = max(_wsb_hub_backoff_until, time.time() + secs)
+    logger.warning(
+        f"WebSub: hub is rate-limiting us (Retry-After {secs}s) — pausing all "
+        f"subscribe/unsubscribe traffic until it clears; triggered by {channel_id}"
+    )
 
 
 def _websub_post_timeout() -> float:
@@ -2748,6 +2784,12 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
     sec = config.get("websub_secret", "")
     if not cb or not sec:
         return False
+    waiting = _wsb_hub_backoff_remaining()
+    if waiting > 0:
+        logger.info(
+            f"WebSub: hub cool-off, {int(waiting)}s left — not subscribing {channel_id} yet"
+        )
+        return False
     try:
         r = requests.post(_WSB_HUB, data={
             "hub.mode": "subscribe",
@@ -2760,6 +2802,8 @@ def _wsb_subscribe(channel_id: str, config: dict) -> bool:
         if ok:
             _wsb_record_subscription(channel_id, cb)
             logger.info(f"WebSub: subscription confirmed for {channel_id}")
+        elif r.status_code in (429, 503):
+            _wsb_note_hub_throttle(r.headers.get("Retry-After"), channel_id)
         else:
             logger.warning(
                 f"WebSub: subscription request returned HTTP {r.status_code} for {channel_id} "
@@ -2815,6 +2859,12 @@ def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
     sec = config.get("websub_secret", "")
     if not cb or not sec:
         return False
+    waiting = _wsb_hub_backoff_remaining()
+    if waiting > 0:
+        logger.info(
+            f"WebSub: hub cool-off, {int(waiting)}s left — not unsubscribing {channel_id} yet"
+        )
+        return False
     try:
         r = requests.post(_WSB_HUB, data={
             "hub.mode": "unsubscribe",
@@ -2826,6 +2876,8 @@ def _wsb_unsubscribe(channel_id: str, config: dict) -> bool:
         if ok:
             _wsb_remove_subscription(channel_id)
             logger.info(f"WebSub: unsubscribed channel {channel_id}")
+        elif r.status_code in (429, 503):
+            _wsb_note_hub_throttle(r.headers.get("Retry-After"), channel_id)
         else:
             logger.warning(f"WebSub: unsubscribe returned HTTP {r.status_code} for {channel_id}")
         return ok

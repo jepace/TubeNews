@@ -43,6 +43,8 @@ from TubeNews import (
     _wsb_lease_healthy,
     _websub_post_timeout,
     _wait_for_receiver,
+    _wsb_hub_backoff_remaining,
+    _wsb_note_hub_throttle,
     _read_subscriptions,
     _wsb_remove_subscription,
     _recover_orphaned_videos,
@@ -5604,3 +5606,101 @@ def test_receiver_starts_before_subscribing():
     assert src.index("_wait_for_receiver(") < first_subscribe, (
         "startup must wait for the receiver to accept connections before subscribing"
     )
+
+
+# ---------------------------------------------------------------------------
+# The hub rate-limits; honour its Retry-After
+#
+# Measured against the live hub: a subscribe POST returned HTTP 503 with
+# "Retry-After: 120" after 20.2 seconds. The client timeout was 10s, so it
+# hung up before the answer arrived and the throttling looked like a network
+# hang ("Read timed out"). Worse, it then tried the next 21 channels the same
+# way, deepening the rate limit it had just been told about.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _clear_hub_backoff():
+    """The hub backoff is module state; don't let it leak between tests."""
+    import TubeNews as T
+    T._wsb_hub_backoff_until = 0.0
+    yield
+    T._wsb_hub_backoff_until = 0.0
+
+
+def test_post_timeout_outlasts_the_observed_hub_latency():
+    """The hub took 20.2s to answer; a shorter timeout never sees the reply."""
+    import TubeNews as T
+    T._daemon_config.pop("websub_post_timeout", None)
+    assert _websub_post_timeout() >= 25.0, (
+        "must exceed the ~20s the hub was measured taking, or throttling is "
+        "indistinguishable from a network hang"
+    )
+
+
+def test_retry_after_pauses_all_hub_traffic(monkeypatch, tmp_path):
+    """One 503 stops the whole run, rather than 21 more rejections."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    cfg = {"websub_callback_url": "https://example.com/push", "websub_secret": "s"}
+
+    sent = []
+
+    class _Resp:
+        status_code = 503
+        headers = {"Retry-After": "120"}
+
+    monkeypatch.setattr(T.requests, "post",
+                        lambda url, data=None, timeout=None: (sent.append(url), _Resp())[1])
+
+    for i in range(22):
+        assert T._wsb_subscribe(f"UC_{i}", cfg) is False
+    assert len(sent) == 1, "only the first channel should reach a throttling hub"
+    assert 0 < _wsb_hub_backoff_remaining() <= 120
+
+
+def test_retry_after_also_gates_unsubscribe(monkeypatch, tmp_path):
+    """The limit is on us as a client, so it covers both directions."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    cfg = {"websub_callback_url": "https://example.com/push", "websub_secret": "s"}
+    _wsb_note_hub_throttle("120", "UC_x")
+
+    sent = []
+    monkeypatch.setattr(T.requests, "post",
+                        lambda url, data=None, timeout=None: sent.append(url))
+    assert T._wsb_unsubscribe("UC_y", cfg) is False
+    assert sent == []
+
+
+def test_missing_or_garbled_retry_after_uses_a_sane_default():
+    """A hub that omits or mangles the header still gets a cool-off."""
+    import TubeNews as T
+    _wsb_note_hub_throttle(None, "UC_a")
+    assert 0 < _wsb_hub_backoff_remaining() <= T._WSB_HUB_BACKOFF_FALLBACK
+
+    T._wsb_hub_backoff_until = 0.0
+    _wsb_note_hub_throttle("not-a-number", "UC_b")
+    assert 0 < _wsb_hub_backoff_remaining() <= T._WSB_HUB_BACKOFF_FALLBACK
+
+
+def test_absurd_retry_after_is_capped():
+    """A hostile Retry-After must not park the daemon for a week."""
+    import TubeNews as T
+    _wsb_note_hub_throttle("999999999", "UC_c")
+    assert _wsb_hub_backoff_remaining() <= T._WSB_HUB_BACKOFF_MAX
+
+
+def test_successful_subscribe_is_unaffected(monkeypatch, tmp_path):
+    """A healthy 202 still records the subscription and sets no backoff."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    cfg = {"websub_callback_url": "https://example.com/push", "websub_secret": "s"}
+
+    class _Resp:
+        status_code = 202
+        headers: dict = {}
+
+    monkeypatch.setattr(T.requests, "post", lambda url, data=None, timeout=None: _Resp())
+    assert T._wsb_subscribe("UC_ok", cfg) is True
+    assert _wsb_hub_backoff_remaining() == 0
+    assert "UC_ok" in _read_subscriptions()
