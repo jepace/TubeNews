@@ -6,6 +6,8 @@ import sys
 import time
 import threading
 import uuid
+
+import TubeNews
 from pathlib import Path
 
 import pytest
@@ -40,6 +42,7 @@ from TubeNews import (
     _wsb_record_subscription,
     _wsb_lease_healthy,
     _websub_post_timeout,
+    _wait_for_receiver,
     _read_subscriptions,
     _wsb_remove_subscription,
     _recover_orphaned_videos,
@@ -5537,3 +5540,67 @@ def test_websub_post_timeout_configurable():
     T._daemon_config["websub_post_timeout"] = "nonsense"
     assert _websub_post_timeout() == float(T._WEBSUB_POST_TIMEOUT)
     T._daemon_config.pop("websub_post_timeout", None)
+
+
+# ---------------------------------------------------------------------------
+# The receiver must be listening before we ask the hub to verify it
+#
+# The hub confirms a subscription by calling hub.callback back with
+# hub.challenge. Startup used to subscribe every channel first and start the
+# receiver afterwards, so nothing could answer that callback during the whole
+# subscribe run — with 22 channels at a 10s timeout each, a ~220 second window
+# in which no verification could succeed.
+# ---------------------------------------------------------------------------
+
+def test_wait_for_receiver_returns_true_once_listening():
+    """Returns as soon as the port accepts a connection."""
+    import socket as _socket
+    srv = _socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(5)
+    try:
+        assert _wait_for_receiver(port, timeout=5.0) is True
+    finally:
+        srv.close()
+
+
+def test_wait_for_receiver_waits_for_a_late_listener():
+    """A receiver that takes a moment to bind is still waited for."""
+    import socket as _socket
+    import threading as _threading
+    srv = _socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    _threading.Thread(target=lambda: (time.sleep(0.3), srv.listen(5)), daemon=True).start()
+    try:
+        assert _wait_for_receiver(port, timeout=5.0) is True
+    finally:
+        srv.close()
+
+
+def test_wait_for_receiver_reports_failure_rather_than_hanging():
+    """A dead port returns False within the timeout instead of blocking startup."""
+    started = time.time()
+    # Port 9 (discard) is reserved and not listening in this environment.
+    assert _wait_for_receiver(9, timeout=1.0) is False
+    assert time.time() - started < 5.0
+
+
+def test_receiver_starts_before_subscribing():
+    """Pin the ordering: the listener must be up before any subscribe POST.
+
+    Asserted against the source because the alternative — booting a real
+    daemon — would make the hub's callback the thing under test.
+    """
+    import inspect
+    src = inspect.getsource(TubeNews._run_daemon)
+    start_receiver = src.index("target=_wsb_receiver_thread")
+    first_subscribe = src.index("_wsb_subscribe(ch[")
+    assert start_receiver < first_subscribe, (
+        "the receiver thread must start before the subscribe loop, or the hub "
+        "cannot verify the callback it is being asked to confirm"
+    )
+    assert src.index("_wait_for_receiver(") < first_subscribe, (
+        "startup must wait for the receiver to accept connections before subscribing"
+    )

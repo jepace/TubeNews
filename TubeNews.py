@@ -4410,6 +4410,29 @@ def _setup_signal_handlers(ntfy_topic: str | None) -> None:
         signal.signal(sig, _on_signal)
 
 
+def _wait_for_receiver(port: int, timeout: float = 10.0) -> bool:
+    """Block until the WebSub receiver is accepting connections on *port*.
+
+    The hub cannot verify a subscription until this is listening, so returning
+    early would reintroduce the race this exists to close. Returns False on
+    timeout, having logged it — subscribing anyway is still worth a try, and
+    the processor retries whatever fails.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                logger.info(f"WebSub: receiver ready on port {port}")
+                return True
+        except OSError:
+            time.sleep(0.2)
+    logger.warning(
+        f"WebSub: receiver not accepting connections on port {port} after {timeout:.0f}s — "
+        f"subscribing anyway, but the hub cannot verify a callback it cannot reach"
+    )
+    return False
+
+
 def _run_daemon(config: dict) -> None:
     """Start the WebSub daemon: subscribe all channels, then run the two threads.
 
@@ -4450,6 +4473,22 @@ def _run_daemon(config: dict) -> None:
                        if not _wsb_lease_healthy(ch["channel_id"], subs, callback_url)]
     already_live = len(channels) - len(needs_subscribe)
 
+    # Start the receiver BEFORE subscribing. The hub verifies a subscription by
+    # calling hub.callback back with hub.challenge, and it may do so before
+    # answering our POST. Subscribing first meant the listener was still down
+    # during the entire startup run — with 22 channels at a 10s timeout each,
+    # a ~220 second window in which no verification could possibly succeed.
+    t1 = threading.Thread(target=_wsb_receiver_thread, args=(config,), daemon=True)
+    t1.start()
+    _wait_for_receiver(_safe_int(config.get("websub_daemon_port", 8675), 8675))
+    # State the callback plainly: every subscribe depends on the hub being able
+    # to reach this exact URL from the public internet. When subscribes time
+    # out, this is the first thing to check.
+    logger.info(
+        f"WebSub: hub will verify subscriptions by calling back to "
+        f"{config.get('websub_callback_url', '') or '<not configured>'}"
+    )
+
     if needs_subscribe:
         logger.info(
             f"TubeNews daemon: subscribing {len(needs_subscribe)} channel(s) to WebSub"
@@ -4481,9 +4520,7 @@ def _run_daemon(config: dict) -> None:
             f"subscribed — nothing to unsubscribe"
         )
 
-    t1 = threading.Thread(target=_wsb_receiver_thread, args=(config,), daemon=True)
     t2 = threading.Thread(target=_wsb_processor_thread, args=(config,), daemon=True)
-    t1.start()
     t2.start()
     logger.info("TubeNews daemon running. Press Ctrl+C to stop.")
     t2.join()
