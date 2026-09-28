@@ -45,6 +45,9 @@ from TubeNews import (
     _websub_post_timeout,
     _wait_for_receiver,
     _wsb_hub_backoff_remaining,
+    _set_cycle_phase,
+    _cycle_phase_status,
+    _heartbeat_thread,
     _wsb_note_hub_throttle,
     _read_subscriptions,
     _wsb_remove_subscription,
@@ -5763,4 +5766,97 @@ def test_startup_distinguishes_cool_off_from_real_failure():
     assert "hub cool-off" in src, (
         "startup should report a hub cool-off as such, not as "
         "'skipped (not configured or failed)'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Liveness must survive a blocked cycle
+#
+# Reported: ~50 minutes with no heartbeat while the receiver thread kept
+# logging, so the process was alive and the processor was stuck mid-cycle.
+# The heartbeat sat at the bottom of the work loop, so it only fired *between*
+# cycles — the signal meant to show the daemon was healthy went silent exactly
+# when something was wrong, and named no phase to investigate.
+# ---------------------------------------------------------------------------
+
+def test_cycle_phase_is_tracked():
+    """The current phase and its age are readable at any moment."""
+    _set_cycle_phase("transcripts")
+    phase, elapsed = _cycle_phase_status()
+    assert phase == "transcripts"
+    assert elapsed >= 0
+
+
+def test_heartbeat_reports_while_a_phase_is_blocked(caplog):
+    """A phase that never finishes still produces output naming it.
+
+    This is the regression: previously this window was completely silent.
+    """
+    import threading as _threading
+    _set_cycle_phase("gemini")
+    with caplog.at_level(logging.INFO, logger="TubeNews"):
+        caplog.clear()
+        t = _threading.Thread(target=lambda: _heartbeat_thread(0.05), daemon=True)
+        t.start()
+        time.sleep(0.3)   # the phase never changes — i.e. it is stuck
+
+    beats = [r for r in caplog.records if "Daemon alive" in r.message]
+    assert beats, "a blocked cycle must still report liveness"
+    assert any("gemini" in r.message for r in beats), (
+        "the heartbeat must name the phase so there is something to investigate"
+    )
+
+
+def test_heartbeat_warns_when_a_phase_runs_long(caplog, monkeypatch):
+    """A phase past the slow threshold escalates from info to warning."""
+    import TubeNews as T
+    import threading as _threading
+    monkeypatch.setattr(T, "_CYCLE_PHASE_SLOW_SECONDS", 0)
+    _set_cycle_phase("gemini")
+    with caplog.at_level(logging.INFO, logger="TubeNews"):
+        caplog.clear()
+        _threading.Thread(target=lambda: _heartbeat_thread(0.05), daemon=True).start()
+        time.sleep(0.2)
+
+    assert any(r.levelno == logging.WARNING and "unusually long" in r.message
+               for r in caplog.records)
+
+
+def test_sleeping_phase_is_never_warned_about(caplog, monkeypatch):
+    """Idling between cycles is normal, however long it lasts."""
+    import TubeNews as T
+    import threading as _threading
+    monkeypatch.setattr(T, "_CYCLE_PHASE_SLOW_SECONDS", 0)
+    _set_cycle_phase("sleeping")
+    with caplog.at_level(logging.INFO, logger="TubeNews"):
+        caplog.clear()
+        _threading.Thread(target=lambda: _heartbeat_thread(0.05), daemon=True).start()
+        time.sleep(0.2)
+
+    assert not any("unusually long" in r.message for r in caplog.records)
+    assert any("Daemon alive" in r.message for r in caplog.records)
+
+
+def test_heartbeat_survives_a_failure_in_its_own_reporting(caplog, monkeypatch):
+    """The liveness signal must not be the thing that dies."""
+    import TubeNews as T
+    import threading as _threading
+    monkeypatch.setattr(T, "supadata_budget_status",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    with caplog.at_level(logging.INFO, logger="TubeNews"):
+        caplog.clear()
+        _threading.Thread(target=lambda: _heartbeat_thread(0.05), daemon=True).start()
+        time.sleep(0.2)
+    assert any("heartbeat failed" in r.message for r in caplog.records)
+
+
+def test_heartbeat_runs_in_its_own_thread():
+    """Pin the structure: liveness must not depend on the work loop turning."""
+    import inspect
+    src = inspect.getsource(TubeNews._run_daemon)
+    assert "_heartbeat_thread" in src, "the daemon must start a dedicated heartbeat thread"
+    loop_src = inspect.getsource(TubeNews._wsb_processor_thread)
+    assert "Daemon alive" not in loop_src, (
+        "liveness reporting must not live inside the work loop — a blocked "
+        "cycle would silence it"
     )

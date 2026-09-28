@@ -3759,6 +3759,60 @@ def _wsb_receiver_thread(config: dict) -> None:
     server.serve_forever()
 
 
+# What the processor is doing right now, and since when. The heartbeat used to
+# live at the bottom of the work loop, so it only fired *between* cycles: a
+# cycle that blocked for an hour produced no heartbeat at all, and the one
+# signal meant to show the daemon was healthy went silent exactly when
+# something was wrong. A separate thread reports this instead, so a slow phase
+# is visible while it is still happening.
+_cycle_state_lock = threading.Lock()
+_cycle_phase = "starting"
+_cycle_phase_since = time.time()
+# A phase running longer than this is reported as a warning rather than info.
+_CYCLE_PHASE_SLOW_SECONDS = 600
+
+
+def _set_cycle_phase(name: str) -> None:
+    """Record which part of the processor cycle is running."""
+    global _cycle_phase, _cycle_phase_since
+    with _cycle_state_lock:
+        _cycle_phase = name
+        _cycle_phase_since = time.time()
+
+
+def _cycle_phase_status() -> tuple[str, float]:
+    """Return (phase name, seconds spent in it)."""
+    with _cycle_state_lock:
+        return _cycle_phase, time.time() - _cycle_phase_since
+
+
+def _heartbeat_thread(interval: float = 300.0) -> None:
+    """Thread 3: report liveness independently of the work loop.
+
+    Runs on its own clock so a blocked or slow cycle still produces output,
+    naming the phase it is stuck in rather than simply going quiet.
+    """
+    while True:
+        time.sleep(interval)
+        try:
+            phase, elapsed = _cycle_phase_status()
+            b = supadata_budget_status()
+            paused = _supadata_backoff_remaining()
+            pause_note = f", PAUSED {int(paused // 60)}m more" if paused > 0 else ""
+            msg = (
+                f"WebSub: Daemon alive — phase {phase!r} for {int(elapsed)}s "
+                f"[Supadata {b['used_today']}/{b['daily_limit'] or '∞'} today, "
+                f"{b['used_this_cycle']}/{b['monthly_limit'] or '∞'} since {b['cycle_start']}"
+                f"{pause_note}]"
+            )
+            if elapsed >= _CYCLE_PHASE_SLOW_SECONDS and phase != "sleeping":
+                logger.warning(msg + " — this phase is taking unusually long")
+            else:
+                logger.info(msg)
+        except Exception as exc:  # never let the liveness signal be what dies
+            logger.warning(f"WebSub: heartbeat failed - {exc}")
+
+
 def _wsb_processor_thread(config: dict) -> None:
     """Thread 2: periodically checks the push queue and processes ripe entries.
 
@@ -3817,14 +3871,13 @@ def _wsb_processor_thread(config: dict) -> None:
     _last_user_cleanup: float = time.time()
     _last_digest_check: float = 0.0
     _last_podcast_check: float = 0.0
-    _last_heartbeat: float = 0.0
-    _heartbeat_interval: float = 300  # Log heartbeat every 5 minutes
     # channel_id -> last time a subscribe was attempted for a channel with no
     # recorded subscription. Keeps the retry below from hammering a hub that is
     # down. In-memory: a restart re-attempts once anyway, at startup.
     _last_subscribe_attempt: dict[str, float] = {}
 
     while True:
+        _set_cycle_phase("config-reload")
         # -- Config reload ----------------------------------------------------
         _reload_config_from_disk()
 
@@ -3845,6 +3898,7 @@ def _wsb_processor_thread(config: dict) -> None:
             current_config = _daemon_config.copy()
         supadata_client = Supadata(api_key=supadata_key)
 
+        _set_cycle_phase("websub-renewal")
         # -- Renewal check (respects cooldown to prevent spam) ------------------
         subs_path = STATE_ROOT / "subscriptions.json"
         if subs_path.exists():
@@ -3879,6 +3933,7 @@ def _wsb_processor_thread(config: dict) -> None:
                             f"WebSub: Deferring renewal ({ch_name} / {cid}); will retry in {remaining_cooldown}s"
                         )
 
+        _set_cycle_phase("websub-subscribe-retry")
         # -- Missing subscriptions (startup failures) --------------------------
         # The renewal check above only iterates subscriptions.json, so a channel
         # whose subscribe POST failed — it was never recorded — would never be
@@ -3921,6 +3976,7 @@ def _wsb_processor_thread(config: dict) -> None:
                     logger.info("WebSub: hub throttled us — deferring the remaining retries")
                     break
 
+        _set_cycle_phase("orphan-recovery")
         # -- Orphan recovery (once per 24 h) ----------------------------------
         if time.time() - _last_orphan_recovery >= _SECONDS_PER_DAY:
             try:
@@ -3929,6 +3985,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 logger.warning(f"WebSub: Orphan recovery failed - {exc}")
             _last_orphan_recovery = time.time()
 
+        _set_cycle_phase("user-cleanup")
         # -- Unverified-user cleanup (once per 24 h) ---------------------------
         if time.time() - _last_user_cleanup >= _SECONDS_PER_DAY:
             try:
@@ -3939,6 +3996,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 logger.warning(f"Unverified-user cleanup failed - {exc}")
             _last_user_cleanup = time.time()
 
+        _set_cycle_phase("email-digest")
         # -- Daily email digest -----------------------------------------------
         digest_send_hour = int(current_config.get("email_digest_send_hour", 7))
         if (datetime.utcnow().hour == digest_send_hour
@@ -3949,6 +4007,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 logger.warning(f"Daily digest: unexpected error: {exc}")
             _last_digest_check = time.time()
 
+        _set_cycle_phase("podcast")
         # -- Daily podcast generation -----------------------------------------
         podcast_hour = int(current_config.get("podcast_generation_hour", 6))
         if (datetime.utcnow().hour == podcast_hour
@@ -3959,6 +4018,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 logger.warning("Daily podcast: unexpected error: %s", exc, exc_info=True)
             _last_podcast_check = time.time()
 
+        _set_cycle_phase("queue-read")
         # -- Queue processing -------------------------------------------------
         ripe = _read_push_queue()
         if not ripe:
@@ -3998,6 +4058,7 @@ def _wsb_processor_thread(config: dict) -> None:
             # ----------------------------------------------------------------
             # Phase 1 — Transcript fetching (no Gemini cap)
             # ----------------------------------------------------------------
+            _set_cycle_phase("transcripts")
             transcript_ready: list[dict] = []
             # Set once Supadata is out of budget. Fetching stops, but scanning
             # does not: a video whose transcript.txt is already on disk needs no
@@ -4199,6 +4260,7 @@ def _wsb_processor_thread(config: dict) -> None:
                 n_channels = len(channels_for_gemini)
                 logger.info(f"WebSub: {n_videos} transcript-ready video(s) across {n_channels} channel(s)")
 
+            _set_cycle_phase("gemini")
             gemini_count = 0
             any_changed = False
             today_str = date.today().isoformat()
@@ -4301,20 +4363,9 @@ def _wsb_processor_thread(config: dict) -> None:
         finally:
             _release_lock()
 
-        # Heartbeat log every 5 minutes so we know the daemon is alive
-        now = time.time()
-        if now - _last_heartbeat >= _heartbeat_interval:
-            b = supadata_budget_status()
-            paused = _supadata_backoff_remaining()
-            pause_note = f", PAUSED {int(paused // 60)}m more" if paused > 0 else ""
-            logger.info(
-                f"WebSub: Daemon alive and monitoring... "
-                f"[Supadata {b['used_today']}/{b['daily_limit'] or '∞'} today, "
-                f"{b['used_this_cycle']}/{b['monthly_limit'] or '∞'} since {b['cycle_start']}"
-                f"{pause_note}]"
-            )
-            _last_heartbeat = now
-
+        # Liveness is reported by _heartbeat_thread, which runs on its own clock
+        # so a slow or blocked cycle is still visible rather than simply silent.
+        _set_cycle_phase("sleeping")
         time.sleep(interval)
 
 
@@ -4600,6 +4651,10 @@ def _run_daemon(config: dict) -> None:
 
     t2 = threading.Thread(target=_wsb_processor_thread, args=(config,), daemon=True)
     t2.start()
+    # Liveness reporting runs on its own clock, so a cycle that blocks still
+    # produces output naming the phase it is stuck in.
+    t3 = threading.Thread(target=_heartbeat_thread, daemon=True)
+    t3.start()
     logger.info("TubeNews daemon running. Press Ctrl+C to stop.")
     t2.join()
 
