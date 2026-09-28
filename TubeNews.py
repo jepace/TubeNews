@@ -205,8 +205,10 @@ _FREEBSD_CERT = "/usr/local/share/certs/ca-root-nss.crt"
 if os.path.exists(_FREEBSD_CERT):
     os.environ["SSL_CERT_FILE"] = _FREEBSD_CERT
 
-# Apply the timeout as the process-wide socket default so every network call
-# (including Supadata's underlying HTTP) respects it automatically.
+# A process-wide socket default, as a floor for bare socket work. It does NOT
+# bound `requests`: with no explicit timeout, requests/urllib3 blocks
+# indefinitely regardless of this setting (verified). Anything built on
+# requests must pass its own timeout — see _make_supadata_client().
 socket.setdefaulttimeout(REQUEST_TIMEOUT)
 
 # ---------------------------------------------------------------------------
@@ -864,6 +866,47 @@ def _supadata_budget_refund() -> None:
             except (TypeError, ValueError):
                 data[key] = 0
         _supadata_write_usage(data)
+
+
+_SUPADATA_HTTP_TIMEOUT = 120  # seconds for a single Supadata HTTP call
+
+
+def _supadata_http_timeout() -> float:
+    """Seconds to allow one Supadata HTTP call. Override: supadata_http_timeout."""
+    with _config_lock:
+        raw = _daemon_config.get("supadata_http_timeout", _SUPADATA_HTTP_TIMEOUT)
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return float(_SUPADATA_HTTP_TIMEOUT)
+
+
+def _make_supadata_client(api_key: str) -> Supadata:
+    """Return a Supadata client whose HTTP calls cannot block forever.
+
+    The SDK never passes a timeout to requests, and requests with no timeout
+    waits indefinitely — ``socket.setdefaulttimeout`` does not bound it. One
+    slow transcript call stalled the processor thread for ~54 minutes, during
+    which no queue work happened at all. Wrap the session so every SDK request
+    carries a deadline unless one was given explicitly.
+    """
+    client = Supadata(api_key=api_key)
+    session = getattr(client, "session", None)
+    if session is None or not hasattr(session, "request"):
+        logger.warning(
+            "Supadata: SDK exposes no requests session to bound; transcript "
+            "calls may block indefinitely"
+        )
+        return client
+
+    original_request = session.request
+
+    def _request_with_timeout(method, url, **kwargs):
+        kwargs.setdefault("timeout", _supadata_http_timeout())
+        return original_request(method, url, **kwargs)
+
+    session.request = _request_with_timeout
+    return client
 
 
 def _supadata_usage_path() -> Path:
@@ -3896,7 +3939,9 @@ def _wsb_processor_thread(config: dict) -> None:
                 _deprecated_min_age_warned = True
             # Make a shallow copy of _daemon_config for use outside the lock
             current_config = _daemon_config.copy()
-        supadata_client = Supadata(api_key=supadata_key)
+        # supadata_api_key may be absent from config; the SDK signature wants a
+        # str. An empty key fails at request time exactly as None did before.
+        supadata_client = _make_supadata_client(str(supadata_key or ""))
 
         _set_cycle_phase("websub-renewal")
         # -- Renewal check (respects cooldown to prevent spam) ------------------
@@ -5445,7 +5490,7 @@ def _main_body(args) -> None:
             return
         seen_ids[cid] = cname
 
-    supadata_client = Supadata(api_key=config["supadata_api_key"])
+    supadata_client = _make_supadata_client(config["supadata_api_key"])
     logger.info(
         f"Session Start | {_fmt_no_leading_zeros(datetime.now(), '%A, %B %d, %Y')}"
         f" | AI Model: {config.get('gemini_model')}"

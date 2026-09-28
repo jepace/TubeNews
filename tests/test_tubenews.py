@@ -66,6 +66,8 @@ from TubeNews import (
     _supadata_daily_limit,
     _supadata_monthly_limit,
     _supadata_transcript_mode,
+    _make_supadata_client,
+    _supadata_http_timeout,
     _PERMANENT_SKIP_REASONS,
     _supadata_cycle_start,
     _supadata_backoff_remaining,
@@ -5860,3 +5862,136 @@ def test_heartbeat_runs_in_its_own_thread():
         "liveness reporting must not live inside the work loop — a blocked "
         "cycle would silence it"
     )
+
+
+# ---------------------------------------------------------------------------
+# A slow vendor must not stall the processor thread
+#
+# Observed: a single Supadata transcript call blocked from 08:59 to 09:53 —
+# ~54 minutes in which no queue work happened at all. The SDK passes no
+# timeout to requests, and requests with timeout=None waits indefinitely.
+# socket.setdefaulttimeout() does NOT bound it, despite a comment in this
+# file that used to claim otherwise.
+# ---------------------------------------------------------------------------
+
+def test_socket_default_timeout_does_not_bound_requests():
+    """Pin the reason _make_supadata_client has to exist.
+
+    If a future requests/urllib3 ever starts honouring the socket default,
+    this fails and the wrapper's rationale can be revisited — deliberately.
+    """
+    import socket as _socket
+    import threading as _threading
+    import requests as _requests
+
+    srv = _socket.socket()
+    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+
+    def _stall():
+        try:
+            c, _ = srv.accept()
+            c.recv(65535)
+            time.sleep(10)
+        except OSError:
+            pass
+
+    _threading.Thread(target=_stall, daemon=True).start()
+    old_default = _socket.getdefaulttimeout()
+    _socket.setdefaulttimeout(1)
+    try:
+        started = time.time()
+        try:
+            # No explicit timeout, exactly as the SDK calls it.
+            _requests.get(f"http://127.0.0.1:{port}/", timeout=4)
+        except Exception:
+            pass
+        # The 4s explicit timeout is what stops this, not the 1s socket default.
+        assert time.time() - started >= 2, (
+            "socket.setdefaulttimeout appears to bound requests now; "
+            "re-evaluate whether _make_supadata_client still needs to inject one"
+        )
+    finally:
+        _socket.setdefaulttimeout(old_default)
+        srv.close()
+
+
+def test_supadata_client_injects_a_timeout():
+    """Every SDK request carries a deadline."""
+    seen = {}
+
+    class _Session:
+        headers: dict = {}
+
+        def request(self, method, url, **kwargs):
+            seen.update(kwargs)
+            return None
+
+    class _Client:
+        session = _Session()
+
+    import TubeNews as T
+    original = T.Supadata
+    try:
+        T.Supadata = lambda api_key: _Client()
+        client = _make_supadata_client("k")
+        client.session.request("GET", "https://api.supadata.ai/v1/transcript")
+    finally:
+        T.Supadata = original
+
+    assert "timeout" in seen, "the SDK session must never issue an unbounded request"
+    assert seen["timeout"] == _supadata_http_timeout()
+
+
+def test_supadata_client_respects_an_explicit_timeout():
+    """A caller that passes its own timeout is not overridden."""
+    seen = {}
+
+    class _Session:
+        headers: dict = {}
+
+        def request(self, method, url, **kwargs):
+            seen.update(kwargs)
+            return None
+
+    class _Client:
+        session = _Session()
+
+    import TubeNews as T
+    original = T.Supadata
+    try:
+        T.Supadata = lambda api_key: _Client()
+        client = _make_supadata_client("k")
+        client.session.request("GET", "https://x", timeout=7)
+    finally:
+        T.Supadata = original
+    assert seen["timeout"] == 7
+
+
+def test_supadata_http_timeout_configurable():
+    import TubeNews as T
+    T._daemon_config.pop("supadata_http_timeout", None)
+    assert _supadata_http_timeout() == float(T._SUPADATA_HTTP_TIMEOUT)
+    T._daemon_config["supadata_http_timeout"] = 45
+    assert _supadata_http_timeout() == 45.0
+    T._daemon_config["supadata_http_timeout"] = "nonsense"
+    assert _supadata_http_timeout() == float(T._SUPADATA_HTTP_TIMEOUT)
+    T._daemon_config.pop("supadata_http_timeout", None)
+
+
+def test_a_timed_out_fetch_is_transient_not_a_write_off(tmp_path, monkeypatch):
+    """A timeout must leave the video queued, not mark it 'no captions'."""
+    import TubeNews as T
+    import requests as _requests
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+
+    class _TimingOut:
+        def transcript(self, **kwargs):
+            raise _requests.exceptions.ReadTimeout("timed out")
+
+    reason: list[str] = []
+    result = fetch_transcript("VID1", _TimingOut(), failure_reason=reason)
+    assert result is None, "a timeout is transient, not a permanent answer"
+    assert reason == [], "must not be recorded as no_captions"
