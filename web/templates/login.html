@@ -25,4 +25,16 @@
     Don't have an account? <a href="{{ url_for('register') }}">Create one</a>
   </p>
 </div>
+
+{# Supadata sponsorship badge. Public and unauthenticated on purpose: Supadata
+   verifies it is visible, and `/` redirects anonymous visitors here, so this is
+   the page they will land on. The artwork comes in two variants — pick the one
+   matching the rendered theme rather than loading both and hiding one. #}
+{% set _supadata_variant = 'dark' if 'dark' in (body_classes or '') else 'light' %}
+<p class="powered-by">
+  <a href="https://supadata.ai/r/HBXDTHK3" rel="sponsored noopener" target="_blank">
+    <img src="https://supadata.ai/badge/powered-by-supadata-{{ _supadata_variant }}.svg"
+         alt="Powered by Supadata" width="232" height="54">
+  </a>
+</p>
 {% endblock %}

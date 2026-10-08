@@ -1,5 +1,10 @@
 # TubeNews
 
+<a href="https://supadata.ai/r/HBXDTHK3" rel="sponsored"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://supadata.ai/badge/powered-by-supadata-dark.svg">
+  <img src="https://supadata.ai/badge/powered-by-supadata-light.svg" alt="Powered by Supadata" width="232" height="54">
+</picture></a>
+
 Turn any YouTube channel into a personalised AI-written news feed.
 
 TubeNews monitors YouTube channels, transcribes new videos via [Supadata](https://supadata.ai), and uses Google Gemini AI to write AP-style news stories from the content. Each user gets a personalised feed filtered to the topics they care about, served through a web UI with subscriptions, an inbox, and shareable feed pages.

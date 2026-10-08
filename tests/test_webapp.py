@@ -3633,3 +3633,38 @@ def test_fmt_video_date_empty_returns_empty():
     from web.app import _fmt_video_date
     assert _fmt_video_date("") == ""
     assert _fmt_video_date("", published_at="") == ""
+
+
+# ---------------------------------------------------------------------------
+# Supadata sponsorship badge
+#
+# Supadata grants monthly credits for displaying it and verifies it is live,
+# so these assert the things that would silently void that: the referral code,
+# and that the badge is reachable without logging in.
+# ---------------------------------------------------------------------------
+
+def test_login_page_shows_supadata_badge(client, archive):
+    """The badge must render for anonymous visitors — / redirects here."""
+    r = client.get("/login")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "supadata.ai/badge/powered-by-supadata" in body
+    assert 'href="https://supadata.ai/r/HBXDTHK3"' in body, (
+        "the referral code is what credits the account; losing it voids the reward"
+    )
+    assert 'rel="sponsored noopener"' in body
+
+
+def test_badge_variant_follows_the_rendered_theme(client, archive):
+    """Anonymous pages render light, so the light artwork is served."""
+    body = client.get("/login").data.decode()
+    assert "powered-by-supadata-light.svg" in body
+    assert "powered-by-supadata-dark.svg" not in body
+
+
+def test_readme_carries_the_badge_too():
+    """Supadata accepts a site or README placement; keep both in step."""
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert "supadata.ai/r/HBXDTHK3" in readme
+    assert "powered-by-supadata-light.svg" in readme
+    assert "powered-by-supadata-dark.svg" in readme, "README should handle dark mode"

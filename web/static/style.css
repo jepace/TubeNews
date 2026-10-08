@@ -518,6 +518,18 @@ button[type="submit"]:hover,
 
 .form-footer a { color: var(--accent); }
 
+/* Supadata sponsorship badge, shown under the login card. Sits outside the
+   card so it reads as a site-level credit rather than part of the form. */
+.powered-by {
+  margin-top: 1.5rem;
+  text-align: center;
+}
+.powered-by img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+
 
 .feed-url-row {
   display: flex;
