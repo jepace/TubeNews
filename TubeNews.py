@@ -914,6 +914,15 @@ def _supadata_usage_path() -> Path:
     return STATE_ROOT / "supadata_usage.json"
 
 
+def _load_supadata_balance() -> dict:
+    """Return the cached vendor balance, or {} if missing/corrupt."""
+    try:
+        data = json.loads((STATE_ROOT / "supadata_balance.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def _load_supadata_usage() -> dict:
     """Return the raw usage record, or an empty dict if missing/corrupt."""
     try:
@@ -1006,8 +1015,12 @@ def _log_supadata_cost_posture() -> None:
     """
     mode = _supadata_transcript_mode()
     b = supadata_budget_status()
+    ceiling = b.get("daily_ceiling", 0)
+    daily_note = f"{b['daily_limit'] or '∞'}/day"
+    if ceiling > 0 and b["daily_limit"] < ceiling:
+        daily_note += f" (paced from {b['monthly_limit']}/cycle; ceiling {ceiling})"
     logger.info(
-        f"Supadata: transcript mode={mode!r}; caps {b['daily_limit'] or '∞'}/day, "
+        f"Supadata: transcript mode={mode!r}; caps {daily_note}, "
         f"{b['monthly_limit'] or '∞'}/cycle (used {b['used_today']} today, "
         f"{b['used_this_cycle']} since {b['cycle_start']})"
     )
@@ -1019,6 +1032,119 @@ def _log_supadata_cost_posture() -> None:
             f"spend in this mode. Set 'supadata_transcript_mode' to 'native' unless "
             f"this is deliberate."
         )
+
+
+# Keep a margin against the pace being computed from a stale or wrong figure:
+# spend only this fraction of the even daily share.
+_SUPADATA_PACE_SAFETY = 0.9
+
+
+def _supadata_cycle_used() -> int:
+    """Credits recorded against the current billing cycle.
+
+    Read straight from the usage file rather than via supadata_budget_status(),
+    which reports the *paced* cap and would recurse back into the pacing.
+    """
+    data = _load_supadata_usage()
+    if data.get("cycle_start") != _supadata_cycle_start():
+        return 0
+    try:
+        return int(data.get("cycle_count", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _supadata_today_used() -> int:
+    """Credits recorded against today (UTC)."""
+    data = _load_supadata_usage()
+    if data.get("date") != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+        return 0
+    try:
+        return int(data.get("count", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _supadata_pace_safety() -> float:
+    """Fraction of the even daily share the pace is allowed to use."""
+    with _config_lock:
+        raw = _daemon_config.get("supadata_pace_safety_factor", _SUPADATA_PACE_SAFETY)
+    try:
+        return min(1.0, max(0.01, float(raw)))
+    except (TypeError, ValueError):
+        return _SUPADATA_PACE_SAFETY
+
+
+def _supadata_dynamic_daily_enabled() -> bool:
+    """Whether the daily cap is paced from the remaining cycle budget."""
+    with _config_lock:
+        raw = _daemon_config.get("supadata_dynamic_daily", True)
+    return bool(raw)
+
+
+def _supadata_cycle_end() -> date:
+    """The date the current billing cycle ends.
+
+    Prefers the vendor's own ``resetDate`` from the cached balance — it is
+    authoritative and means ``supadata_billing_cycle_day`` need not be right.
+    Falls back to one month on from the computed cycle start, clamped to the
+    length of that month.
+    """
+    raw = _load_supadata_balance().get("resetDate")
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+            if parsed > datetime.now(timezone.utc).date():
+                return parsed
+        except (ValueError, TypeError):
+            pass
+
+    start = date.fromisoformat(_supadata_cycle_start())
+    year, month = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+    return date(year, month, min(start.day, calendar.monthrange(year, month)[1]))
+
+
+def _supadata_dynamic_daily_limit() -> int | None:
+    """Credits per day that spreads what is left evenly over the days left.
+
+    Returns None when pacing is off or cannot be computed (no cycle cap), in
+    which case the configured ceiling stands alone.
+
+    When credits remain but the even share rounds to zero, allow one a day
+    rather than idling with budget unspent — the cycle cap still bounds the
+    total, so the worst case is spending the remainder earlier than evenly.
+    """
+    if not _supadata_dynamic_daily_enabled():
+        return None
+    monthly = _supadata_monthly_limit()
+    if monthly <= 0:
+        return None   # no cycle bound to pace against
+
+    # Measure from the start of today, not from this instant. Including what
+    # today has already spent would shrink today's own allowance as it is
+    # used, so the nominal pace could never actually be reached.
+    spent_before_today = _supadata_cycle_used() - _supadata_today_used()
+    if monthly - _supadata_cycle_used() <= 0:
+        return 0   # the cycle itself is spent; nothing left to pace
+
+    days_left = max(1, (_supadata_cycle_end() - datetime.now(timezone.utc).date()).days)
+    return max(1, int((monthly - spent_before_today) / days_left * _supadata_pace_safety()))
+
+
+def _supadata_effective_daily_limit() -> int:
+    """The daily cap actually enforced: the lower of the ceiling and the pace.
+
+    The configured ``supadata_daily_limit`` stays a hard ceiling — it bounds
+    the blast radius of a runaway loop no matter what the pace says — while
+    the pace stops a quiet month's surplus being spent in one afternoon.
+    """
+    ceiling = _supadata_daily_limit()
+    pace = _supadata_dynamic_daily_limit()
+    if pace is None:
+        return ceiling
+    if ceiling <= 0:
+        return pace
+    return min(ceiling, pace)
 
 
 def _supadata_daily_limit() -> int:
@@ -1070,18 +1196,20 @@ def supadata_budget_status() -> dict:
     return {
         "date": today,
         "used_today": _int("count") if data.get("date") == today else 0,
-        "daily_limit": _supadata_daily_limit(),
+        # The enforced cap, which may be paced below the configured ceiling.
+        "daily_limit": _supadata_effective_daily_limit(),
+        "daily_ceiling": _supadata_daily_limit(),
         "cycle_start": cycle_start,
         "used_this_cycle": _int("cycle_count") if data.get("cycle_start") == cycle_start else 0,
         "monthly_limit": _supadata_monthly_limit(),
     }
 
 
-# How often the daemon asks Supadata for its own figure. Deliberately
-# infrequent: /v1/me is an account endpoint and is not expected to cost a
-# credit, but that has not been verified against a live account, so the
-# default keeps it to a handful of calls a day.
-_SUPADATA_BALANCE_REFRESH_HOURS = 6
+# How often the daemon asks Supadata for its own figure. /v1/me is an account
+# endpoint and is not expected to cost a credit, but that has not been verified
+# against a live account, so this stays to once a day. The daily pace below is
+# recomputed from it, so one refresh per day is also the natural cadence.
+_SUPADATA_BALANCE_REFRESH_HOURS = 24
 
 
 def _interval_elapsed(last: float, every_seconds: float) -> bool:
@@ -1187,8 +1315,9 @@ def _supadata_budget_reserve() -> bool:
         )
         return False
 
-    daily_limit = _supadata_daily_limit()
     monthly_limit = _supadata_monthly_limit()
+    # The paced limit, not the raw ceiling — see _supadata_effective_daily_limit.
+    daily_limit = _supadata_effective_daily_limit()
     if daily_limit <= 0 and monthly_limit <= 0:
         return True
 
@@ -3931,9 +4060,16 @@ def _heartbeat_thread(interval: float = 300.0) -> None:
             b = supadata_budget_status()
             paused = _supadata_backoff_remaining()
             pause_note = f", PAUSED {int(paused // 60)}m more" if paused > 0 else ""
+            # Name the pace when it is what is binding, so a low daily cap
+            # reads as "spreading the remaining budget" rather than a mystery.
+            ceiling = b.get("daily_ceiling", 0)
+            paced = ceiling > 0 and b["daily_limit"] < ceiling
+            daily = f"{b['used_today']}/{b['daily_limit'] or '∞'}"
+            if paced:
+                daily += f" (paced, ceiling {ceiling})"
             msg = (
                 f"WebSub: Daemon alive — phase {phase!r} for {int(elapsed)}s "
-                f"[Supadata {b['used_today']}/{b['daily_limit'] or '∞'} today, "
+                f"[Supadata {daily} today, "
                 f"{b['used_this_cycle']}/{b['monthly_limit'] or '∞'} since {b['cycle_start']}"
                 f"{pause_note}]"
             )

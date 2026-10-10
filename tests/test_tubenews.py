@@ -66,6 +66,10 @@ from TubeNews import (
     _supadata_daily_limit,
     _supadata_monthly_limit,
     _reconcile_supadata_usage,
+    _supadata_dynamic_daily_limit,
+    _supadata_effective_daily_limit,
+    _supadata_cycle_end,
+
     _supadata_balance_refresh_hours,
     _supadata_transcript_mode,
     _make_supadata_client,
@@ -6247,3 +6251,126 @@ def test_balance_refresh_interval_configurable():
     T._daemon_config["supadata_balance_refresh_hours"] = 0   # disabled
     assert _supadata_balance_refresh_hours() == 0.0
     T._daemon_config.pop("supadata_balance_refresh_hours", None)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic daily pacing
+#
+# A fixed daily cap is wrong in both directions: too low and a quiet month's
+# credits expire unused; too high and a busy week spends the month by the 8th.
+# Pace it instead — remaining cycle budget spread over the days left, minus a
+# margin in case the figures are off.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def _paced(tmp_path, monkeypatch):
+    """Pacing on, with a controllable vendor balance and cycle position."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_dynamic_daily", True)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 40)
+
+    def _setup(used: int, days_left: int):
+        reset = datetime.now(timezone.utc).date() + timedelta(days=days_left)
+        (tmp_path / "supadata_balance.json").write_text(json.dumps(
+            {"maxCredits": 300, "usedCredits": used, "resetDate": reset.isoformat()}))
+        (tmp_path / "supadata_usage.json").write_text(json.dumps(
+            {"cycle_start": T._supadata_cycle_start(), "cycle_count": used}))
+    return _setup
+
+
+def test_pace_spreads_the_remaining_budget(_paced):
+    """273 left over 7 days is 39/day even; the 10% margin makes it 35."""
+    _paced(used=27, days_left=7)
+    assert _supadata_dynamic_daily_limit() == 35
+
+
+def test_pace_is_modest_at_the_start_of_a_cycle(_paced):
+    """A full plan over a full month is the plain daily share."""
+    _paced(used=0, days_left=30)
+    assert _supadata_dynamic_daily_limit() == 9   # 300/30 * 0.9
+
+
+def test_pace_reaches_zero_once_the_cycle_is_spent(_paced):
+    _paced(used=300, days_left=5)
+    assert _supadata_dynamic_daily_limit() == 0
+    assert _supadata_effective_daily_limit() == 0
+
+
+def test_pace_allows_one_a_day_rather_than_stranding_credits(_paced):
+    """5 credits over 20 days rounds to zero; spend them rather than waste them.
+
+    The cycle cap still bounds the total, so the only cost is spending the
+    remainder earlier than perfectly evenly.
+    """
+    _paced(used=295, days_left=20)
+    assert _supadata_dynamic_daily_limit() == 1
+
+
+def test_ceiling_still_caps_the_pace(_paced, monkeypatch):
+    """The configured daily limit remains a hard upper bound.
+
+    Pacing stops a surplus being spent too fast; the ceiling bounds the blast
+    radius of a runaway loop. Both apply, lower wins.
+    """
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 5)
+    _paced(used=0, days_left=1)          # pace would be large
+    assert _supadata_dynamic_daily_limit() > 5
+    assert _supadata_effective_daily_limit() == 5
+
+
+def test_pace_is_enforced_by_the_reserve_path(_paced):
+    """The paced number is what actually blocks, not just what is reported."""
+    import TubeNews as T
+    _paced(used=0, days_left=30)         # pace = 9
+    assert _supadata_effective_daily_limit() == 9
+    allowed = sum(1 for _ in range(20) if T._supadata_budget_reserve())
+    assert allowed == 9
+
+
+def test_pacing_can_be_turned_off(_paced, monkeypatch):
+    """Opting out restores the plain configured ceiling."""
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_dynamic_daily", False)
+    _paced(used=27, days_left=7)
+    assert _supadata_dynamic_daily_limit() is None
+    assert _supadata_effective_daily_limit() == 40
+
+
+def test_pacing_needs_a_cycle_cap(_paced, monkeypatch):
+    """With no monthly bound there is nothing to pace against."""
+    import TubeNews as T
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 0)
+    _paced(used=27, days_left=7)
+    assert _supadata_dynamic_daily_limit() is None
+    assert _supadata_effective_daily_limit() == 40
+
+
+def test_safety_factor_is_configurable(_paced, monkeypatch):
+    import TubeNews as T
+    _paced(used=0, days_left=10)
+    assert _supadata_dynamic_daily_limit() == 27        # 300/10 * 0.9
+    monkeypatch.setitem(T._daemon_config, "supadata_pace_safety_factor", 1.0)
+    assert _supadata_dynamic_daily_limit() == 30
+    monkeypatch.setitem(T._daemon_config, "supadata_pace_safety_factor", "nonsense")
+    assert _supadata_dynamic_daily_limit() == 27
+
+
+def test_cycle_end_prefers_the_vendor_reset_date(_paced):
+    """The vendor's resetDate is authoritative, so billing_cycle_day need not be right."""
+    import TubeNews as T
+    expected = datetime.now(timezone.utc).date() + timedelta(days=7)
+    _paced(used=0, days_left=7)
+    assert _supadata_cycle_end() == expected
+
+
+def test_cycle_end_falls_back_without_a_vendor_date(tmp_path, monkeypatch):
+    """No cached balance: derive the end from the configured billing day."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_billing_cycle_day", 27)
+    end = _supadata_cycle_end()
+    assert end.day == 27
+    assert end > datetime.now(timezone.utc).date()

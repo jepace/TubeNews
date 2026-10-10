@@ -25,3 +25,8 @@ def _isolate_supadata_budget(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(TubeNews, "STATE_ROOT", tmp_path_factory.mktemp("state"))
     monkeypatch.setitem(TubeNews._daemon_config, "supadata_daily_limit", 0)
     monkeypatch.setitem(TubeNews._daemon_config, "supadata_monthly_limit", 0)
+    # Pacing derives the daily cap from the remaining cycle budget, so a test
+    # that sets a deliberately tiny monthly limit to exercise the static bound
+    # would otherwise find its daily cap paced down to 1. Tests that exercise
+    # pacing turn it back on, which takes effect after this fixture.
+    monkeypatch.setitem(TubeNews._daemon_config, "supadata_dynamic_daily", False)
