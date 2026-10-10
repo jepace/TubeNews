@@ -10,6 +10,7 @@
   "supadata_http_timeout": 120,
   "supadata_daily_limit": 10,
   "supadata_monthly_limit": 300,
+  "supadata_balance_refresh_hours": 6,
   "supadata_billing_cycle_day": 1,
   "max_video_age_days": 14,
 

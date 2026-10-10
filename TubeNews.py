@@ -1077,6 +1077,95 @@ def supadata_budget_status() -> dict:
     }
 
 
+# How often the daemon asks Supadata for its own figure. Deliberately
+# infrequent: /v1/me is an account endpoint and is not expected to cost a
+# credit, but that has not been verified against a live account, so the
+# default keeps it to a handful of calls a day.
+_SUPADATA_BALANCE_REFRESH_HOURS = 6
+
+
+def _interval_elapsed(last: float, every_seconds: float) -> bool:
+    """True when *every_seconds* has passed since *last*; False when disabled.
+
+    Reads better than inlining `every > 0 and now - last >= every`, which
+    conflates "is this scheduled at all" with "is it due".
+    """
+    if every_seconds <= 0:
+        return False
+    return time.time() - last >= every_seconds
+
+
+def _supadata_balance_refresh_hours() -> float:
+    """Hours between vendor balance refreshes. 0 or less disables them."""
+    with _config_lock:
+        raw = _daemon_config.get("supadata_balance_refresh_hours",
+                                 _SUPADATA_BALANCE_REFRESH_HOURS)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(_SUPADATA_BALANCE_REFRESH_HOURS)
+
+
+def _reconcile_supadata_usage(config: dict) -> bool:
+    """Adopt Supadata's own credit figure in place of the local tally.
+
+    The local counter counts *requests this daemon made*; Supadata counts
+    credits actually billed. The two drift, and only ever in one direction
+    that matters — a local undercount lets the cap be passed. Causes include
+    requests made outside this process, refusals that were refunded locally
+    but billed anyway (or vice versa), and any request that is not exactly one
+    credit. The vendor's number is authoritative, so take it rather than
+    accumulating error between restarts.
+
+    Returns True when a figure was obtained, whether or not it differed.
+    """
+    _cache_supadata_balance(config)   # refreshes state/supadata_balance.json
+    try:
+        balance = json.loads(
+            (STATE_ROOT / "supadata_balance.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        logger.warning(f"Supadata: could not read the vendor balance to reconcile - {exc}")
+        return False
+
+    used = balance.get("usedCredits")
+    if not isinstance(used, (int, float)):
+        logger.warning("Supadata: vendor balance carried no usedCredits; keeping the local count")
+        return False
+    used = int(used)
+
+    with _supadata_budget_lock:
+        data = _load_supadata_usage()
+        try:
+            local = int(data.get("cycle_count", 0))
+        except (TypeError, ValueError):
+            local = 0
+        if local != used:
+            data["cycle_count"] = used
+            data["cycle_start"] = _supadata_cycle_start()
+            _supadata_write_usage(data)
+
+    if local != used:
+        logger.info(
+            f"Supadata: cycle usage reconciled {local} -> {used} from the vendor "
+            f"(drift of {used - local:+d})"
+        )
+    else:
+        logger.debug(f"Supadata: cycle usage agrees with the vendor at {used}")
+
+    max_credits = balance.get("maxCredits")
+    configured = _supadata_monthly_limit()
+    if isinstance(max_credits, (int, float)) and configured > 0 and int(max_credits) != configured:
+        logger.info(
+            f"Supadata: plan is {int(max_credits)} credits but supadata_monthly_limit "
+            f"is {configured} — the smaller one is what actually binds"
+        )
+    reset_date = balance.get("resetDate")
+    if reset_date:
+        logger.debug(f"Supadata: vendor reports the plan resets {reset_date}")
+    return True
+
+
 def _supadata_budget_reserve() -> bool:
     """Reserve one Supadata credit against both the daily and cycle bounds.
 
@@ -3912,6 +4001,14 @@ def _wsb_processor_thread(config: dict) -> None:
     except Exception as exc:
         logger.warning(f"Unverified-user cleanup failed - {exc}")
     _last_user_cleanup: float = time.time()
+
+    # Reconcile against Supadata's own figure immediately, so restarting the
+    # daemon doubles as a way to force a re-sync.
+    try:
+        _reconcile_supadata_usage(config)
+    except Exception as exc:
+        logger.warning(f"Supadata: initial balance reconcile failed - {exc}")
+    _last_balance_refresh: float = time.time()
     _last_digest_check: float = 0.0
     _last_podcast_check: float = 0.0
     # channel_id -> last time a subscribe was attempted for a channel with no
@@ -4020,6 +4117,16 @@ def _wsb_processor_thread(config: dict) -> None:
                     # The hub just told us to stop; don't walk the rest of the list.
                     logger.info("WebSub: hub throttled us — deferring the remaining retries")
                     break
+
+        # -- Supadata balance reconcile ---------------------------------------
+        _set_cycle_phase("supadata-balance")
+        if _interval_elapsed(_last_balance_refresh,
+                             _supadata_balance_refresh_hours() * 3600):
+            try:
+                _reconcile_supadata_usage(current_config)
+            except Exception as exc:
+                logger.warning(f"Supadata: balance reconcile failed - {exc}")
+            _last_balance_refresh = time.time()
 
         _set_cycle_phase("orphan-recovery")
         # -- Orphan recovery (once per 24 h) ----------------------------------

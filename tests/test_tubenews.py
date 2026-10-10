@@ -65,6 +65,8 @@ from TubeNews import (
     _supadata_budget_reserve,
     _supadata_daily_limit,
     _supadata_monthly_limit,
+    _reconcile_supadata_usage,
+    _supadata_balance_refresh_hours,
     _supadata_transcript_mode,
     _make_supadata_client,
     _supadata_http_timeout,
@@ -6126,3 +6128,122 @@ def test_every_documented_supadata_knob_reloads(_reloadable_config):
     assert T._supadata_http_timeout() == 90.0
     assert T._websub_post_timeout() == 45.0
     assert T._max_video_age_days() == 30
+
+
+# ---------------------------------------------------------------------------
+# Reconcile the local tally against Supadata's own figure
+#
+# The local counter counts requests this daemon made; Supadata counts credits
+# billed. They drift — observed at 250 local vs 27 reported. The vendor
+# exposes the real number at /v1/me, and _cache_supadata_balance already
+# fetched it, but only from the --single-run path. In daemon mode nothing ever
+# refreshed it, so the drift only grew.
+# ---------------------------------------------------------------------------
+
+def _stub_vendor_balance(monkeypatch, tmp_path, **fields):
+    """Stand in for the /v1/me call by writing the balance file directly."""
+    import TubeNews as T
+    payload = {"maxCredits": 300, "usedCredits": 27, "resetDate": "2026-10-27"}
+    payload.update(fields)
+    monkeypatch.setattr(
+        T, "_cache_supadata_balance",
+        lambda cfg: (tmp_path / "supadata_balance.json").write_text(json.dumps(payload)),
+    )
+    return payload
+
+
+def test_reconcile_adopts_the_vendor_figure(tmp_path, monkeypatch):
+    """A local overcount is replaced by the number Supadata reports."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 300)
+    _stub_vendor_balance(monkeypatch, tmp_path, usedCredits=27)
+
+    cycle = T._supadata_cycle_start()
+    (tmp_path / "supadata_usage.json").write_text(json.dumps(
+        {"date": "2026-10-10", "count": 5, "cycle_start": cycle, "cycle_count": 250}))
+
+    assert _reconcile_supadata_usage({}) is True
+    assert supadata_budget_status()["used_this_cycle"] == 27
+
+
+def test_reconcile_also_corrects_an_undercount(tmp_path, monkeypatch):
+    """Drift in the dangerous direction — local below actual — is corrected too."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    _stub_vendor_balance(monkeypatch, tmp_path, usedCredits=280)
+    cycle = T._supadata_cycle_start()
+    (tmp_path / "supadata_usage.json").write_text(json.dumps(
+        {"cycle_start": cycle, "cycle_count": 12}))
+
+    _reconcile_supadata_usage({})
+    assert supadata_budget_status()["used_this_cycle"] == 280
+
+
+def test_reconcile_leaves_the_daily_counter_alone(tmp_path, monkeypatch):
+    """The vendor reports no per-day figure, so today's count is not touched."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    _stub_vendor_balance(monkeypatch, tmp_path, usedCredits=27)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (tmp_path / "supadata_usage.json").write_text(json.dumps(
+        {"date": today, "count": 9, "cycle_start": T._supadata_cycle_start(),
+         "cycle_count": 250}))
+
+    _reconcile_supadata_usage({})
+    status = supadata_budget_status()
+    assert status["used_today"] == 9, "the daily cap bookkeeping is ours alone"
+    assert status["used_this_cycle"] == 27
+
+
+def test_reconcile_preserves_an_active_backoff(tmp_path, monkeypatch):
+    """Re-syncing the count must not clear an unrelated vendor cool-off."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    _stub_vendor_balance(monkeypatch, tmp_path, usedCredits=27)
+    (tmp_path / "supadata_usage.json").write_text(json.dumps(
+        {"cycle_count": 250, "backoff_until": "2099-01-01T00:00:00Z",
+         "backoff_reason": "vendor reports no credits"}))
+
+    _reconcile_supadata_usage({})
+    saved = json.loads((tmp_path / "supadata_usage.json").read_text())
+    assert saved["backoff_until"] == "2099-01-01T00:00:00Z"
+    assert saved["backoff_reason"] == "vendor reports no credits"
+
+
+def test_reconcile_keeps_local_count_when_the_vendor_says_nothing(tmp_path, monkeypatch):
+    """A failed or malformed balance must not zero the local tally."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(T, "_cache_supadata_balance", lambda cfg: None)  # no file written
+    (tmp_path / "supadata_usage.json").write_text(json.dumps(
+        {"cycle_start": T._supadata_cycle_start(), "cycle_count": 42}))
+
+    assert _reconcile_supadata_usage({}) is False
+    assert supadata_budget_status()["used_this_cycle"] == 42, (
+        "losing contact with the vendor must not look like zero usage"
+    )
+
+
+def test_reconcile_ignores_a_balance_without_usedcredits(tmp_path, monkeypatch):
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        T, "_cache_supadata_balance",
+        lambda cfg: (tmp_path / "supadata_balance.json").write_text(json.dumps({"plan": "free"})))
+    (tmp_path / "supadata_usage.json").write_text(json.dumps(
+        {"cycle_start": T._supadata_cycle_start(), "cycle_count": 42}))
+
+    assert _reconcile_supadata_usage({}) is False
+    assert supadata_budget_status()["used_this_cycle"] == 42
+
+
+def test_balance_refresh_interval_configurable():
+    import TubeNews as T
+    T._daemon_config.pop("supadata_balance_refresh_hours", None)
+    assert _supadata_balance_refresh_hours() == float(T._SUPADATA_BALANCE_REFRESH_HOURS)
+    T._daemon_config["supadata_balance_refresh_hours"] = 1
+    assert _supadata_balance_refresh_hours() == 1.0
+    T._daemon_config["supadata_balance_refresh_hours"] = 0   # disabled
+    assert _supadata_balance_refresh_hours() == 0.0
+    T._daemon_config.pop("supadata_balance_refresh_hours", None)
