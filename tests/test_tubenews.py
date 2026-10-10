@@ -6308,12 +6308,8 @@ def test_pace_allows_one_a_day_rather_than_stranding_credits(_paced):
     assert _supadata_dynamic_daily_limit() == 1
 
 
-def test_ceiling_still_caps_the_pace(_paced, monkeypatch):
-    """The configured daily limit remains a hard upper bound.
-
-    Pacing stops a surplus being spent too fast; the ceiling bounds the blast
-    radius of a runaway loop. Both apply, lower wins.
-    """
+def test_absolute_ceiling_overrides_the_pace_when_set(_paced, monkeypatch):
+    """supadata_daily_limit remains available as a last-resort hard bound."""
     import TubeNews as T
     monkeypatch.setitem(T._daemon_config, "supadata_daily_limit", 5)
     _paced(used=0, days_left=1)          # pace would be large
@@ -6321,10 +6317,11 @@ def test_ceiling_still_caps_the_pace(_paced, monkeypatch):
     assert _supadata_effective_daily_limit() == 5
 
 
-def test_pace_is_enforced_by_the_reserve_path(_paced):
-    """The paced number is what actually blocks, not just what is reported."""
+def test_pace_is_enforced_by_the_reserve_path(_paced, monkeypatch):
+    """The enforced number is what actually blocks, not just what is reported."""
     import TubeNews as T
-    _paced(used=0, days_left=30)         # pace = 9
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_burst_factor", 1.0)
+    _paced(used=0, days_left=30)         # pace = 9, no burst headroom
     assert _supadata_effective_daily_limit() == 9
     allowed = sum(1 for _ in range(20) if T._supadata_budget_reserve())
     assert allowed == 9
@@ -6374,3 +6371,98 @@ def test_cycle_end_falls_back_without_a_vendor_date(tmp_path, monkeypatch):
     end = _supadata_cycle_end()
     assert end.day == 27
     assert end > datetime.now(timezone.utc).date()
+
+
+# ---------------------------------------------------------------------------
+# The daily bound scales with the pace, not as a fixed number
+#
+# A constant cannot be both a budget and an anomaly bound. Set at the budget
+# (300/30 ≈ 10) it binds every day and a late-cycle surplus can never be
+# reached; set high enough never to bind it guards nothing. Scaling off the
+# pace means one number that holds its meaning all month.
+# ---------------------------------------------------------------------------
+
+def test_burst_headroom_scales_with_the_pace(_paced, monkeypatch):
+    """Tight early when there is a lot to lose, generous late when it would expire."""
+    import TubeNews as T
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+
+    _paced(used=0, days_left=30)
+    early = _supadata_effective_daily_limit()
+    _paced(used=27, days_left=7)
+    late = _supadata_effective_daily_limit()
+
+    assert early == 18          # pace 9 x 2
+    assert late == 70           # pace 35 x 2
+    assert late > early, "a late-cycle surplus must become reachable"
+
+
+def test_day_one_blast_radius_is_tighter_than_a_fixed_ceiling(_paced, monkeypatch):
+    """The scaled bound beats the fixed one at its own job.
+
+    A fixed ceiling of 40 permits 40 wasted credits on day one. The pace knows
+    day one can only afford 9, so it permits 18.
+    """
+    import TubeNews as T
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+    _paced(used=0, days_left=30)
+    assert _supadata_effective_daily_limit() < 40
+
+
+def test_a_greedy_daemon_cannot_outspend_the_cycle(_paced, monkeypatch):
+    """Burst borrows from later days; it does not create credits.
+
+    Spending the maximum every day of a cycle must still total no more than
+    the plan, because each day's spend lowers the next day's pace.
+    """
+    import TubeNews as T
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+
+    used = 0
+    for day in range(30):
+        _paced(used=used, days_left=30 - day)
+        used += min(_supadata_effective_daily_limit(), 300 - used)
+    assert used <= 300, f"greedy spend reached {used}, over the 300 plan"
+
+
+def test_burst_factor_of_one_means_no_headroom(_paced, monkeypatch):
+    import TubeNews as T
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_burst_factor", 1.0)
+    _paced(used=0, days_left=30)
+    assert _supadata_effective_daily_limit() == _supadata_dynamic_daily_limit()
+
+
+def test_burst_factor_is_never_below_one(_paced, monkeypatch):
+    """A factor under 1 would undercut the pace it is meant to extend."""
+    import TubeNews as T
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_burst_factor", 0.1)
+    _paced(used=0, days_left=30)
+    assert _supadata_effective_daily_limit() >= _supadata_dynamic_daily_limit()
+
+
+def test_spent_cycle_allows_nothing_regardless_of_burst(_paced, monkeypatch):
+    import TubeNews as T
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_burst_factor", 10.0)
+    _paced(used=300, days_left=5)
+    assert _supadata_effective_daily_limit() == 0
+
+
+def test_unset_daily_limit_means_no_absolute_cap_when_pacing(monkeypatch, tmp_path):
+    """Leaving it out must not silently reinstate the old fixed default."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_dynamic_daily", True)
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+    assert T._supadata_daily_limit() == 0
+
+
+def test_unset_daily_limit_still_bounds_when_pacing_is_off(monkeypatch, tmp_path):
+    """Without pacing there would otherwise be no daily bound at all."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_dynamic_daily", False)
+    monkeypatch.delitem(T._daemon_config, "supadata_daily_limit", raising=False)
+    assert T._supadata_daily_limit() == T._SUPADATA_DAILY_LIMIT_DEFAULT

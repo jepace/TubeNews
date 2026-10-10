@@ -1131,20 +1131,46 @@ def _supadata_dynamic_daily_limit() -> int | None:
     return max(1, int((monthly - spent_before_today) / days_left * _supadata_pace_safety()))
 
 
-def _supadata_effective_daily_limit() -> int:
-    """The daily cap actually enforced: the lower of the ceiling and the pace.
+# How far above the day's pace a single day may go. A fixed daily number
+# cannot serve as both a budget and an anomaly bound: set at the budget
+# (300/30 ≈ 10) it binds constantly and the pacing can never reach a
+# late-cycle surplus; set high enough to never bind (100) it stops guarding
+# anything. Scaling it off the pace gives one number that means the same
+# thing all month — "a day may run this many times its fair share".
+#
+# Borrowing is self-correcting: a day that spends double leaves less
+# remaining, so tomorrow's pace drops on its own. The cycle cap still bounds
+# the total absolutely, so the only effect is on distribution within a cycle.
+_SUPADATA_DAILY_BURST_FACTOR = 2.0
 
-    The configured ``supadata_daily_limit`` stays a hard ceiling — it bounds
-    the blast radius of a runaway loop no matter what the pace says — while
-    the pace stops a quiet month's surplus being spent in one afternoon.
+
+def _supadata_daily_burst_factor() -> float:
+    """Multiple of the day's pace a single day is allowed to reach."""
+    with _config_lock:
+        raw = _daemon_config.get("supadata_daily_burst_factor", _SUPADATA_DAILY_BURST_FACTOR)
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return _SUPADATA_DAILY_BURST_FACTOR
+
+
+def _supadata_effective_daily_limit() -> int:
+    """The daily cap actually enforced.
+
+    Normally the pace times the burst factor: enough headroom to absorb a busy
+    day, bounded by what the remaining cycle budget can actually afford.
+    ``supadata_daily_limit`` is an optional absolute override on top — a last
+    resort for "never more than this whatever the arithmetic says", not a
+    budget. Leave it unset and the pace governs.
     """
-    ceiling = _supadata_daily_limit()
     pace = _supadata_dynamic_daily_limit()
+    ceiling = _supadata_daily_limit()
     if pace is None:
-        return ceiling
-    if ceiling <= 0:
-        return pace
-    return min(ceiling, pace)
+        return ceiling          # pacing off: the absolute cap is all there is
+    allowed = max(pace, int(pace * _supadata_daily_burst_factor()))
+    if ceiling > 0:
+        return min(ceiling, allowed)
+    return allowed
 
 
 def _supadata_daily_limit() -> int:
@@ -1154,7 +1180,12 @@ def _supadata_daily_limit() -> int:
     of 0 or below disables the daily bound (the cycle bound still applies).
     """
     with _config_lock:
-        raw = _daemon_config.get("supadata_daily_limit", _SUPADATA_DAILY_LIMIT_DEFAULT)
+        raw = _daemon_config.get("supadata_daily_limit")
+    if raw is None:
+        # Unset. With pacing on there is already a daily bound, so impose no
+        # absolute one; without pacing there would be nothing at all, so fall
+        # back to a conservative figure.
+        return 0 if _supadata_dynamic_daily_enabled() else _SUPADATA_DAILY_LIMIT_DEFAULT
     try:
         return int(raw)
     except (TypeError, ValueError):
