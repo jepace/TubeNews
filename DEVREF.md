@@ -413,19 +413,29 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 
 When running in daemon mode (the default, `python3 TubeNews.py`), the following configuration keys are **automatically reloaded** from `config.json` on each processor cycle (~every 1 minute):
 
-**Reloadable keys** (changes take effect immediately or next cycle):
-- `gemini_api_key`, `supadata_api_key` — next API call uses new key
-- `request_timeout` — applied immediately via `socket.setdefaulttimeout()`
-- `gemini_call_delay`, `gemini_model` — picked up by next processing cycle
-- `resend_api_key`, `resend_from_email`, `email_digest_send_hour` — picked up by next processor cycle
-- `base_url`, `ntfy_topic` — used at next web request
-- `websub_check_interval_minutes`, `websub_max_videos_per_cycle` — applied next cycle
-- `websub_min_age_minutes` — deprecated (logs warning if present; has no effect)
+**Every key reloads except the ones listed as immutable below.** A changed key
+is logged as `Config reload: <key> <old> → <new>`; keys beginning with `_`
+(documentation comments in `config.json.sample`) are ignored.
 
-**Immutable keys** (require daemon restart if changed):
-- `websub_callback_url`, `websub_secret`, `websub_daemon_port` — changing these requires a restart. If you edit these, the daemon logs a warning and continues using the old values.
+This used to be an *allowlist* of mutable keys, and anything not on it was
+skipped in silence. Keys added later — `supadata_daily_limit`,
+`supadata_monthly_limit`, `supadata_billing_cycle_day`,
+`supadata_transcript_mode`, `supadata_http_timeout`, `max_video_age_days`,
+`websub_post_timeout` — looked hot-reloadable because each getter reads
+`_daemon_config` on every call, but the reloader never wrote the new value
+there. Edits applied only after a restart, and nothing in the log said so.
+`resend_api_key` and the podcast/TTS keys were documented as reloadable while
+being silently skipped for the same reason. Do not reintroduce an allowlist.
 
-Changes to other keys (like `content_dir`, `state_dir`, `port`, `admin_users`) are handled by the web app when those are modified; they don't affect the daemon.
+A couple of keys apply specially rather than merely landing in the config dict:
+- `request_timeout` — also applied immediately via `socket.setdefaulttimeout()`
+- `websub_min_age_minutes` — deprecated; logs a warning and has no effect
+
+**Immutable keys** (require a daemon restart; changing them logs a warning and the old value is kept):
+- `websub_callback_url`, `websub_secret`, `websub_daemon_port` — the receiver is already bound to the port, and the hub holds the secret and callback from the subscribe handshake
+- `content_dir`, `state_dir` — resolved into `STORAGE_ROOT` / `STATE_ROOT` at import, so accepting a change would report one that did not happen
+
+Keys the daemon never reads (`port`, `tubenews_key`, `admin_users`) are the web app's concern and are picked up when it restarts.
 
 **Note:** In single-run mode (`python3 TubeNews.py --single-run`), `config.json` is loaded once at startup. To pick up config changes, restart the process.
 

@@ -5995,3 +5995,134 @@ def test_a_timed_out_fetch_is_transient_not_a_write_off(tmp_path, monkeypatch):
     result = fetch_transcript("VID1", _TimingOut(), failure_reason=reason)
     assert result is None, "a timeout is transient, not a permanent answer"
     assert reason == [], "must not be recorded as no_captions"
+
+
+# ---------------------------------------------------------------------------
+# Config hot-reload must not need a registration step
+#
+# Regression: _reload_config_from_disk used an allowlist of mutable keys, so
+# every key added after it was written — supadata_daily_limit,
+# supadata_monthly_limit, supadata_transcript_mode, supadata_http_timeout,
+# max_video_age_days, websub_post_timeout — was silently skipped. Edited in
+# config.json, never applied, and nothing logged to say so. They only took
+# effect on a restart, because startup loads the whole file wholesale.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def _reloadable_config(tmp_path, monkeypatch):
+    """Point _reload_config_from_disk at a temp config.json we control.
+
+    It derives the path from the module's __file__, so redirecting that is
+    enough — the real reloader runs, unmodified.
+    """
+    import TubeNews as T
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(T, "__file__", str(tmp_path / "TubeNews.py"))
+
+    def _write(data: dict) -> dict:
+        cfg.write_text(json.dumps(data))
+        T._config_mtime = 0.0          # defeat the mtime fast-gate
+        return data
+
+    T._daemon_config.clear()
+    T._config_mtime = 0.0
+    yield _write
+    T._daemon_config.clear()
+    T._config_mtime = 0.0
+
+
+def test_a_key_nobody_registered_still_reloads(_reloadable_config):
+    """The whole point of the inversion: no allowlist to forget."""
+    import TubeNews as T
+    base = {"gemini_api_key": "g", "supadata_api_key": "s",
+            "supadata_daily_limit": 10, "max_video_age_days": 14}
+    _reloadable_config(base)
+    T._daemon_config.update(base)
+
+    _reloadable_config({**base, "supadata_daily_limit": 40, "max_video_age_days": 30})
+    T._reload_config_from_disk()
+
+    assert T._supadata_daily_limit() == 40, (
+        "a config key must take effect without being added to a list somewhere"
+    )
+    assert T._max_video_age_days() == 30
+
+
+def test_a_brand_new_key_reloads(_reloadable_config):
+    """A key this code has never seen is still picked up."""
+    import TubeNews as T
+    base = {"gemini_api_key": "g", "supadata_api_key": "s"}
+    _reloadable_config(base)
+    T._daemon_config.update(base)
+
+    _reloadable_config({**base, "some_future_knob": 99})
+    T._reload_config_from_disk()
+    assert T._daemon_config.get("some_future_knob") == 99
+
+
+def test_immutable_keys_are_not_applied(_reloadable_config, caplog):
+    """Startup-fixed keys warn rather than pretending to change."""
+    import TubeNews as T
+    base = {"gemini_api_key": "g", "supadata_api_key": "s",
+            "websub_callback_url": "https://old.example/push",
+            "websub_secret": "sec", "websub_daemon_port": 8675,
+            "content_dir": "/a", "state_dir": "/b"}
+    _reloadable_config(base)
+    T._daemon_config.update(base)
+
+    _reloadable_config({**base, "websub_callback_url": "https://new.example/push",
+                        "websub_daemon_port": 9999, "content_dir": "/moved"})
+    with caplog.at_level(logging.WARNING, logger="TubeNews"):
+        caplog.clear()
+        T._reload_config_from_disk()
+
+    assert T._daemon_config["websub_callback_url"] == "https://old.example/push"
+    assert T._daemon_config["websub_daemon_port"] == 8675
+    assert T._daemon_config["content_dir"] == "/a", (
+        "content_dir resolves into STORAGE_ROOT at import; accepting it would "
+        "report a change that did not happen"
+    )
+    warned = " ".join(r.message for r in caplog.records)
+    assert "cannot be changed at runtime" in warned
+
+
+def test_comment_keys_are_not_logged_as_changes(_reloadable_config, caplog):
+    """config.json.sample carries _comment keys; they are documentation."""
+    import TubeNews as T
+    base = {"gemini_api_key": "g", "supadata_api_key": "s"}
+    _reloadable_config(base)
+    T._daemon_config.update(base)
+
+    _reloadable_config({**base, "_comment": "hello", "_comment_mode": "world"})
+    with caplog.at_level(logging.INFO, logger="TubeNews"):
+        caplog.clear()
+        T._reload_config_from_disk()
+    assert not any("_comment" in r.message for r in caplog.records)
+
+
+def test_every_documented_supadata_knob_reloads(_reloadable_config):
+    """Each knob this session added, end to end through the real reloader."""
+    import TubeNews as T
+    base = {"gemini_api_key": "g", "supadata_api_key": "s"}
+    _reloadable_config(base)
+    T._daemon_config.update(base)
+
+    knobs = {
+        "supadata_daily_limit": 40,
+        "supadata_monthly_limit": 500,
+        "supadata_billing_cycle_day": 27,
+        "supadata_transcript_mode": "native",
+        "supadata_http_timeout": 90,
+        "max_video_age_days": 30,
+        "websub_post_timeout": 45,
+    }
+    _reloadable_config({**base, **knobs})
+    T._reload_config_from_disk()
+
+    for key, expected in knobs.items():
+        assert T._daemon_config.get(key) == expected, f"{key} did not reload"
+    assert T._supadata_daily_limit() == 40
+    assert T._supadata_monthly_limit() == 500
+    assert T._supadata_http_timeout() == 90.0
+    assert T._websub_post_timeout() == 45.0
+    assert T._max_video_age_days() == 30

@@ -4480,42 +4480,38 @@ def _reload_config_from_disk() -> dict:
         changed = {}
         immutable_attempted = {}
 
-        # Keys that can change at runtime
-        mutable_keys = {
-            "gemini_api_key",
-            "supadata_api_key",
-            "request_timeout",
-            "gemini_call_delay",
-            "gemini_model",
-            "base_url",
-            "ntfy_topic",
-            "websub_check_interval_minutes",
-            "websub_min_age_minutes",
-            "websub_max_videos_per_cycle",
-        }
-
-        # Keys that shouldn't change (but warn if they do)
+        # Reload everything except what is genuinely fixed at startup.
+        #
+        # This was an allowlist of mutable keys, which silently dropped any key
+        # nobody remembered to add to it. supadata_daily_limit,
+        # supadata_monthly_limit, max_video_age_days and the rest were all
+        # edited in config.json and never took effect — with nothing logged to
+        # say so, because a key in neither set was simply skipped. A denylist
+        # fails the safe way: a new key reloads unless it is named here.
         immutable_keys = {
+            # The receiver is already bound to this port, and the hub already
+            # holds the secret and callback URL from the subscribe handshake.
             "websub_daemon_port",
             "websub_secret",
             "websub_callback_url",
+            # Resolved into STORAGE_ROOT / STATE_ROOT at import. Updating the
+            # config value would not move the roots, so accepting it would
+            # report a change that did not happen.
+            "content_dir",
+            "state_dir",
         }
 
-        for key in mutable_keys:
-            if key in fresh:
-                old_val = _daemon_config.get(key)
-                new_val = fresh[key]
-                if old_val != new_val:
-                    changed[key] = (old_val, new_val)
-                    _daemon_config[key] = new_val
-
-        # Warn about immutable key changes
-        for key in immutable_keys:
-            if key in fresh:
-                old_val = _daemon_config.get(key)
-                new_val = fresh[key]
-                if old_val != new_val:
-                    immutable_attempted[key] = (old_val, new_val)
+        for key, new_val in fresh.items():
+            if key.startswith("_"):
+                continue  # "_comment" documentation keys
+            old_val = _daemon_config.get(key)
+            if old_val == new_val:
+                continue
+            if key in immutable_keys:
+                immutable_attempted[key] = (old_val, new_val)
+                continue
+            changed[key] = (old_val, new_val)
+            _daemon_config[key] = new_val
 
         # Special handling: apply request_timeout immediately
         if "request_timeout" in changed:
