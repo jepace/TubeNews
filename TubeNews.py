@@ -37,7 +37,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, NotRequired, TypedDict
+from typing import Any, Callable, Iterator, NotRequired, TypedDict
 
 # ---------------------------------------------------------------------------
 # Third-party imports
@@ -5315,56 +5315,174 @@ def _generate_podcast_script(
         return None
 
 
+# Per-request input limits for the TTS vendors.  A podcast script is capped at
+# ``_PODCAST_TARGET_WORDS`` (~7.5 KB of text), which exceeds every one of them,
+# so a script must be split and the returned audio concatenated.  MP3 is a
+# sequence of self-contained frames, so byte concatenation yields a playable
+# file; the seam lands on a sentence boundary and is inaudible.
+_TTS_GOOGLE_MAX_BYTES = 4800       # API hard limit 5000 bytes
+_TTS_OPENAI_MAX_BYTES = 3900       # API hard limit 4096 characters
+_TTS_DEEPGRAM_MAX_BYTES = 1900     # API hard limit 2000 characters
+_TTS_ELEVENLABS_MAX_BYTES = 4800   # API hard limit 5000 characters
+_TTS_HTTP_TIMEOUT = 120
+
+
+def _split_text_for_tts(text: str, max_bytes: int) -> list[str]:
+    """Split *text* into chunks of at most *max_bytes* UTF-8 bytes.
+
+    Splits on sentence boundaries so each chunk ends where a speaker would
+    pause.  A sentence longer than *max_bytes* falls back to word boundaries,
+    and a single word longer still is hard-split on a character boundary.
+    Two invariants hold in every case: no chunk exceeds *max_bytes* (one that
+    did would simply be rejected by the vendor), and no text is dropped (a
+    silently truncated episode is the worst outcome of all).
+
+    Measures bytes, not characters: the Google limit is in bytes, and the
+    Gemini-written scripts contain multi-byte punctuation (curly quotes, em
+    dashes) that a character count would under-measure.
+    """
+    if not text:
+        return []
+
+    def _size(chunk: str) -> int:
+        return len(chunk.encode("utf-8"))
+
+    def _pack(parts: list[str], joiner: str) -> list[str]:
+        """Greedily concatenate *parts* into the fewest chunks that fit."""
+        packed: list[str] = []
+        buffer = ""
+        for part in parts:
+            candidate = f"{buffer}{joiner}{part}" if buffer else part
+            if buffer and _size(candidate) > max_bytes:
+                packed.append(buffer)
+                buffer = part
+            else:
+                buffer = candidate
+        if buffer:
+            packed.append(buffer)
+        return packed
+
+    def _hard_split(word: str) -> list[str]:
+        """Split a single over-long word on character boundaries."""
+        pieces: list[str] = []
+        current = ""
+        for char in word:
+            if current and _size(current + char) > max_bytes:
+                pieces.append(current)
+                current = char
+            else:
+                current += char
+        if current:
+            pieces.append(current)
+        return pieces
+
+    if _size(text) <= max_bytes:
+        return [text]
+
+    # Keep each terminator attached to the sentence it ends.
+    sentences = re.findall(r"[^.!?]*[.!?]+\s*|[^.!?]+$", text) or [text]
+
+    units: list[str] = []
+    for sentence in sentences:
+        if _size(sentence) <= max_bytes:
+            units.append(sentence)
+            continue
+        words: list[str] = []
+        for word in sentence.split(" "):
+            words.extend([word] if _size(word) <= max_bytes else _hard_split(word))
+        units.extend(_pack(words, " "))
+
+    return [chunk.strip() for chunk in _pack(units, "") if chunk.strip()]
+
+
+def _tts_chunked(
+    text: str,
+    max_bytes: int,
+    label: str,
+    synth_one: Callable[[str], bytes | None],
+) -> bytes | None:
+    """Split *text*, synthesise each chunk via *synth_one*, concatenate the audio.
+
+    Every vendor caps the input of a single request well below the size of a
+    podcast script, so chunking is the normal path, not an edge case.  A
+    failure on any chunk fails the whole episode: a partial episode that
+    silently dropped its middle would be worse than no episode at all.
+    """
+    chunks = _split_text_for_tts(text, max_bytes)
+    if not chunks:
+        return None
+    if len(chunks) > 1:
+        logger.info(
+            "Podcast (%s): script split into %d chunks (limit %d bytes)",
+            label, len(chunks), max_bytes,
+        )
+    segments: list[bytes] = []
+    for index, chunk in enumerate(chunks, 1):
+        audio = synth_one(chunk)
+        if not audio:
+            logger.warning(
+                "Podcast (%s): chunk %d/%d produced no audio — episode abandoned",
+                label, index, len(chunks),
+            )
+            return None
+        segments.append(audio)
+    return b"".join(segments)
+
+
+def _tts_post_audio(
+    label: str,
+    url: str,
+    payload: dict,
+    headers: dict | None = None,
+    extract: Callable[[requests.Response], bytes | None] | None = None,
+) -> bytes | None:
+    """POST *payload* and return the audio bytes, or ``None`` on any failure."""
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=_TTS_HTTP_TIMEOUT)
+        if resp.status_code != 200:
+            logger.warning(
+                "Podcast (%s): HTTP %d: %s", label, resp.status_code, resp.text[:120],
+            )
+            return None
+        return extract(resp) if extract else resp.content
+    except Exception as exc:
+        logger.warning("Podcast (%s): request failed: %s", label, exc)
+        return None
+
+
 def _tts_google(text: str, api_key: str, voice: str, config: dict) -> bytes | None:
     """Synthesise *text* via Google Cloud Text-to-Speech REST API.  Returns MP3 bytes."""
     lang = config.get("tts_language_code", "en-US")
     voice_name = voice or "en-US-Neural2-J"
     url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}"
-    payload = {
-        "input": {"text": text},
-        "voice": {"languageCode": lang, "name": voice_name},
-        "audioConfig": {"audioEncoding": "MP3"},
-    }
-    try:
-        resp = requests.post(url, json=payload, timeout=120)
-        if resp.status_code != 200:
-            logger.warning(
-                "Podcast (google TTS): HTTP %d: %s",
-                resp.status_code,
-                resp.text[:120],
-            )
-            return None
+
+    def _extract(resp: requests.Response) -> bytes | None:
         audio_b64 = resp.json().get("audioContent", "")
         if not audio_b64:
             logger.warning("Podcast (google TTS): empty audioContent in response")
             return None
         return base64.b64decode(audio_b64)
-    except Exception as exc:
-        logger.warning("Podcast (google TTS): request failed: %s", exc)
-        return None
+
+    def _one(chunk: str) -> bytes | None:
+        return _tts_post_audio("google TTS", url, {
+            "input": {"text": chunk},
+            "voice": {"languageCode": lang, "name": voice_name},
+            "audioConfig": {"audioEncoding": "MP3"},
+        }, extract=_extract)
+
+    return _tts_chunked(text, _TTS_GOOGLE_MAX_BYTES, "google TTS", _one)
 
 
 def _tts_deepgram(text: str, api_key: str, voice: str) -> bytes | None:
     """Synthesise *text* via Deepgram Aura TTS REST API.  Returns MP3 bytes."""
     model = voice or "aura-asteria-en"
     url = f"https://api.deepgram.com/v1/speak?model={model}"
-    headers = {
-        "Authorization": f"Token {api_key}",
-        "Content-Type": "application/json",
-    }
-    try:
-        resp = requests.post(url, json={"text": text}, headers=headers, timeout=120)
-        if resp.status_code != 200:
-            logger.warning(
-                "Podcast (deepgram TTS): HTTP %d: %s",
-                resp.status_code,
-                resp.text[:120],
-            )
-            return None
-        return resp.content
-    except Exception as exc:
-        logger.warning("Podcast (deepgram TTS): request failed: %s", exc)
-        return None
+    headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
+
+    def _one(chunk: str) -> bytes | None:
+        return _tts_post_audio("deepgram TTS", url, {"text": chunk}, headers=headers)
+
+    return _tts_chunked(text, _TTS_DEEPGRAM_MAX_BYTES, "deepgram TTS", _one)
 
 
 def _tts_elevenlabs(text: str, api_key: str, voice: str) -> bytes | None:
@@ -5376,48 +5494,29 @@ def _tts_elevenlabs(text: str, api_key: str, voice: str) -> bytes | None:
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
     }
-    payload = {"text": text, "model_id": "eleven_multilingual_v2"}
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=120)
-        if resp.status_code != 200:
-            logger.warning(
-                "Podcast (elevenlabs TTS): HTTP %d: %s",
-                resp.status_code,
-                resp.text[:120],
-            )
-            return None
-        return resp.content
-    except Exception as exc:
-        logger.warning("Podcast (elevenlabs TTS): request failed: %s", exc)
-        return None
+
+    def _one(chunk: str) -> bytes | None:
+        return _tts_post_audio("elevenlabs TTS", url, {
+            "text": chunk, "model_id": "eleven_multilingual_v2",
+        }, headers=headers)
+
+    return _tts_chunked(text, _TTS_ELEVENLABS_MAX_BYTES, "elevenlabs TTS", _one)
 
 
 def _tts_openai(text: str, api_key: str, voice: str) -> bytes | None:
     """Synthesise *text* via OpenAI TTS REST API.  Returns MP3 bytes."""
     url = "https://api.openai.com/v1/audio/speech"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "tts-1-hd",
-        "input": text,
-        "voice": voice or "nova",
-        "response_format": "mp3",
-    }
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=120)
-        if resp.status_code != 200:
-            logger.warning(
-                "Podcast (openai TTS): HTTP %d: %s",
-                resp.status_code,
-                resp.text[:120],
-            )
-            return None
-        return resp.content
-    except Exception as exc:
-        logger.warning("Podcast (openai TTS): request failed: %s", exc)
-        return None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    def _one(chunk: str) -> bytes | None:
+        return _tts_post_audio("openai TTS", url, {
+            "model": "tts-1-hd",
+            "input": chunk,
+            "voice": voice or "nova",
+            "response_format": "mp3",
+        }, headers=headers)
+
+    return _tts_chunked(text, _TTS_OPENAI_MAX_BYTES, "openai TTS", _one)
 
 
 def _tts_synthesize(script_text: str, config: dict) -> bytes | None:

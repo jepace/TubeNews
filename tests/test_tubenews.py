@@ -4234,6 +4234,143 @@ def test_tts_synthesize_dispatches_deepgram(monkeypatch):
     assert any("deepgram.com" in u for u in calls)
 
 
+# -- _split_text_for_tts / chunked synthesis --
+
+def test_split_text_for_tts_returns_single_chunk_when_under_limit():
+    """Text inside the limit is returned whole, not split."""
+    assert _tn_digest._split_text_for_tts("Short enough.", 100) == ["Short enough."]
+
+
+def test_split_text_for_tts_empty_text_yields_no_chunks():
+    """Empty input produces no chunks, so no request is made."""
+    assert _tn_digest._split_text_for_tts("", 100) == []
+
+
+def test_split_text_for_tts_every_chunk_respects_the_byte_limit():
+    """A realistic script splits into chunks that each fit the vendor limit.
+
+    Regression test: a 1300-word podcast script is ~7.5 KB, well past the
+    Google 5000-byte request cap, so the unchunked version failed with
+    HTTP 400 on the first real episode and produced no audio at all.
+    """
+    script = ("The council met on Tuesday to discuss the budget shortfall. "
+              "Residents raised concerns about the proposed rate increase. "
+              "A vote was deferred until the next session. ") * 60
+    chunks = _tn_digest._split_text_for_tts(script, _tn_digest._TTS_GOOGLE_MAX_BYTES)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= _tn_digest._TTS_GOOGLE_MAX_BYTES
+
+
+def test_split_text_for_tts_preserves_all_words():
+    """Splitting loses no words — a silently truncated episode is the failure mode."""
+    script = " ".join(f"word{i}." for i in range(800))
+    chunks = _tn_digest._split_text_for_tts(script, 200)
+    assert " ".join(chunks).split() == script.split()
+
+
+def test_split_text_for_tts_measures_bytes_not_characters():
+    """Multi-byte punctuation counts against the byte limit.
+
+    Gemini writes curly quotes and em dashes; a character count would
+    under-measure them and let a chunk exceed the API's byte limit.
+    """
+    text = "\u2014" * 40  # 40 em dashes = 120 UTF-8 bytes, 40 characters
+    chunks = _tn_digest._split_text_for_tts(text, 60)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= 60
+
+
+def test_split_text_for_tts_hard_splits_an_oversized_word_without_losing_it():
+    """A word longer than the limit is split, not dropped, and the cap holds.
+
+    Nothing in real prose hits this, but a chunk over the limit would be
+    rejected outright by the vendor, so the cap wins over word integrity.
+    """
+    monster = "x" * 50
+    chunks = _tn_digest._split_text_for_tts(f"ok. {monster} ok.", 20)
+    for chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= 20
+    assert "".join(chunks).count("x") == 50
+
+
+def test_tts_google_concatenates_chunk_audio(monkeypatch):
+    """A split script issues one request per chunk and joins the MP3 segments."""
+    import base64 as _b64
+    from unittest.mock import MagicMock
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(kw["json"]["input"]["text"])
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "audioContent": _b64.b64encode(f"SEG{len(calls)}".encode()).decode()
+        }
+        return resp
+
+    monkeypatch.setattr("requests.post", fake_post)
+    script = "This is a sentence that will be split. " * 300
+    result = _tn_digest._tts_synthesize(script, {
+        "tts_provider": "google",
+        "tts_api_key": "key123",
+    })
+    assert len(calls) > 1
+    assert result == b"".join(f"SEG{i}".encode() for i in range(1, len(calls) + 1))
+    for sent in calls:
+        assert len(sent.encode("utf-8")) <= _tn_digest._TTS_GOOGLE_MAX_BYTES
+
+
+def test_tts_google_abandons_episode_when_one_chunk_fails(monkeypatch):
+    """A mid-script failure returns None — never a partial episode."""
+    import base64 as _b64
+    from unittest.mock import MagicMock
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(url)
+        resp = MagicMock()
+        if len(calls) == 2:
+            resp.status_code = 500
+            resp.text = "boom"
+            return resp
+        resp.status_code = 200
+        resp.json.return_value = {"audioContent": _b64.b64encode(b"SEG").decode()}
+        return resp
+
+    monkeypatch.setattr("requests.post", fake_post)
+    script = "This is a sentence that will be split. " * 300
+    result = _tn_digest._tts_synthesize(script, {
+        "tts_provider": "google",
+        "tts_api_key": "key123",
+    })
+    assert result is None
+
+
+def test_tts_openai_splits_to_its_own_smaller_limit(monkeypatch):
+    """Each provider chunks to its own cap, not a shared one."""
+    from unittest.mock import MagicMock
+    sent = []
+
+    def fake_post(url, **kw):
+        sent.append(kw["json"]["input"])
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b"MP3"
+        return resp
+
+    monkeypatch.setattr("requests.post", fake_post)
+    script = "This is a sentence that will be split. " * 300
+    result = _tn_digest._tts_synthesize(script, {
+        "tts_provider": "openai",
+        "tts_api_key": "sk_test",
+    })
+    assert result == b"MP3" * len(sent)
+    for chunk in sent:
+        assert len(chunk.encode("utf-8")) <= _tn_digest._TTS_OPENAI_MAX_BYTES
+
+
 # -- _build_podcast_feed --
 
 def test_build_podcast_feed_contains_enclosure():

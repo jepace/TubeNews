@@ -194,6 +194,43 @@ Defined in `web/app.py`:
 | `_supadata_daily_limit()` | Reads `supadata_daily_limit` from the live daemon config (hot-reloadable); `<= 0` disables metering. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
+### Daily podcast (audio digest)
+
+`_generate_daily_podcasts()` runs once a day at `podcast_generation_hour` (UTC, default `6`)
+for each user whose preferences carry `podcast_enabled`. It selects unread stories since
+`last_podcast_generated`, has Gemini write a spoken script, synthesises MP3 audio, and
+rebuilds the per-user iTunes feed at `state/users/<uuid>/podcast.xml`.
+
+| Function | Purpose |
+|---|---|
+| `_select_podcast_stories(user_data, user_id, cutoff_ts)` | Unread stories since *cutoff_ts*, newest first, accumulated until `_PODCAST_TARGET_WORDS` (1300 ≈ 10 min at 130 WPM). Reuses `_scan_stories_since` for channel/attribution filtering, then drops anything in `read_articles`. |
+| `_generate_podcast_script(stories, user_name, date_str, config)` | One direct Gemini call (no JSON extraction) producing plain spoken prose: welcome → one segment per story → outro. Returns `None` on failure. |
+| `_split_text_for_tts(text, max_bytes)` | Splits a script into chunks that each fit *max_bytes* of **UTF-8** — sentence boundaries first, then word boundaries, then a hard character split for a single over-long word. Two invariants: no chunk exceeds the limit, and no text is dropped. Measures bytes because the Google cap is in bytes and Gemini emits multi-byte punctuation a character count would under-measure. |
+| `_tts_chunked(text, max_bytes, label, synth_one)` | Drives the split and concatenates the returned MP3 segments. Any failing chunk abandons the whole episode — a partial episode missing its middle is worse than none. |
+| `_tts_post_audio(label, url, payload, headers=None, extract=None)` | Shared POST + error logging for one chunk; `extract` pulls audio out of a JSON body (Google) versus the raw response (everyone else). |
+| `_tts_google` / `_tts_deepgram` / `_tts_elevenlabs` / `_tts_openai` | Per-vendor endpoint, auth and payload shape. Each passes its own byte cap to `_tts_chunked`. |
+| `_tts_synthesize(script_text, config)` | Dispatches on `tts_provider`; returns `None` when `tts_api_key` is unset, so the whole feature stays dormant until configured. |
+| `_build_podcast_feed(user_data, episodes, base_url)` | iTunes-namespaced RSS with `<enclosure>` and `<itunes:duration>` per episode. Requires absolute URLs, hence `base_url`. |
+
+**Per-request input caps.** Every vendor rejects a request whose input exceeds its cap, and
+a 1300-word script (~7.5 KB) exceeds all four — so chunking is the normal path, not an edge
+case. MP3 is a sequence of self-contained frames, so byte concatenation yields a playable
+file and the seam falls on a sentence boundary, where a speaker would pause anyway.
+
+| Constant | Bytes | Vendor hard limit |
+|---|---|---|
+| `_TTS_GOOGLE_MAX_BYTES` | 4800 | 5000 bytes |
+| `_TTS_OPENAI_MAX_BYTES` | 3900 | 4096 characters |
+| `_TTS_DEEPGRAM_MAX_BYTES` | 1900 | 2000 characters |
+| `_TTS_ELEVENLABS_MAX_BYTES` | 4800 | 5000 characters |
+
+**Cost.** Unlike the Supadata integration, spend here is bounded by construction:
+`_PODCAST_TARGET_WORDS` caps characters per episode, episodes are one per user per day, so
+monthly characters are `users × ~7500 × 30` — arithmetic you can do in advance. One user is
+~225k characters/month, inside Google Cloud TTS's perpetual free monthly allowance
+(4M Standard / 1M Neural2). Cloud TTS still requires billing enabled and auto-charges past
+the allowance, so set a cloud budget alert rather than relying on the quota alone.
+
 ---
 
 ## Setup
@@ -405,6 +442,12 @@ The queue stores videos sent by YouTube's WebSub hub, pending processing. Each e
 | `email_digest_send_hour` | No | UTC hour (0–23) at which the daemon sends daily digests (default: `7`). The daemon fires at the first processor cycle within that hour. Requires `base_url` to be set. |
 | `max_parallel_feeds` | No | Max channels processed concurrently (default: `1`; capped at number of feeds). Keep at `1` unless you have a paid Gemini tier with higher RPM limits. |
 | `port` | No | Port the Flask web UI listens on (default: `8000`) |
+| `tts_provider` | No | TTS vendor for the daily podcast: `google` (default), `deepgram`, `elevenlabs`, `openai`. An unknown value logs a warning and skips synthesis. |
+| `tts_api_key` | No | Vendor API key. **Empty disables the podcast feature entirely** — `_tts_synthesize` returns `None` before any request. For `google` this is a Google Cloud Text-to-Speech key, not a Gemini API key. |
+| `tts_voice_id` | No | Vendor voice identifier (e.g. `en-US-Neural2-J` for Google, `nova` for OpenAI, `aura-asteria-en` for Deepgram). Defaults per provider. |
+| `tts_language_code` | No | BCP-47 language for Google TTS (default: `en-US`). Ignored by the other providers. |
+| `podcast_generation_hour` | No | UTC hour (0–23) at which episodes are generated (default: `6`, one hour before the digest so the email can reference the episode). |
+| `podcast_retention_days` | No | Episodes older than this many days are deleted and dropped from `podcast.xml` (default: `7`). |
 | `tubenews_key` | Web UI only | Flask session secret key — generate with `python -c 'import secrets; print(secrets.token_hex(32))'`; also readable from `TUBENEWS_SECRET_KEY` env var |
 | `admin_users` | No | List of email addresses granted admin access to the web UI (e.g. `["alice@example.com"]`) |
 | `websub_callback_url` | No | Public HTTPS URL TubeNews registers with YouTube's hub as the push endpoint (e.g. `https://yourdomain.com/youtube/push`). Required for `--daemon` mode. |

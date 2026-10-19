@@ -36,9 +36,10 @@
   "resend_from_email": "TubeNews <digest@yourdomain.com>",
   "email_digest_send_hour": 7,
 
+  "_comment_tts": "Daily audio podcast. Empty tts_api_key disables the feature entirely. For 'google' this is a Google Cloud Text-to-Speech key (NOT a Gemini key) — Cloud TTS has a perpetual monthly free allowance (4M chars Standard, 1M Neural2) and one user costs ~225k chars/month, but billing must be enabled and overage auto-charges, so set a cloud budget alert. Scripts are split automatically to each vendor's per-request input cap.",
   "tts_provider": "google",
   "tts_api_key": "",
-  "tts_voice_id": "",
+  "tts_voice_id": "en-US-Neural2-J",
   "tts_language_code": "en-US",
   "podcast_generation_hour": 6,
   "podcast_retention_days": 7,
