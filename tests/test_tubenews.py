@@ -3918,6 +3918,174 @@ def test_build_digest_html_escapes_name():
 
 # -- _send_daily_digests --
 
+# -- digest body, channel grouping and the size budget --
+
+def _digest_story(i=0, channel="Alpha City", body=None, words=140):
+    """A story dict shaped like _scan_stories_since returns."""
+    return {
+        "title": f"Council Approves Budget {i}",
+        "channel_name": channel,
+        "video_id": f"vid{i:08d}",
+        "start_seconds": 120,
+        "body_html": body if body is not None else " ".join(f"word{n}" for n in range(words)),
+    }
+
+
+def test_digest_includes_the_full_story_body():
+    """The digest carries story prose, not just a headline.
+
+    It was a bare list of titles, which made the email a table of contents
+    for a site the reader then had to visit to learn anything.
+    """
+    story = _digest_story(body="First paragraph here.<br>Second paragraph here.")
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [story], "https://example.com/feed/t.html",
+        "https://example.com")
+    assert "First paragraph here." in html
+    assert "Second paragraph here." in html
+
+
+def test_digest_renders_each_paragraph_separately():
+    """<br>-joined body text becomes real paragraphs, not one run-on block."""
+    story = _digest_story(body="Para one.<br>Para two.<br>Para three.")
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [story], "f", "https://example.com")
+    assert html.count("<p style=\"margin:0 0 0.8em\">") == 3
+
+
+def test_digest_groups_stories_under_their_channel():
+    """Each channel heading appears once, however many stories it has."""
+    stories = [
+        _digest_story(1, "Alpha City"), _digest_story(2, "Beta County"),
+        _digest_story(3, "Alpha City"),
+    ]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    assert html.count("Alpha City") == 1
+    assert html.count("Beta County") == 1
+    for i in (1, 2, 3):
+        assert f"Council Approves Budget {i}" in html
+
+
+def test_digest_channel_order_follows_the_newest_story():
+    """Channels appear in the order their newest story arrived."""
+    stories = [_digest_story(1, "Zeta Town"), _digest_story(2, "Alpha City")]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    assert html.index("Zeta Town") < html.index("Alpha City"), (
+        "grouping must not re-sort channels alphabetically and bury the newest"
+    )
+
+
+def test_digest_stays_under_the_gmail_clipping_threshold():
+    """A very busy day must not produce a message Gmail would clip.
+
+    Gmail hides everything past ~102 KB behind "[Message clipped]", which no
+    log would show — so the back half of a big digest would vanish silently.
+    """
+    stories = [_digest_story(i, f"Channel {i % 5}", words=300) for i in range(200)]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    assert len(html.encode("utf-8")) <= _tn_digest._DIGEST_MAX_HTML_BYTES * 1.2
+    assert len(html.encode("utf-8")) < 102_400
+
+
+def test_digest_lists_the_overflow_as_headlines():
+    """Stories past the budget appear as headlines under an honest count."""
+    stories = [_digest_story(i, "Alpha City", words=400) for i in range(40)]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    full = html.count("Watch this moment")
+    assert 0 < full < 40, "the budget should have truncated some bodies"
+    assert f"{40 - full} more stories" in html
+    # At this size the reserve holds every remaining headline.
+    for i in range(40):
+        assert f"vid{i:08d}" in html
+    assert "and 0 more" not in html
+
+
+def test_digest_accounts_for_every_story_even_when_headlines_overflow_too():
+    """Past the headline reserve the tail becomes a count, and it adds up.
+
+    Every story is either rendered in full, listed as a headline, or counted
+    in the closing line — none may be dropped without being accounted for.
+    """
+    stories = [_digest_story(i, "Alpha City", words=400) for i in range(400)]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    full = html.count("Watch this moment")
+    listed = sum(1 for i in range(400) if f"vid{i:08d}" in html) - full
+    match = re.search(r"and (\d+) more in your feed", html)
+    counted = int(match.group(1)) if match else 0
+    assert full + listed + counted == 400, (
+        f"{full} full + {listed} listed + {counted} counted != 400 stories"
+    )
+    assert counted > 0, "this size should have exhausted the headline reserve"
+    assert len(html.encode("utf-8")) < 102_400
+
+
+def test_digest_always_keeps_one_full_body():
+    """A single story larger than the whole budget is still sent with its body.
+
+    Otherwise an unusually long story would produce an email of pure
+    headlines, which is the one outcome worse than a long email.
+    """
+    giant = _digest_story(0, "Alpha City", words=200_000)
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [giant], "f", "https://example.com")
+    assert "word199999" in html
+    assert "more stories" not in html
+
+
+def test_digest_budget_spends_on_the_newest_stories_first():
+    """Budgeting happens before grouping, so the newest stories win it.
+
+    Grouping first would hand the whole budget to whichever channel sorted
+    first, and a quiet channel's old story would outrank today's news.
+    """
+    stories = ([_digest_story(0, "First Channel", words=400)]
+               + [_digest_story(i, "Second Channel", words=400) for i in range(1, 200)])
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    body_start = html.index("Council Approves Budget 0")
+    assert "word399" in html[body_start:body_start + 4000], (
+        "the newest story lost its body to a later one"
+    )
+
+
+# -- _build_digest_text --
+
+def test_digest_text_part_carries_the_bodies_and_channels():
+    """The plain-text alternative mirrors the HTML: grouped, with full prose."""
+    stories = [_digest_story(1, "Alpha City", body="Plain prose here."),
+               _digest_story(2, "Beta County", body="More prose.")]
+    text = _tn_digest._build_digest_text("Alice", stories, "https://example.com/feed/t.html")
+    assert "Plain prose here." in text
+    assert "More prose." in text
+    assert "ALPHA CITY" in text
+    assert "BETA COUNTY" in text
+    assert "https://example.com/feed/t.html" in text
+    assert "<" not in text, "the text part must not carry HTML tags"
+
+
+def test_digest_text_part_unescapes_entities():
+    """HTML entities in the stored body are decoded for the text part."""
+    story = _digest_story(body="The council&#39;s plan \u2014 approved.")
+    text = _tn_digest._build_digest_text("Alice", [story], "f")
+    assert "council's plan" in text
+    assert "&#39;" not in text
+
+
+def test_digest_text_part_is_not_truncated_by_the_html_budget():
+    """Every story's prose is in the text part, even those the HTML trimmed."""
+    stories = [_digest_story(i, "Alpha City", words=400) for i in range(200)]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    text = _tn_digest._build_digest_text("Alice", stories, "f")
+    assert html.count("Watch this moment") < 200
+    assert text.count("Watch: https://youtu.be/") == 200
+
+
 def test_send_daily_digests_skips_when_no_api_key(tmp_path, monkeypatch):
     """If resend_api_key is absent, _send_daily_digests returns immediately."""
     monkeypatch.setattr(_tn_digest, "STATE_ROOT", tmp_path)

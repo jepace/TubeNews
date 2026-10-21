@@ -196,6 +196,19 @@ Defined in `web/app.py`:
 | `_supadata_monthly_limit()` | The cycle cap in force. Precedence: an explicitly set `supadata_monthly_limit` (opt-in "spend only this much of my plan"), else the vendor's plan size, else `_SUPADATA_MONTHLY_LIMIT_DEFAULT`. The config key carried a default of 300, which pinned the budget when the plan grew to 1300. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
+### Daily digest email
+
+| Function | Purpose |
+|---|---|
+| `_build_digest_html(name, email, stories, feed_url, base_url)` | The HTML part: full story bodies grouped by channel, bounded by `_DIGEST_MAX_HTML_BYTES`. Emits full bodies while the budget holds, then headlines within `_DIGEST_OVERFLOW_RESERVE_BYTES`, then a closing count. Budget is spent **before** grouping so the newest stories get the bodies. Titles and channel names are HTML-escaped; story links use the public `/article/<video_id>/<start_seconds>` page, which needs no token or session. |
+| `_build_digest_text(name, stories, feed_url)` | The plain-text alternative part, grouped the same way. Not length-budgeted — it is the fallback for a client that cannot render the HTML, so truncating it would remove the fallback. |
+| `_group_stories_by_channel(stories)` | Groups while preserving arrival order: channels appear in the order their newest story did, stories stay newest-first within a channel. |
+| `_story_body_paragraphs(body_html)` | Renders the stored `<br>`-joined body as `<p>` elements with inline styles (email clients ignore stylesheets). |
+
+**Why full bodies.** Stories are already a condensation of a whole transcript in inverted-pyramid form, so a teaser is a summary of a summary and loses the lede. A teaser earns its keep only when the goal is the click.
+
+**Why a byte budget, not a story count.** Gmail clips past ~102 KB and hides the rest behind "[Message clipped] View entire message", which nothing in the logs would reveal. 60 KB of rendered HTML leaves room for transport encoding (base64 is 4/3; quoted-printable expands each byte of the em dashes and curly quotes these stories are full of into three characters). A measured story is ~1 KB of body, so roughly 40 full stories fit before anything degrades.
+
 ### Daily podcast (audio digest)
 
 `_generate_daily_podcasts()` runs once a day at `podcast_generation_hour` (UTC, default `6`)

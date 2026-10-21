@@ -5116,10 +5116,56 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
                 "start_seconds": s["start_seconds"],
                 "content_hash": s.get("content_hash", ""),
                 "file": entry["file"],  # Path; used by _select_podcast_stories
+                # The file is already parsed here, so the digest gets the body
+                # for free rather than re-reading every story to render it.
+                "body_html": s.get("body_html", ""),
+                "dateline": s.get("dateline", ""),
+                "topics": s.get("topics", []),
             })
         except Exception:
             continue
     return stories
+
+
+# Gmail clips a message past ~102 KB, hiding everything after it behind
+# "[Message clipped] View entire message" — a silent truncation that no log
+# would show. Transport encoding inflates the body on the way out (base64 is
+# 4/3; quoted-printable turns each byte of an em dash or curly quote, which
+# these stories are full of, into three characters), so the rendered-HTML
+# budget sits well under the limit rather than at it. A measured story runs
+# ~1 KB of body, so this still carries around 40 full stories; only a day
+# busier than that degrades, and then only in its tail.
+_DIGEST_MAX_HTML_BYTES = 60_000
+# Part of that budget is held back for the headline list of whatever did not
+# fit. Without a reserve the bodies could spend the whole allowance and the
+# headline tail — unbounded, since every story has to remain reachable — would
+# then push the message over the limit on its own: 200 stories once rendered
+# 90 KB that way. Anything past even the reserve collapses to a single count.
+_DIGEST_OVERFLOW_RESERVE_BYTES = 15_000
+
+
+def _story_body_paragraphs(body_html: str) -> str:
+    """Render a story's ``<br>``-joined body as email-safe paragraphs."""
+    return "".join(
+        f'<p style="margin:0 0 0.8em">{para.strip()}</p>'
+        for para in body_html.split("<br>")
+        if para.strip()
+    )
+
+
+def _group_stories_by_channel(stories: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Group *stories* under their channel, keeping the incoming order.
+
+    Channels appear in the order their first (newest) story did, and stories
+    stay newest-first inside each channel, so the most recently processed
+    meeting still leads the email. Grouping lets the channel name be a
+    heading rather than a line repeated under every headline, which is most
+    of what makes a long digest scannable.
+    """
+    grouped: dict[str, list[dict]] = {}
+    for story in stories:
+        grouped.setdefault(story["channel_name"], []).append(story)
+    return list(grouped.items())
 
 
 def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str, base_url: str) -> str:
@@ -5132,28 +5178,110 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
     ``<base_url>/article/<video_id>/<start_seconds>`` — unlike a feed anchor,
     that URL needs neither the feed token nor a logged-in session, so it works
     straight from an email client.
+
+    Stories carry their **full body**, not a teaser. They are already Gemini's
+    condensation of a whole transcript, written inverted-pyramid, so trimming
+    one to a line or two cuts the "why it matters" framing that is the most
+    useful part — and a reader who has what they need simply stops reading,
+    which the form is built for. A teaser only earns its keep when the goal is
+    the click.
+
+    Length is bounded by ``_DIGEST_MAX_HTML_BYTES`` rather than by a story
+    count: full bodies are emitted while the budget holds, and whatever is
+    left over is listed as headlines, within a reserved slice of the budget;
+    past even that, a final count links the reader to their feed. The cutoff
+    therefore lands in the tail of a busy day instead of at an arbitrary
+    story, and the message never reaches the size where Gmail would clip it.
     """
     import html as _html
     account_url = base_url.rstrip("/") + "/account" if base_url else ""
     # For email links, use public article URLs (don't require token or login)
     site_root = base_url.rstrip("/") if base_url else ""
-    story_items = []
-    for s in stories:
-        # Generate public article URL: /article/{video_id}/{start_seconds}
-        if site_root:
-            href = f"{site_root}/article/{s['video_id']}/{s['start_seconds']}"
-        else:
-            # Fallback if no base_url: use relative path
-            href = f"/article/{s['video_id']}/{s['start_seconds']}"
-        title_escaped = _html.escape(s["title"])
-        channel_escaped = _html.escape(s["channel_name"])
-        story_items.append(
-            '<li style="margin-bottom:0.5em">'
-            f'<a href="{href}" style="color:#1a73e8;text-decoration:none">{title_escaped}</a>'
-            f' <span style="color:#666;font-size:0.9em">— {channel_escaped}</span>'
-            "</li>"
+
+    def _article_href(story: dict) -> str:
+        path = f"/article/{story['video_id']}/{story['start_seconds']}"
+        return f"{site_root}{path}" if site_root else path
+
+    def _channel_heading(channel_name: str) -> str:
+        return (
+            '<h2 style="font-size:0.8em;letter-spacing:0.08em;text-transform:uppercase;'
+            'color:#666;border-bottom:1px solid #ddd;padding-bottom:0.3em;'
+            f'margin:2em 0 1em">{_html.escape(channel_name)}</h2>'
         )
-    items_html = "\n".join(story_items)
+
+    # Decide what gets a full body before grouping, so the budget is spent on
+    # the newest stories overall rather than on whichever channel sorts first.
+    full: list[dict] = []
+    overflow: list[dict] = []
+    budget = _DIGEST_MAX_HTML_BYTES - _DIGEST_OVERFLOW_RESERVE_BYTES
+    for story in stories:
+        if overflow:
+            overflow.append(story)
+            continue
+        cost = len(
+            (story["title"] + story.get("body_html", "")).encode("utf-8")
+        ) + 400  # markup, links and the channel heading amortised
+        # Always keep at least one full story, however long, so a single
+        # oversized story cannot produce an email with no prose in it at all.
+        if full and cost > budget:
+            overflow.append(story)
+            continue
+        budget -= cost
+        full.append(story)
+
+    # Headlines are cheap but not free; past the reserve they become a count.
+    listed: list[dict] = []
+    unlisted = 0
+    headline_budget = _DIGEST_OVERFLOW_RESERVE_BYTES
+    for story in overflow:
+        cost = len(story["title"].encode("utf-8")) + 220
+        if cost > headline_budget:
+            unlisted += 1
+            continue
+        headline_budget -= cost
+        listed.append(story)
+
+    sections: list[str] = []
+    for channel_name, channel_stories in _group_stories_by_channel(full):
+        sections.append(_channel_heading(channel_name))
+        for story in channel_stories:
+            watch_url = f"https://youtu.be/{story['video_id']}?t={story['start_seconds']}"
+            sections.append(
+                '<div style="margin:0 0 2em">'
+                '<h3 style="font-size:1.15em;margin:0 0 0.6em;line-height:1.3">'
+                f'<a href="{_article_href(story)}" style="color:#111;text-decoration:none">'
+                f'{_html.escape(story["title"])}</a></h3>'
+                f'{_story_body_paragraphs(story.get("body_html", ""))}'
+                f'<p style="margin:0"><a href="{watch_url}" '
+                'style="color:#1a73e8;font-size:0.9em">&#9654; Watch this moment</a></p>'
+                "</div>"
+            )
+
+    if overflow:
+        sections.append(
+            '<h2 style="font-size:1em;color:#444;margin:2.5em 0 0.5em">'
+            f'{len(overflow)} more {"story" if len(overflow) == 1 else "stories"}</h2>'
+        )
+        for channel_name, channel_stories in _group_stories_by_channel(listed):
+            rows = "\n".join(
+                '<li style="margin-bottom:0.4em">'
+                f'<a href="{_article_href(st)}" style="color:#1a73e8;text-decoration:none">'
+                f'{_html.escape(st["title"])}</a></li>'
+                for st in channel_stories
+            )
+            sections.append(
+                f'<p style="margin:1em 0 0.3em;color:#666;font-size:0.85em">'
+                f'{_html.escape(channel_name)}</p>'
+                f'<ul style="padding-left:1.2em;line-height:1.6;margin:0">\n{rows}\n</ul>'
+            )
+
+        if unlisted:
+            sections.append(
+                f'<p style="margin:1em 0 0;color:#666;font-size:0.9em">'
+                f'&hellip; and {unlisted} more in your feed.</p>'
+            )
+
+    body_html_out = "\n".join(sections)
     story_count = len(stories)
     story_word = "story" if story_count == 1 else "stories"
     footer = (
@@ -5171,14 +5299,43 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
 <head><meta charset="utf-8"></head>
 <body style="font-family:Georgia,serif;max-width:600px;margin:0 auto;padding:1.5em;color:#111">
   <p>Hi {name_escaped}, here are your {story_count} new {story_word} from TubeNews:</p>
-  <ul style="padding-left:1.2em;line-height:1.7">
-{items_html}
-  </ul>
-  <p><a href="{feed_url}" style="color:#1a73e8">Open your full feed</a></p>
+{body_html_out}
+  <p style="margin-top:2em"><a href="{feed_url}" style="color:#1a73e8">Open your full feed</a></p>
   <hr style="border:none;border-top:1px solid #ddd;margin:2em 0">
   {footer}
 </body>
 </html>"""
+
+
+def _build_digest_text(name: str, stories: list[dict], feed_url: str) -> str:
+    """Plain-text alternative part for the digest.
+
+    Sent alongside the HTML so clients that strip or refuse HTML still show
+    something readable, which also helps the message clear spam filters that
+    treat an HTML-only body as a signal. Grouped by channel to match the HTML
+    part. Not length-budgeted: the text part is what a reader falls back to
+    when the HTML one is unusable, so truncating it too would remove the
+    fallback.
+    """
+    lines = [
+        f"Hi {name}, here are your {len(stories)} new "
+        f"{'story' if len(stories) == 1 else 'stories'} from TubeNews:",
+    ]
+    for channel_name, channel_stories in _group_stories_by_channel(stories):
+        lines.extend(["", "=" * 60, channel_name.upper(), "=" * 60, ""])
+        for story in channel_stories:
+            lines.append(story["title"])
+            lines.append("")
+            body = _body_to_plain_text(story.get("body_html", ""))
+            if body:
+                lines.extend([body, ""])
+            lines.append(
+                f"Watch: https://youtu.be/{story['video_id']}?t={story['start_seconds']}"
+            )
+            lines.append("")
+    lines.extend(["", f"Open your full feed: {feed_url}", "",
+                  "You enabled daily email digests in TubeNews."])
+    return "\n".join(lines)
 
 
 def _send_daily_digests(config: dict) -> None:
@@ -5232,6 +5389,7 @@ def _send_daily_digests(config: dict) -> None:
 
         feed_url = f"{base_url}/feed/{feed_token}.html"
         html_body = _build_digest_html(name, email, stories, feed_url, base_url)
+        text_body = _build_digest_text(name, stories, feed_url)
         story_count = len(stories)
         story_word = "story" if story_count == 1 else "stories"
         try:
@@ -5240,6 +5398,7 @@ def _send_daily_digests(config: dict) -> None:
                 "to": [email],
                 "subject": f"Your TubeNews digest \u2014 {story_count} new {story_word}",
                 "html": html_body,
+                "text": text_body,
             })
             # Update last_digest_sent in user.json
             user_dir: Path = user_data["_user_dir"]
