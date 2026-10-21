@@ -9,7 +9,7 @@
   "supadata_transcript_mode": "native",
   "supadata_http_timeout": 120,
   "_comment_daily": "The daily cap is derived: (remaining this cycle / days left) * pace_safety, times burst_factor. Tight early in a cycle, generous late when credits would otherwise expire. supadata_daily_limit is an OPTIONAL absolute override for 'never more than this whatever the arithmetic says' — leave it out unless you need one; setting it near the nominal daily spend defeats the pacing.",
-  "supadata_monthly_limit": 300,
+  "_comment_monthly": "The cycle budget is taken from the plan size Supadata itself reports (maxCredits), so a plan change is picked up automatically. supadata_monthly_limit is an OPTIONAL override meaning 'spend no more than this much of my plan' — LEAVE IT OUT unless you want that, because a hardcoded number cannot track a plan that changes on the vendor's side.",
   "supadata_dynamic_daily": true,
   "supadata_pace_safety_factor": 0.9,
   "supadata_daily_burst_factor": 2.0,

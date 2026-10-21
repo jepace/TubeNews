@@ -192,6 +192,8 @@ Defined in `web/app.py`:
 | `_write_too_old_metadata(video_id, feed_dir, video_date, video_title, video_published_at="")` | Writes a final `ignored_too_old` metadata.json for a stale queued video — the same status the new-feed backlog guard uses, so feed builders already skip it and `_needs_processing` treats it as done (no re-queue by orphan recovery). |
 | `_read_supadata_usage()` | Returns `(utc_date, calls_made_today)` from `state/supadata_usage.json`. A missing, corrupt, or stale-dated file reads as zero. |
 | `_supadata_daily_limit()` | Reads `supadata_daily_limit` from the live daemon config (hot-reloadable); `<= 0` disables metering. |
+| `_supadata_plan_credits()` | The plan size Supadata reports, adopted from `maxCredits` and persisted as `cycle_limit` in `state/supadata_usage.json` so it survives a failed refresh and a restart. `0` when the vendor has never answered. |
+| `_supadata_monthly_limit()` | The cycle cap in force. Precedence: an explicitly set `supadata_monthly_limit` (opt-in "spend only this much of my plan"), else the vendor's plan size, else `_SUPADATA_MONTHLY_LIMIT_DEFAULT`. The config key carried a default of 300, which pinned the budget when the plan grew to 1300. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
 ### Daily podcast (audio digest)

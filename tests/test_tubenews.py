@@ -6366,6 +6366,118 @@ def test_reconcile_keeps_local_count_when_the_vendor_says_nothing(tmp_path, monk
     )
 
 
+# -- the plan size is the vendor's to change, not ours to hardcode --
+
+def test_reconcile_adopts_the_plan_size_from_the_vendor(tmp_path, monkeypatch):
+    """maxCredits is persisted as cycle_limit, like usedCredits and resetDate."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.delitem(T._daemon_config, "supadata_monthly_limit", raising=False)
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=1300, usedCredits=219)
+
+    assert _reconcile_supadata_usage({}) is True
+    assert T._supadata_plan_credits() == 1300
+    assert T._supadata_monthly_limit() == 1300
+
+
+def test_monthly_limit_tracks_a_plan_that_grew(tmp_path, monkeypatch):
+    """Regression: a plan upgrade must widen the budget, not be ignored.
+
+    The cap was read only from ``supadata_monthly_limit``, which shipped with
+    a default of 300. When the plan grew to 1300 the daemon kept pacing
+    against 300 — with 219 spent it believed 81 credits remained rather than
+    1081, and throttled to a trickle while a thousand credits went unused.
+    """
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.delitem(T._daemon_config, "supadata_monthly_limit", raising=False)
+    monkeypatch.setitem(T._daemon_config, "supadata_dynamic_daily", True)
+    monkeypatch.setitem(T._daemon_config, "supadata_pace_safety_factor", 0.9)
+    monkeypatch.setitem(T._daemon_config, "supadata_daily_burst_factor", 2.0)
+
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=300, usedCredits=219)
+    _reconcile_supadata_usage({})
+    narrow = T._supadata_dynamic_daily_limit()
+
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=1300, usedCredits=219)
+    _reconcile_supadata_usage({})
+    wide = T._supadata_dynamic_daily_limit()
+
+    assert T._supadata_monthly_limit() == 1300
+    assert wide > narrow, (
+        f"a 1000-credit plan increase left the pace at {wide}/day (was {narrow}) — "
+        "the budget is still being read from a hardcoded number"
+    )
+
+
+def test_configured_monthly_limit_still_overrides_the_plan(tmp_path, monkeypatch):
+    """An explicit config value is an opt-in 'spend only this much of my plan'."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.setitem(T._daemon_config, "supadata_monthly_limit", 150)
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=1300, usedCredits=10)
+
+    _reconcile_supadata_usage({})
+    assert T._supadata_plan_credits() == 1300
+    assert T._supadata_monthly_limit() == 150
+
+
+def test_monthly_limit_falls_back_when_the_vendor_was_never_reached(tmp_path, monkeypatch):
+    """With no config key and no vendor figure, the compiled default applies.
+
+    The budget must never read as unlimited just because /v1/me failed.
+    """
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.delitem(T._daemon_config, "supadata_monthly_limit", raising=False)
+    assert T._supadata_plan_credits() == 0
+    assert T._supadata_monthly_limit() == T._SUPADATA_MONTHLY_LIMIT_DEFAULT
+
+
+def test_plan_size_survives_a_credit_reservation(tmp_path, monkeypatch):
+    """Reserving a credit rewrites the usage file but must keep cycle_limit."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.delitem(T._daemon_config, "supadata_monthly_limit", raising=False)
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=1300, usedCredits=5)
+    _reconcile_supadata_usage({})
+
+    assert T._supadata_budget_reserve() is True
+    assert T._supadata_plan_credits() == 1300, (
+        "the plan size was dropped by a counter write, so the next pace "
+        "calculation would silently fall back to the default"
+    )
+
+
+def test_a_shrunken_plan_is_adopted_too(tmp_path, monkeypatch):
+    """Downgrades must bind immediately — the risk direction is overspending."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.delitem(T._daemon_config, "supadata_monthly_limit", raising=False)
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=1300, usedCredits=5)
+    _reconcile_supadata_usage({})
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=300, usedCredits=5)
+    _reconcile_supadata_usage({})
+    assert T._supadata_monthly_limit() == 300
+
+
+def test_plan_size_is_kept_when_the_vendor_omits_maxcredits(tmp_path, monkeypatch):
+    """A balance missing maxCredits must not wipe a plan size already learned."""
+    import TubeNews as T
+    monkeypatch.setattr(T, "STATE_ROOT", tmp_path)
+    monkeypatch.delitem(T._daemon_config, "supadata_monthly_limit", raising=False)
+    _stub_vendor_balance(monkeypatch, tmp_path, maxCredits=1300, usedCredits=5)
+    _reconcile_supadata_usage({})
+
+    monkeypatch.setattr(
+        T, "_cache_supadata_balance",
+        lambda cfg: (tmp_path / "supadata_balance.json").write_text(
+            json.dumps({"usedCredits": 7})),
+    )
+    _reconcile_supadata_usage({})
+    assert T._supadata_plan_credits() == 1300
+
+
 def test_reconcile_ignores_a_balance_without_usedcredits(tmp_path, monkeypatch):
     import TubeNews as T
     monkeypatch.setattr(T, "STATE_ROOT", tmp_path)

@@ -1192,19 +1192,49 @@ def _supadata_daily_limit() -> int:
         return _SUPADATA_DAILY_LIMIT_DEFAULT
 
 
-def _supadata_monthly_limit() -> int:
-    """Return the configured per-billing-cycle Supadata call cap.
+def _supadata_plan_credits() -> int:
+    """Return the plan size Supadata itself reports, or 0 if it is not known.
 
-    ``supadata_monthly_limit`` in ``config.json`` overrides the default. A
-    value of 0 or below disables the cycle bound (the daily bound still applies).
-    Set this to the plan size so the daemon never bills past it.
+    Adopted from ``maxCredits`` by :func:`_reconcile_supadata_usage` and
+    persisted in ``state/supadata_usage.json``, so it survives a refresh that
+    fails and a daemon restart. The vendor's figure is the truth here for the
+    same reason its ``usedCredits`` and ``resetDate`` are: the plan can be
+    changed on their side at any time, and nothing tells this daemon about it.
+    """
+    data = _load_supadata_usage()
+    try:
+        return max(0, int(data.get("cycle_limit", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _supadata_monthly_limit() -> int:
+    """Return the per-billing-cycle Supadata credit cap in force.
+
+    Precedence, strongest first:
+
+    1. ``supadata_monthly_limit`` in ``config.json`` when explicitly set — an
+       opt-in "spend no more than this much of my plan". Normally leave it out.
+    2. The plan size Supadata reports (:func:`_supadata_plan_credits`).
+    3. ``_SUPADATA_MONTHLY_LIMIT_DEFAULT``, when the vendor has never answered.
+
+    A value of 0 or below in config disables the cycle bound (the daily bound
+    still applies).
+
+    The config key used to carry a default of 300, which made it the only
+    thing that ever bound: when the plan grew to 1300 the daemon went on
+    pacing against 300, so it paced its way down to a trickle while 1000
+    credits sat unspent. A number hardcoded in config cannot track a plan
+    that changes on the vendor's side — only the vendor's own figure can.
     """
     with _config_lock:
-        raw = _daemon_config.get("supadata_monthly_limit", _SUPADATA_MONTHLY_LIMIT_DEFAULT)
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return _SUPADATA_MONTHLY_LIMIT_DEFAULT
+        raw = _daemon_config.get("supadata_monthly_limit")
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return _supadata_plan_credits() or _SUPADATA_MONTHLY_LIMIT_DEFAULT
 
 
 def supadata_budget_status() -> dict:
@@ -1313,12 +1343,35 @@ def _reconcile_supadata_usage(config: dict) -> bool:
         logger.debug(f"Supadata: cycle usage agrees with the vendor at {used}")
 
     max_credits = balance.get("maxCredits")
-    configured = _supadata_monthly_limit()
-    if isinstance(max_credits, (int, float)) and configured > 0 and int(max_credits) != configured:
-        logger.info(
-            f"Supadata: plan is {int(max_credits)} credits but supadata_monthly_limit "
-            f"is {configured} — the smaller one is what actually binds"
-        )
+    if isinstance(max_credits, (int, float)) and int(max_credits) > 0:
+        plan = int(max_credits)
+        with _supadata_budget_lock:
+            data = _load_supadata_usage()
+            try:
+                previous = int(data.get("cycle_limit", 0))
+            except (TypeError, ValueError):
+                previous = 0
+            if previous != plan:
+                data["cycle_limit"] = plan
+                _supadata_write_usage(data)
+        if previous != plan:
+            logger.info(
+                f"Supadata: plan size adopted from the vendor: {previous or 'unknown'} "
+                f"-> {plan} credits per cycle"
+            )
+        with _config_lock:
+            override = _daemon_config.get("supadata_monthly_limit")
+        if override is not None:
+            try:
+                override_int = int(override)
+            except (TypeError, ValueError):
+                override_int = -1
+            if 0 < override_int < plan:
+                logger.warning(
+                    f"Supadata: the plan is {plan} credits but supadata_monthly_limit "
+                    f"pins the budget to {override_int} — {plan - override_int} credits "
+                    f"of the plan are unreachable. Remove the key to use the whole plan."
+                )
     reset_date = balance.get("resetDate")
     if reset_date:
         logger.debug(f"Supadata: vendor reports the plan resets {reset_date}")
