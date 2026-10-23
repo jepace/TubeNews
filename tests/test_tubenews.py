@@ -3958,6 +3958,34 @@ def test_digest_titles_are_styled_as_links():
     assert "text-decoration:underline" in title_anchor
 
 
+def test_digest_shows_the_dateline_so_the_location_is_visible():
+    """Each story carries its AP dateline under the title.
+
+    Regression: the expanded digest rendered the body but dropped the
+    dateline, which is the only place the city and state reliably appear. A
+    story could discuss "Howard Road" for two paragraphs without ever naming
+    the town, leaving readers unable to tell whether it concerned them. The
+    channel heading is not a substitute — one channel can cover several
+    jurisdictions.
+    """
+    story = _digest_story()
+    story["dateline"] = "SALINAS, Calif. \u2014 October 14, 2026"
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [story], "f", "https://example.com")
+    assert "SALINAS, Calif." in html
+    text = _tn_digest._build_digest_text("Alice", [story], "f")
+    assert "SALINAS, Calif." in text
+
+
+def test_digest_omits_an_empty_dateline_cleanly():
+    """A story with no dateline renders without a stray empty line."""
+    story = _digest_story()
+    story["dateline"] = ""
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [story], "f", "https://example.com")
+    assert "font-style:italic" not in html
+
+
 def test_digest_renders_each_paragraph_separately():
     """<br>-joined body text becomes real paragraphs, not one run-on block."""
     story = _digest_story(body="Para one.<br>Para two.<br>Para three.")
@@ -3974,8 +4002,8 @@ def test_digest_groups_stories_under_their_channel():
     ]
     html = _tn_digest._build_digest_html(
         "Alice", "a@example.com", stories, "f", "https://example.com")
-    assert html.count("Alpha City") == 1
-    assert html.count("Beta County") == 1
+    headings = re.findall(r"<h2[^>]*text-transform:uppercase[^>]*>([^<]+)</h2>", html)
+    assert headings == ["Alpha City", "Beta County"]
     for i in (1, 2, 3):
         assert f"Council Approves Budget {i}" in html
 
@@ -4003,37 +4031,43 @@ def test_digest_stays_under_the_gmail_clipping_threshold():
     assert len(html.encode("utf-8")) < 102_400
 
 
-def test_digest_lists_the_overflow_as_headlines():
-    """Stories past the budget appear as headlines under an honest count."""
+def test_digest_opens_with_a_one_line_index_of_every_story():
+    """A scannable index precedes the bodies.
+
+    Readers triage the digest by headline to see whether anything concerns
+    them; with full bodies and no index they had to read through the prose to
+    find out. Every story gets a line, and each line links to the article.
+    """
     stories = [_digest_story(i, "Alpha City", words=400) for i in range(40)]
     html = _tn_digest._build_digest_html(
         "Alice", "a@example.com", stories, "f", "https://example.com")
-    full = html.count("Watch this moment")
-    assert 0 < full < 40, "the budget should have truncated some bodies"
-    assert f"{40 - full} more stories" in html
-    # At this size the reserve holds every remaining headline.
+    index_html = html[:html.index("<h2")]
     for i in range(40):
-        assert f"vid{i:08d}" in html
-    assert "and 0 more" not in html
+        assert f"vid{i:08d}" in index_html, f"story {i} missing from the index"
+    # Bodies are still budgeted, so fewer of them than index entries.
+    assert html.count("Watch this moment") < 40
 
 
-def test_digest_accounts_for_every_story_even_when_headlines_overflow_too():
-    """Past the headline reserve the tail becomes a count, and it adds up.
+def test_digest_index_is_omitted_for_a_short_digest():
+    """Two stories need no index — it would repeat what is already on screen."""
+    stories = [_digest_story(1, "Alpha City"), _digest_story(2, "Alpha City")]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    assert html.count("Council Approves Budget 1") == 1
 
-    Every story is either rendered in full, listed as a headline, or counted
-    in the closing line — none may be dropped without being accounted for.
-    """
+
+def test_digest_counts_stories_the_index_could_not_hold():
+    """Past the index reserve the tail is counted, and the count is honest."""
     stories = [_digest_story(i, "Alpha City", words=400) for i in range(400)]
     html = _tn_digest._build_digest_html(
         "Alice", "a@example.com", stories, "f", "https://example.com")
-    full = html.count("Watch this moment")
-    listed = sum(1 for i in range(400) if f"vid{i:08d}" in html) - full
+    listed = sum(1 for i in range(400) if f"vid{i:08d}" in html)
     match = re.search(r"and (\d+) more in your feed", html)
     counted = int(match.group(1)) if match else 0
-    assert full + listed + counted == 400, (
-        f"{full} full + {listed} listed + {counted} counted != 400 stories"
+    assert listed + counted == 400, (
+        f"{listed} listed + {counted} counted != 400 stories"
     )
-    assert counted > 0, "this size should have exhausted the headline reserve"
+    assert counted > 0
     assert len(html.encode("utf-8")) < 102_400
 
 
@@ -4060,7 +4094,8 @@ def test_digest_budget_spends_on_the_newest_stories_first():
                + [_digest_story(i, "Second Channel", words=400) for i in range(1, 200)])
     html = _tn_digest._build_digest_html(
         "Alice", "a@example.com", stories, "f", "https://example.com")
-    body_start = html.index("Council Approves Budget 0")
+    # Skip the index at the top; the bodies start at the first channel heading.
+    body_start = html.index("Council Approves Budget 0", html.index("<h2"))
     assert "word399" in html[body_start:body_start + 4000], (
         "the newest story lost its body to a later one"
     )
