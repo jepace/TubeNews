@@ -3945,6 +3945,19 @@ def test_digest_includes_the_full_story_body():
     assert "Second paragraph here." in html
 
 
+def test_digest_titles_are_styled_as_links():
+    """Headlines must look clickable, not like plain black text.
+
+    Email clients apply no stylesheet, so an anchor styled with the body
+    colour and no underline reads as dead text and nobody clicks it.
+    """
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [_digest_story()], "f", "https://example.com")
+    title_anchor = re.search(r"<h3[^>]*>(<a[^>]*>)", html).group(1)
+    assert "color:#1a73e8" in title_anchor
+    assert "text-decoration:underline" in title_anchor
+
+
 def test_digest_renders_each_paragraph_separately():
     """<br>-joined body text becomes real paragraphs, not one run-on block."""
     story = _digest_story(body="Para one.<br>Para two.<br>Para three.")

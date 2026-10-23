@@ -5249,7 +5249,11 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
             sections.append(
                 '<div style="margin:0 0 2em">'
                 '<h3 style="font-size:1.15em;margin:0 0 0.6em;line-height:1.3">'
-                f'<a href="{_article_href(story)}" style="color:#111;text-decoration:none">'
+                # Headlines read as plain text unless they are styled like
+                # links: email clients apply no stylesheet of their own, so an
+                # unstyled anchor inherits the body colour and looks dead.
+                f'<a href="{_article_href(story)}" style="color:#1a73e8;'
+                'text-decoration:underline">'
                 f'{_html.escape(story["title"])}</a></h3>'
                 f'{_story_body_paragraphs(story.get("body_html", ""))}'
                 f'<p style="margin:0"><a href="{watch_url}" '
