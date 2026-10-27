@@ -3927,6 +3927,8 @@ def _digest_story(i=0, channel="Alpha City", body=None, words=140):
         "channel_name": channel,
         "video_id": f"vid{i:08d}",
         "start_seconds": 120,
+        "channel_slug": channel.lower().replace(" ", "_"),
+        "meeting_id": f"vid{i:08d}",
         "body_html": body if body is not None else " ".join(f"word{n}" for n in range(words)),
     }
 
@@ -3958,6 +3960,59 @@ def test_digest_titles_are_styled_as_links():
     assert "text-decoration:underline" in title_anchor
 
 
+def test_digest_story_carries_the_same_links_as_the_feed():
+    """Each story offers the article, the video moment and the transcript.
+
+    The email is meant to be the feed in an inbox. The feed's copy/share/vote
+    toolbar needs JavaScript and cannot travel, but the destinations can.
+    """
+    story = _digest_story()
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [story], "f", "https://example.com")
+    assert "https://example.com/article/vid00000000/120" in html
+    assert "https://youtu.be/vid00000000?t=120" in html
+    assert "https://example.com/transcript/alpha_city/vid00000000#t120" in html
+    assert "Watch source" in html
+    assert "Read transcript" in html
+    assert "Discuss on TubeNews" in html
+
+
+def test_digest_story_names_its_channel_inline():
+    """The channel appears with each story, not only as a group heading.
+
+    A reader scrolling mid-email, or one forwarding a single story, has no
+    heading in view.
+    """
+    stories = [_digest_story(1, "Alpha City"), _digest_story(2, "Alpha City")]
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", stories, "f", "https://example.com")
+    body_html = html[html.index("<h3"):]
+    assert body_html.count("Alpha City") >= 2, (
+        "each story should name its channel, not rely on the heading above"
+    )
+
+
+def test_digest_omits_the_transcript_link_when_it_cannot_be_built():
+    """Without a channel slug or meeting id there is no transcript URL."""
+    story = _digest_story()
+    story["channel_slug"] = ""
+    html = _tn_digest._build_digest_html(
+        "Alice", "a@example.com", [story], "f", "https://example.com")
+    assert "Read transcript" not in html
+    assert "Watch source" in html, "the other links must survive"
+    text = _tn_digest._build_digest_text("Alice", [story], "f", "https://example.com")
+    assert "Transcript:" not in text
+
+
+def test_digest_text_part_carries_all_three_destinations():
+    """The plain-text part lists the same URLs as the HTML part."""
+    text = _tn_digest._build_digest_text(
+        "Alice", [_digest_story()], "f", "https://example.com")
+    assert "Watch: https://youtu.be/vid00000000?t=120" in text
+    assert "Transcript: https://example.com/transcript/alpha_city/vid00000000#t120" in text
+    assert "Discuss: https://example.com/article/vid00000000/120" in text
+
+
 def test_digest_shows_the_dateline_so_the_location_is_visible():
     """Each story carries its AP dateline under the title.
 
@@ -3978,12 +4033,14 @@ def test_digest_shows_the_dateline_so_the_location_is_visible():
 
 
 def test_digest_omits_an_empty_dateline_cleanly():
-    """A story with no dateline renders without a stray empty line."""
-    story = _digest_story()
+    """A story with no dateline still names its channel, with no dangling dash."""
+    story = _digest_story(channel="Alpha City")
     story["dateline"] = ""
     html = _tn_digest._build_digest_html(
         "Alice", "a@example.com", [story], "f", "https://example.com")
-    assert "font-style:italic" not in html
+    meta = re.search(r'<p style="font-style:italic[^"]*">([^<]*)</p>', html).group(1)
+    assert meta == "Alpha City"
+    assert "&mdash;" not in meta
 
 
 def test_digest_renders_each_paragraph_separately():

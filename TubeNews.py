@@ -5095,6 +5095,8 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
                 for story_file in sorted(meeting_dir.glob("[0-9]*.md")):
                     raw.append({"file": story_file, "meta": meta,
                                 "channel_name": channel_name,
+                                "channel_slug": channel_dir.name,
+                                "meeting_id": meeting_dir.name,
                                 "processed_at": proc_at})
             except Exception:
                 continue
@@ -5121,6 +5123,10 @@ def _scan_stories_since(user_data: dict, user_id: str, cutoff_ts: float) -> list
                 "body_html": s.get("body_html", ""),
                 "dateline": s.get("dateline", ""),
                 "topics": s.get("topics", []),
+                # Needed to build the transcript URL, which is keyed by
+                # channel slug and meeting id rather than by video id.
+                "channel_slug": entry["channel_slug"],
+                "meeting_id": entry["meeting_id"],
             })
         except Exception:
             continue
@@ -5208,6 +5214,42 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
         path = f"/article/{story['video_id']}/{story['start_seconds']}"
         return f"{site_root}{path}" if site_root else path
 
+    def _transcript_href(story: dict) -> str:
+        """Transcript URL, keyed by channel slug + meeting id, not video id."""
+        slug = story.get("channel_slug", "")
+        meeting = story.get("meeting_id", "")
+        if not slug or not meeting:
+            return ""
+        path = f"/transcript/{slug}/{meeting}#t{story['start_seconds']}"
+        return f"{site_root}{path}" if site_root else path
+
+    def _story_links(story: dict) -> str:
+        """The same row of links each story carries in the web feed.
+
+        Email clients have no JavaScript, so the feed's copy/share/vote
+        toolbar cannot come along; what survives is the set of destinations —
+        the article on TubeNews (where comments live), the source video at the
+        right moment, and the transcript.
+        """
+        link_style = "color:#1a73e8;text-decoration:none"
+        parts = [
+            f'<a href="https://youtu.be/{story["video_id"]}?t={story["start_seconds"]}" '
+            f'style="{link_style}">&#9654; Watch source</a>'
+        ]
+        transcript = _transcript_href(story)
+        if transcript:
+            parts.append(
+                f'<a href="{transcript}" style="{link_style}">&#128221; Read transcript</a>'
+            )
+        parts.append(
+            f'<a href="{_article_href(story)}" style="{link_style}">'
+            '&#128172; Discuss on TubeNews</a>'
+        )
+        sep = '<span style="color:#ccc"> &middot; </span>'
+        return (
+            f'<p style="margin:0;font-size:0.9em">{sep.join(parts)}</p>'
+        )
+
     # -- the index: one line per story, every story, newest first ----------
     index_rows: list[str] = []
     unlisted = 0
@@ -5248,7 +5290,7 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
     for story in stories:
         cost = len(
             (story["title"] + story.get("body_html", "")).encode("utf-8")
-        ) + 400  # markup, links and the channel heading amortised
+        ) + 700  # markup, the three links and the channel heading amortised
         # Always keep at least one full story, however long, so a single
         # oversized story cannot produce an email with no prose in it at all.
         if full and cost > budget:
@@ -5264,23 +5306,23 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
             f'margin:2em 0 1em">{_html.escape(channel_name)}</h2>'
         )
         for story in channel_stories:
-            watch_url = f"https://youtu.be/{story['video_id']}?t={story['start_seconds']}"
+            # Channel is repeated per story, not left to the group heading
+            # alone: a reader scrolling mid-email, or one who forwards a
+            # single story, has no heading in view.
+            meta_parts = [_html.escape(story["channel_name"])]
             dateline = story.get("dateline", "").strip()
-            dateline_html = (
-                f'<p style="font-style:italic;color:#555;font-size:0.9em;'
-                f'margin:0 0 0.8em">{_html.escape(dateline)}</p>'
-                if dateline else ""
-            )
+            if dateline:
+                meta_parts.append(_html.escape(dateline))
             sections.append(
-                '<div style="margin:0 0 2em">'
+                '<div style="margin:0 0 2.2em">'
                 '<h3 style="font-size:1.15em;margin:0 0 0.3em;line-height:1.3">'
                 f'<a href="{_article_href(story)}" style="color:#1a73e8;'
                 'text-decoration:underline">'
                 f'{_html.escape(story["title"])}</a></h3>'
-                f'{dateline_html}'
+                '<p style="font-style:italic;color:#555;font-size:0.9em;'
+                f'margin:0 0 0.8em">{" &mdash; ".join(meta_parts)}</p>'
                 f'{_story_body_paragraphs(story.get("body_html", ""))}'
-                f'<p style="margin:0"><a href="{watch_url}" '
-                'style="color:#1a73e8;font-size:0.9em">&#9654; Watch this moment</a></p>'
+                f'{_story_links(story)}'
                 "</div>"
             )
 
@@ -5311,7 +5353,8 @@ def _build_digest_html(name: str, email: str, stories: list[dict], feed_url: str
 </html>"""
 
 
-def _build_digest_text(name: str, stories: list[dict], feed_url: str) -> str:
+def _build_digest_text(name: str, stories: list[dict], feed_url: str,
+                       base_url: str = "") -> str:
     """Plain-text alternative part for the digest.
 
     Sent alongside the HTML so clients that strip or refuse HTML still show
@@ -5321,6 +5364,7 @@ def _build_digest_text(name: str, stories: list[dict], feed_url: str) -> str:
     when the HTML one is unusable, so truncating it too would remove the
     fallback.
     """
+    site_root = base_url.rstrip("/") if base_url else ""
     lines = [
         f"Hi {name}, here are your {len(stories)} new "
         f"{'story' if len(stories) == 1 else 'stories'} from TubeNews:",
@@ -5338,6 +5382,16 @@ def _build_digest_text(name: str, stories: list[dict], feed_url: str) -> str:
                 lines.extend([body, ""])
             lines.append(
                 f"Watch: https://youtu.be/{story['video_id']}?t={story['start_seconds']}"
+            )
+            slug = story.get("channel_slug", "")
+            meeting = story.get("meeting_id", "")
+            if slug and meeting:
+                lines.append(
+                    f"Transcript: {site_root}/transcript/{slug}/{meeting}"
+                    f"#t{story['start_seconds']}"
+                )
+            lines.append(
+                f"Discuss: {site_root}/article/{story['video_id']}/{story['start_seconds']}"
             )
             lines.append("")
     lines.extend(["", f"Open your full feed: {feed_url}", "",
@@ -5396,7 +5450,7 @@ def _send_daily_digests(config: dict) -> None:
 
         feed_url = f"{base_url}/feed/{feed_token}.html"
         html_body = _build_digest_html(name, email, stories, feed_url, base_url)
-        text_body = _build_digest_text(name, stories, feed_url)
+        text_body = _build_digest_text(name, stories, feed_url, base_url)
         story_count = len(stories)
         story_word = "story" if story_count == 1 else "stories"
         try:
