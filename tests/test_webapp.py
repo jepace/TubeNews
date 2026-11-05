@@ -7,6 +7,7 @@ made; all archive data is written to a pytest tmp_path.
 Run with:  pytest tests/test_webapp.py -v
 """
 import json
+import re
 import os
 import subprocess
 import sys
@@ -3668,3 +3669,43 @@ def test_readme_carries_the_badge_too():
     assert "supadata.ai/r/HBXDTHK3" in readme
     assert "powered-by-supadata-light.svg" in readme
     assert "powered-by-supadata-dark.svg" in readme, "README should handle dark mode"
+
+
+def _feed_template() -> str:
+    return (Path(__file__).resolve().parent.parent
+            / "web" / "templates" / "feed.html").read_text()
+
+
+def test_native_share_sends_the_whole_story_not_just_a_link():
+    """The iOS share sheet must carry the story text.
+
+    Sharing a story is usually forwarding it to someone who should read it;
+    a bare URL makes them go and fetch it instead. plainText() already builds
+    the title, dateline, body and the TubeNews link, and Copy Article used it
+    while share did not.
+    """
+    template = _feed_template()
+    call = re.search(r"navigator\.share\(\{[^}]*\}", template).group(0)
+    assert "text:" in call, "share must carry the story body"
+    assert "plainText(bar)" in call
+
+
+def test_native_share_does_not_pass_a_separate_url_field():
+    """The link travels inside the text, not as a competing `url` field.
+
+    Share targets may use `url` and discard `text`; the ones that do would
+    drop the story silently. plainText() ends with "Feed: <url>", so one
+    field carries both and no target can lose half of it.
+    """
+    call = re.search(r"navigator\.share\(\{[^}]*\}", _feed_template()).group(0)
+    assert "url:" not in call
+
+
+def test_copy_link_survives_alongside_the_native_share_button():
+    """Link-only sharing stays one tap away now that Share sends everything."""
+    template = _feed_template()
+    hidden = re.search(r"\[([^\]]*)\]\.forEach\(function \(cls\)", template).group(1)
+    assert "tb-copy-link" not in hidden, (
+        "Copy Link is the only way to get just the URL once Share sends the story"
+    )
+    assert "tb-email" in hidden and "tb-mastodon" in hidden

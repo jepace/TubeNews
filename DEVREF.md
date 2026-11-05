@@ -196,6 +196,25 @@ Defined in `web/app.py`:
 | `_supadata_monthly_limit()` | The cycle cap in force. Precedence: an explicitly set `supadata_monthly_limit` (opt-in "spend only this much of my plan"), else the vendor's plan size, else `_SUPADATA_MONTHLY_LIMIT_DEFAULT`. The config key carried a default of 300, which pinned the budget when the plan grew to 1300. |
 | `main()` | Entry point: loads config, calls `process_feed` for each configured channel |
 
+### Story toolbar (web feed)
+
+`feed.html` renders a `.story-toolbar` per story. `plainText(bar)` assembles the
+shareable form of a story — title, dateline, YouTube link, body, then
+`Feed: <article url>` and `Transcript: <url>` — and both Copy Article and the
+native share button use it.
+
+On a device with `navigator.share`, a 📤 Share button is inserted and the sheet
+receives `{title, text: plainText(bar)}` with **no `url` field**; the link is
+inside the text. Share targets are free to use `url` and discard `text`, so
+sending both would let a target drop the story body silently. Email and
+Mastodon are hidden in that mode (the sheet covers them) but **Copy Link is
+not** — it becomes the only way to get the bare URL. Without a native share
+sheet, Copy Link, Email (`mailto:` with the full text as the body) and Mastodon
+are wired up instead.
+
+The toolbar is JavaScript-only, which is why none of it travels into the digest
+email; the email carries the destinations instead.
+
 ### Daily digest email
 
 | Function | Purpose |

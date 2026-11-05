@@ -360,20 +360,33 @@ function scrollToFocused() {
       nativeBtn.title = 'Share via system share sheet';
       bar.insertBefore(nativeBtn, bar.firstChild);
       nativeBtn.addEventListener('click', function () {
-        navigator.share({ title: title, url: articleLink(anchor) }).catch(function (err) {
+        // Share the whole story, not just a link: the common use is mailing a
+        // story on to someone, and a bare URL makes them go and fetch it.
+        //
+        // The link is carried INSIDE the text (plainText ends with "Feed:
+        // <url>") and no `url` field is sent. Passing both is unreliable —
+        // share targets are free to use one and discard the other, and the
+        // ones that take the url drop the story silently. Keeping everything
+        // in one field means every target gets the text and the link.
+        // "Copy Link" stays on the toolbar for when only the link is wanted.
+        navigator.share({ title: title, text: plainText(bar) }).catch(function (err) {
           // AbortError = user dismissed the sheet — ignore.
           // Any other error (e.g. HTTP context on Chrome/iOS) — fall back to
-          // copying the link so the user gets something useful.
+          // copying the full text so the user still gets something useful.
           if (err && err.name !== 'AbortError') {
-            copyText(articleLink(anchor), nativeBtn, 'Link copied!');
+            copyText(plainText(bar), nativeBtn, 'Copied!');
           }
         });
       });
-      // Hide the redundant buttons (copy-link, email, mastodon) since the share
-      // sheet handles them.
-      ['tb-copy-link', 'tb-email', 'tb-mastodon'].forEach(function (cls) {
+      // Email and Mastodon are redundant with the share sheet, but Copy Link
+      // is not: the share sheet now sends the whole story, so link-only
+      // sharing needs to stay one tap away.
+      ['tb-email', 'tb-mastodon'].forEach(function (cls) {
         var el = bar.querySelector('.' + cls);
         if (el) el.style.display = 'none';
+      });
+      bar.querySelector('.tb-copy-link').addEventListener('click', function () {
+        copyText(articleLink(anchor), this, 'Link copied!');
       });
     } else {
       bar.querySelector('.tb-copy-link').addEventListener('click', function () {
