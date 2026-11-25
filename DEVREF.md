@@ -611,13 +611,25 @@ Keys the daemon never reads (`port`, `tubenews_key`, `admin_users`) are the web 
 
 ```bash
 pytest tests/ -v
+pylint $(git ls-files '*.py')
+mypy TubeNews.py web/app.py --ignore-missing-imports
 ```
+
+The last two are what `.github/workflows/pylint.yml` runs, verbatim —
+`test_documented_gate_matches_ci` enforces that. Pylint passes on **exit
+code 0**, not on a good score: it exits non-zero for any message at all, so
+9.99/10 is a failure. Do not add `--max-line-length`; `.pylintrc` sets it,
+and overriding it on the command line masks the rest of that file. Mypy runs
+only if pylint succeeded, in the same CI job, so a lint failure hides every
+type error behind it. Both baselines are zero.
 
 | File | Covers |
 |---|---|
 | `tests/test_tubenews.py` | `slugify`, `parse_story_file` (including `topics`, `user_ids`, and HTML escaping in `body_html`), `_story_matches_focus`, `write_story_files` (including `**Users:**` output), `_collect_channel_focuses` (tuple return type, user-id merging), `discover_videos` (RSS parse, HTTP error, malformed XML, network retry, empty feed warning, no `is_live` field), `fetch_transcript` (success path, language mismatch, live-stream skip, quota exhaustion + event flag), the JSON extraction regex in `call_gemini_api`, `rebuild_feed`, `rebuild_aggregate_feed`, `build_user_feed_xml`, lock/unlock helpers, config resolution, `_recover_orphaned_videos` (queues dirs without metadata, skips dirs with metadata, skips already-queued, skips missing channel.json, returns count), `_cleanup_stale_unverified_users` (removes expired, keeps recent, keeps verified, keeps legacy no-key accounts, falls back to created_at, drops index entry, no-op on missing dir, skips corrupt json), `_iter_all_users` (yields user data, skips malformed), `_scan_stories_since` (returns recent stories, excludes old/unsubscribed), `_build_digest_html` (anchor links, HTML escaping), `_send_daily_digests` (skips no api key, skips no base_url, skips opted-out, sends to opted-in, filters old stories) |
 | `tests/test_web.py` | `web/app.py` URL helpers (`_rss_url`, `_feed_url`), user preferences |
-| `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, unverified-account rejection (explicit flash + no session), dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links, `digest_email_enabled` preference save (checked and unchecked), registration honeypot (no account/email/ntfy on a filled field), new-user ntfy timing (silent on register, fires on verify), admin bulk-delete (removes selected, skips own account, requires admin/login, no-op on empty selection) |
+| `tests/test_webapp.py` | Flask routes: login guards, rate-limit (429 after 10 attempts), locked-account rejection, unverified-account rejection (explicit flash + no session), dashboard subscription save, admin guards, public token routes, lock-file detection, run-now trigger, channel browse YouTube link, admin runs channel links, `digest_email_enabled` preference save (checked and unchecked), registration honeypot (no account/email/ntfy on a filled field), new-user ntfy timing (silent on register, fires on verify), admin bulk-delete (removes selected, skips own account, requires admin/login, no-op on empty selection), per-user API keys and the `POST /mcp` endpoint (auth, revocation, subscription scoping, admin scope), and `test_documented_gate_matches_ci`, which pins CLAUDE.md's gate to the CI workflow |
+| `tests/test_search.py` | `tubenews_search`: query parsing (phrases vs terms, AND semantics), story and transcript search, transcript hits timestamped to the matching segment rather than the window start, phrases split across segments, `meeting_has_stories`, channel and date filters, `get_story`, `list_channels`, and a missing archive returning empty rather than raising |
+| `tests/test_mcp.py` | `tubenews_apikeys` (hashing, prefix, uniqueness, revocation, per-account cap, scope defaulting) and the MCP endpoint (JSON-RPC shape, 401 on missing/unknown/revoked keys, results limited to subscribed channels, attribution respected, admin `scope=all` reaching the whole archive, a demoted admin's key narrowing, limit clamping, parse errors) |
 
 All tests use `tmp_path` fixtures — no network calls and no real archive needed. For functions that hit external APIs (`fetch_transcript`, `call_gemini_api`), use `monkeypatch` or `unittest.mock.patch`.
 

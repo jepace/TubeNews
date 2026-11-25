@@ -140,14 +140,39 @@ state/run_logs/
 ## Testing Policy
 
 - **Tests ship with the code.** New/modified functions need tests in the same commit.
-- **Full suite must pass before push.** `pytest tests/ -v` — all green.
 - **Bug fixes need a regression test.**
+- **Run the full gate before pushing.** Not a subset of it.
 
 ```bash
 pytest tests/ -v
-python3 -m pylint TubeNews.py web/app.py --max-line-length=120
-python3 -m mypy TubeNews.py web/app.py --ignore-missing-imports
+pylint $(git ls-files '*.py')
+mypy TubeNews.py web/app.py --ignore-missing-imports
 ```
+
+**These are exactly the commands `.github/workflows/pylint.yml` runs**, and
+`test_documented_gate_matches_ci` fails if they ever stop matching. Run them
+verbatim; a narrower local check is how CI goes red without anyone noticing.
+
+**Pylint passes on exit code 0, not on a good score.** It exits non-zero for
+*any* message, and the workflow sets no `--fail-under`, so 9.99/10 is a
+failure. Check `echo $?`, or just look for `10.00/10`. Do not pass
+`--max-line-length`: `.pylintrc` already sets 120, and overriding it on the
+command line hides whatever else the file configures.
+
+**Lint every tracked file, not the two main modules.** `git ls-files '*.py'`
+covers helpers, tests and one-off scripts, and CI will lint them whether or
+not you did.
+
+**Mypy runs only after pylint succeeds**, in the same job, so a pylint
+failure hides every type error behind it.
+
+These three points are not hypothetical: a documented gate that checked two
+files at a lenient threshold reported clean while CI failed **345 times
+between 2026-04-16 and 2026-11-25**, and the mypy step did not execute once
+in that window.
+
+Baselines are zero. Both tools are clean as of `b416b2d`, so anything either
+one reports is from the change in hand.
 
 ---
 

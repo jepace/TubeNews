@@ -3709,3 +3709,56 @@ def test_copy_link_survives_alongside_the_native_share_button():
         "Copy Link is the only way to get just the URL once Share sends the story"
     )
     assert "tb-email" in hidden and "tb-mastodon" in hidden
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def test_documented_gate_matches_ci():
+    """CLAUDE.md's commands must be the ones the workflow actually runs.
+
+    The documented gate once checked two files with an explicit
+    --max-line-length while CI linted every tracked file at the .pylintrc
+    settings. Running the documented command reported clean, CI failed, and
+    the gap went unnoticed through 345 failed runs over seven months. This
+    test is the thing that would have caught it on the first push.
+    """
+    workflow = (_repo_root() / ".github/workflows/pylint.yml").read_text()
+    claude_md = (_repo_root() / "CLAUDE.md").read_text()
+
+    # The run: blocks of the workflow, minus the dependency install.
+    commands = [
+        line.strip()
+        for line in workflow.splitlines()
+        if line.strip().startswith(("pylint ", "mypy "))
+    ]
+    assert commands, "no pylint/mypy invocation found in the workflow"
+
+    for command in commands:
+        assert command in claude_md, (
+            f"CI runs {command!r} but CLAUDE.md does not document it verbatim. "
+            "Update the Testing Policy block so a local run matches CI."
+        )
+
+
+def test_documented_gate_does_not_narrow_what_ci_checks():
+    """The docs must not suggest a weaker check than CI performs.
+
+    Linting only the two main modules, or relaxing the threshold on the
+    command line, both produce a local pass that CI will not reproduce.
+    """
+    claude_md = (_repo_root() / "CLAUDE.md").read_text()
+    policy = claude_md.split("## Testing Policy", 1)[1].split("## Documentation Policy", 1)[0]
+    # Only the fenced command block — the prose around it deliberately names
+    # the flags you must not use, and must stay free to say so.
+    block = policy.split("```bash", 1)[1].split("```", 1)[0]
+    assert "--max-line-length" not in block, (
+        ".pylintrc already sets the line length; overriding it on the command "
+        "line masks the rest of that file's configuration"
+    )
+    assert "pylint TubeNews.py web/app.py" not in block, (
+        "CI lints every tracked file, so documenting a two-file lint "
+        "reintroduces the gap that kept CI red"
+    )
+    assert "git ls-files" in block, "the documented lint must cover every tracked file"
