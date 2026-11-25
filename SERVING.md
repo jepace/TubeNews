@@ -467,3 +467,67 @@ can have completely different feeds.
   of focus — there is no need to re-process old content.
 - Topic matching is substring-tolerant: focus keyword `housing` matches a story
   tagged `affordable housing`.
+
+---
+
+## Searching the archive from an AI client (MCP)
+
+`mcp_server.py` exposes the archive to Claude (or any MCP client) as four
+read-only tools: `search_stories`, `search_transcripts`, `get_story` and
+`list_channels`.
+
+It reads `content/` straight off disk, so **it has to run on the machine that
+holds the archive** — inside the jail, or on the host with `content_dir`
+pointing at it. The client reaches it over SSH, which means no new listening
+port and no new thing to authenticate: if you can already SSH to the box, you
+can already read these files.
+
+Install the SDK where the server will run (the daemon itself does not need it,
+so it is deliberately absent from `requirements.txt`):
+
+```sh
+pip install 'mcp>=2'
+```
+
+Then point the client at it. In Claude Desktop's `claude_desktop_config.json`,
+or `.mcp.json` for Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "tubenews": {
+      "command": "ssh",
+      "args": ["tubenews-host", "python3 /var/www/tubenews/mcp_server.py"]
+    }
+  }
+}
+```
+
+`tubenews-host` is an entry in your `~/.ssh/config` with the user, hostname and
+key. Use a key with no passphrase, or an agent: the client starts the server
+without a terminal, so it cannot prompt you.
+
+Check it by hand first — this should print a JSON-RPC response rather than hang:
+
+```sh
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  | ssh tubenews-host python3 /var/www/tubenews/mcp_server.py
+```
+
+If it reports `no archive at …`, the path resolved somewhere without
+`content/`: run it from the install directory, or set `content_dir` in
+`TubeNews.json` to an absolute path.
+
+### Stories vs transcripts
+
+Worth knowing when you ask it things. **Stories only exist where some
+subscriber's focus matched** — if nobody subscribed to a topic, the transcript
+was read and the topic discarded, so it is not in the story archive at all.
+`search_transcripts` searches what was actually said in every meeting, returns
+a timestamp into the video, and marks hits in meetings that produced no story
+with `meeting_has_stories: false`. That is the one to use for "did anyone ever
+bring up X", and the reason this is worth more than a site search box.
+
+Queries are AND: every bare word and every `"quoted phrase"` must appear.
+These are meeting transcripts, so prefer distinctive words — common civic
+vocabulary matches nearly everything.

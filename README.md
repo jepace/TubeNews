@@ -17,6 +17,15 @@ TubeNews monitors YouTube channels, transcribes new videos via [Supadata](https:
 4. Saves AI-generated news stories as Markdown files
 5. Serves stories through a web UI; also publishes per-user and per-channel RSS feeds
 
+## Search the archive from Claude (MCP)
+
+TubeNews ships an MCP server, so an AI client can search the whole archive —
+including meeting transcripts for things no story was ever written about.
+Four read-only tools: search stories, search transcripts, fetch one story,
+list channels. It runs on the machine holding `content/` and the client
+reaches it over SSH. See **SERVING.md** for setup.
+
+
 ## Quick Start
 
 ```bash

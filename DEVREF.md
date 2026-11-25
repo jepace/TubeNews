@@ -215,6 +215,38 @@ are wired up instead.
 The toolbar is JavaScript-only, which is why none of it travels into the digest
 email; the email carries the destinations instead.
 
+### Archive search (`tubenews_search.py`)
+
+Read-only search over `content/`, with no MCP or Flask import, so the MCP server
+and (potentially) a web search page share one implementation.
+
+| Function | Purpose |
+|---|---|
+| `parse_query(raw)` | Splits into `"quoted phrases"` and bare terms. All are required (AND) — an OR search over an archive buries the one meeting you wanted. |
+| `search_stories(root, query, channel, since, until, limit)` | Scans story `.md` files. Scores title matches far above body matches; ties break newest-first. Returns `StoryHit`. |
+| `search_transcripts(root, query, channel, since, until, limit, context_lines)` | Scans `transcript.txt`. Matching runs over a window of `context_lines+1` segments so a phrase split by the transcriber is found; the hit is timestamped to the first segment actually containing a term (`_first_matching_offset`). One hit per meeting. Returns `TranscriptHit`, carrying `has_story`. |
+| `get_story(root, video_id, start_seconds)` | One story in full, located as the `/article/` route locates it. |
+| `list_channels(root)` | Per-channel meeting/story/transcript counts and date range. |
+| `iter_meetings(root)` | Shared walk over `content/`, skipping `users/`, dotted/underscored dirs and meetings without `metadata.json`. |
+
+**Stories are a filtered view of the archive; transcripts are not.** Gemini only
+writes stories matching some user's focus, so anything nobody subscribed to was
+read and discarded. `search_transcripts` is how you reach it, and
+`meeting_has_stories: false` marks a meeting the feed never covered.
+
+### MCP server (`mcp_server.py`)
+
+stdio MCP server (SDK v2 — `from mcp.server.mcpserver import MCPServer`; v1's
+`FastMCP` was renamed). Tools: `search_stories`, `search_transcripts`,
+`get_story`, `list_channels`. Read-only by construction: nothing writes, and no
+tool takes a user id or touches `state/`, so per-user attribution and read/star
+state are out of scope — it searches the archive as a whole.
+
+It reads `content/` directly, so **it must run on the machine holding the
+archive**; the client reaches it over SSH. `base_url` is re-read per call so
+links follow a config edit without a restart. `mcp` is not in
+`requirements.txt` — the daemon does not need it.
+
 ### Daily digest email
 
 | Function | Purpose |
