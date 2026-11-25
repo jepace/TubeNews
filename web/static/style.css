@@ -1312,3 +1312,9 @@ main:has(.feed-layout) {
 }
 .sc-submit:hover { background: var(--accent-hover, var(--accent)); filter: brightness(1.1); }
 .sc-submit:disabled { opacity: 0.6; cursor: default; }
+
+/* API key table (account page) */
+.api-key-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 0.9rem; }
+.api-key-table th { text-align: left; font-weight: 600; padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); }
+.api-key-table td { padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.api-key-table tr.muted td { opacity: 0.55; }

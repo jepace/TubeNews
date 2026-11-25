@@ -19,11 +19,15 @@ TubeNews monitors YouTube channels, transcribes new videos via [Supadata](https:
 
 ## Search the archive from Claude (MCP)
 
-TubeNews ships an MCP server, so an AI client can search the whole archive —
-including meeting transcripts for things no story was ever written about.
-Four read-only tools: search stories, search transcripts, fetch one story,
-list channels. It runs on the machine holding `content/` and the client
-reaches it over SSH. See **SERVING.md** for setup.
+TubeNews speaks MCP, so an AI assistant can search your archive — the stories
+in your feed, and the full transcripts of every meeting, including things no
+story was ever written about. Four read-only tools: search stories, search
+transcripts, fetch one story, list channels.
+
+Each user creates their own API key on their account page. A key searches
+exactly what that account can see — the channels it subscribes to, nothing
+more — and can be revoked at any time, by the user or by an admin. See
+**SERVING.md** for client setup.
 
 
 ## Quick Start

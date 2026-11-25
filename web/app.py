@@ -1937,6 +1937,8 @@ def account():
         password_action=url_for("account_password"),
         rotate_token_action=url_for("account_rotate_token"),
         delete_action=url_for("account_delete"),
+        api_keys=apikeys.list_keys(current_user._data),
+        mcp_url=(_base_url() or "") + "/mcp",
     )
 
 
@@ -1992,6 +1994,58 @@ def account_rotate_token():
     current_user._save()
     flash("Feed token rotated. Your old RSS and feed URLs are now invalid.", "success")
     return redirect(url_for("account"))
+
+
+@app.route("/account/api-keys", methods=["POST"])
+@login_required
+@limiter.limit("20 per hour")
+def account_create_api_key():
+    """Mint an MCP API key for the logged-in user.
+
+    The plaintext is flashed once and never stored, so it cannot be shown
+    again. That is the point: a store able to redisplay a key is one that
+    hands over every key at once if it is ever read.
+    """
+    created = apikeys.add_key(current_user._data, request.form.get("label", ""))
+    if created is None:
+        flash(f"You already have {apikeys._MAX_KEYS_PER_USER} active keys — "
+              "revoke one before creating another.", "error")
+        return redirect(url_for("account"))
+    record, secret = created
+    current_user._save()
+    flash(f"New API key \u201c{record['label']}\u201d: {secret} — copy it now, "
+          "it will not be shown again.", "success")
+    return redirect(url_for("account"))
+
+
+@app.route("/account/api-keys/<key_id>/revoke", methods=["POST"])
+@login_required
+def account_revoke_api_key(key_id: str):
+    """Revoke one of the logged-in user's own keys."""
+    if apikeys.revoke_key(current_user._data, key_id):
+        current_user._save()
+        flash("API key revoked.", "success")
+    else:
+        flash("No such active API key.", "error")
+    return redirect(url_for("account"))
+
+
+@app.route("/admin/users/<user_id>/api-keys/<key_id>/revoke", methods=["POST"])
+@login_required
+@admin_required
+def admin_revoke_api_key(user_id: str, key_id: str):
+    """Revoke any user's key — the lever for shutting down a misbehaving agent."""
+    user = _find_user_by_id(user_id)
+    if user is None:
+        abort(404)
+    if apikeys.revoke_key(user._data, key_id):
+        user._save()
+        logger.warning("Admin revoked API key %s for user %s (%s)",
+                       key_id, user_id, user.email)
+        flash(f"Revoked an API key for {user.email}.", "success")
+    else:
+        flash("No such active API key.", "error")
+    return redirect(request.referrer or url_for("admin_users"))
 
 
 @app.route("/account/delete", methods=["POST"])
@@ -3190,6 +3244,96 @@ def api_lobotomy_push():
     except Exception as e:
         logger.error(f"Lobotomy redirect URL generation failed: {e}")
         return jsonify({"error": "Failed to generate Lobotomy URL"}), 500
+
+
+# ---------------------------------------------------------------------------
+# MCP endpoint (per-user API keys)
+# ---------------------------------------------------------------------------
+
+import tubenews_apikeys as apikeys  # noqa: E402
+from web.mcp_api import (  # noqa: E402
+    handle_rpc as _mcp_handle_rpc,
+    mcp_bp as _mcp_bp,
+    rate_limit_key as _mcp_rate_limit_key,
+)
+
+app.register_blueprint(_mcp_bp)
+
+
+def _mcp_authenticate() -> tuple[dict, str, dict] | None:
+    """Resolve the bearer key to ``(user_data, user_id, key_record)``.
+
+    Walks the user records rather than keeping a key index. An index would
+    be a second source of truth to keep in step with user.json, and the
+    rate limiter already bounds how often this runs; the walk is bounded by
+    the number of accounts, which is small. Revisit if either stops holding.
+    """
+    from web.mcp_api import bearer_token
+    token = bearer_token()
+    if not token:
+        return None
+    for user in _all_users():
+        record = apikeys.find_key(user._data, token)
+        if record is None:
+            continue
+        apikeys.note_use(record)
+        try:
+            user._save()
+        except Exception as exc:  # last_used is bookkeeping, never block on it
+            logger.warning("MCP: could not record key use for %s: %s",
+                           user.get_id(), exc)
+        return user._data, user.get_id(), record
+    return None
+
+
+@app.route("/mcp", methods=["POST"])
+@csrf.exempt
+@limiter.limit("60 per minute", key_func=_mcp_rate_limit_key)
+@limiter.limit("2000 per day", key_func=_mcp_rate_limit_key)
+def mcp_endpoint():
+    """MCP JSON-RPC endpoint. Authenticated per call by a user's API key.
+
+    CSRF-exempt because this is a bearer-token API, not a browser form: no
+    cookie is consulted, so there is no ambient authority for a cross-site
+    request to borrow.
+
+    Rate limits are per key (see ``rate_limit_key``) so one runaway agent
+    cannot spend anyone else's budget, and so limiting it does not also
+    limit everybody sharing its IP address.
+    """
+    try:
+        message = request.get_json(force=True, silent=False)
+    except Exception:
+        return Response(
+            json.dumps({"jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32700, "message": "Parse error"}}),
+            status=400, mimetype="application/json")
+
+    if isinstance(message, list):
+        # A batch: answer only the messages that are requests.
+        replies = []
+        for item in message:
+            if not isinstance(item, dict):
+                continue
+            reply = _mcp_handle_rpc(
+                item, authenticate=_mcp_authenticate,
+                storage_root=STORAGE_ROOT, base_url=_base_url())
+            if reply is not None:
+                replies.append(json.loads(reply.get_data(as_text=True)))
+        if not replies:
+            return Response("", status=202)
+        return Response(json.dumps(replies), mimetype="application/json")
+
+    if not isinstance(message, dict):
+        return Response(
+            json.dumps({"jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32600, "message": "Invalid Request"}}),
+            status=400, mimetype="application/json")
+
+    reply = _mcp_handle_rpc(message, authenticate=_mcp_authenticate,
+                            storage_root=STORAGE_ROOT, base_url=_base_url())
+    # A notification gets no body, only an acknowledgement.
+    return reply if reply is not None else Response("", status=202)
 
 
 # ---------------------------------------------------------------------------

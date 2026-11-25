@@ -472,15 +472,59 @@ can have completely different feeds.
 
 ## Searching the archive from an AI client (MCP)
 
-`mcp_server.py` exposes the archive to Claude (or any MCP client) as four
-read-only tools: `search_stories`, `search_transcripts`, `get_story` and
-`list_channels`.
+There are two ways in, for two different people.
 
-It reads `content/` straight off disk, so **it has to run on the machine that
-holds the archive** — inside the jail, or on the host with `content_dir`
-pointing at it. The client reaches it over SSH, which means no new listening
-port and no new thing to authenticate: if you can already SSH to the box, you
-can already read these files.
+### For users: `POST /mcp` with a personal API key
+
+This is the one to give anyone who is not you. It runs inside the existing
+web app, so there is no extra service and no extra port — nginx already
+proxies it.
+
+A user creates a key on their account page under **API keys (MCP)**. The key
+is shown once, at creation, and never again; it is stored only as a hash.
+Their client then sends it as a bearer token:
+
+```json
+{
+  "mcpServers": {
+    "tubenews": {
+      "type": "http",
+      "url": "https://tubenews.org/mcp",
+      "headers": { "Authorization": "Bearer tnk_…" }
+    }
+  }
+}
+```
+
+**A key sees exactly what its owner sees** — only the channels that account
+subscribes to, and only stories attributed to them or to everyone. It is not
+a back door around the feed.
+
+Abuse controls, which is the point of keys at all:
+
+- **Rate limits are per key** (60/minute, 2000/day), not per IP, so one
+  runaway agent cannot spend anyone else's budget and cannot escape the
+  limit by changing address.
+- **Every call is logged** with the user, the key id and the tool, so a bad
+  actor is identifiable: `grep 'MCP:' /var/log/tubenews/web.log`.
+- **Revocation is immediate.** The user can revoke their own key from the
+  account page; you can revoke anyone's from the admin users page. The
+  record stays visible afterwards, with its last-used time, so you can see
+  what it had been doing.
+- Each account is capped at 10 active keys.
+
+### For you: stdio over SSH
+
+
+
+`mcp_server.py` exposes the same four tools over stdio, but **unscoped** — it
+searches the whole archive, not one account's slice. That is only safe
+because it is reached over SSH, which already implies read access to
+`content/`. Do not hand it to users; give them a key instead.
+
+It reads `content/` straight off disk, so it has to run on the machine that
+holds the archive — inside the jail, or on the host with `content_dir`
+pointing at it.
 
 Install the SDK where the server will run (the daemon itself does not need it,
 so it is deliberately absent from `requirements.txt`):

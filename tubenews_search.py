@@ -158,8 +158,16 @@ def _first_matching_offset(window: list[tuple[int, str]], query: Query,
     return default
 
 
-def iter_meetings(storage_root: Path) -> Iterator[tuple[Path, Path, dict, str]]:
-    """Yield ``(channel_dir, meeting_dir, metadata, channel_name)`` for the archive."""
+def iter_meetings(storage_root: Path,
+                  allowed_channel_ids: set[str] | None = None,
+                  ) -> Iterator[tuple[Path, Path, dict, str]]:
+    """Yield ``(channel_dir, meeting_dir, metadata, channel_name)`` for the archive.
+
+    *allowed_channel_ids* restricts the walk to those YouTube channel ids —
+    the same keys a user's ``channels`` map uses. ``None`` means the whole
+    archive; an **empty set means nothing**, which is what a user with no
+    subscriptions should see, so the two must not be conflated.
+    """
     if not storage_root.is_dir():
         return
     for channel_dir in sorted(storage_root.iterdir()):
@@ -168,14 +176,17 @@ def iter_meetings(storage_root: Path) -> Iterator[tuple[Path, Path, dict, str]]:
         if channel_dir.name == "users":
             continue
         channel_name = channel_dir.name.replace("_", " ")
+        channel_id = ""
         channel_json = channel_dir / "channel.json"
         if channel_json.exists():
             try:
-                channel_name = json.loads(
-                    channel_json.read_text(encoding="utf-8")
-                ).get("channel_name", channel_name)
+                loaded = json.loads(channel_json.read_text(encoding="utf-8"))
+                channel_name = loaded.get("channel_name", channel_name)
+                channel_id = str(loaded.get("channel_id", ""))
             except (OSError, ValueError):
                 pass
+        if allowed_channel_ids is not None and channel_id not in allowed_channel_ids:
+            continue
         for meeting_dir in sorted(channel_dir.iterdir()):
             if not meeting_dir.is_dir():
                 continue
@@ -199,16 +210,40 @@ def _in_window(value: str, since: str, until: str) -> bool:
     return True
 
 
+def story_is_visible(text: str, user_id: str) -> bool:
+    """Whether *user_id* may see this story, by its ``**Users:**`` line.
+
+    A story names the users whose focus caused it to be written. One with no
+    such line predates per-user attribution, or was written for everyone, and
+    is shown to any subscriber of its channel — the same rule the web feed
+    applies. With no *user_id* (an unscoped search) everything is visible.
+    """
+    if not user_id:
+        return True
+    match = re.search(r"\*\*Users:\*\*\s*(.+)", text)
+    if not match:
+        return True
+    return user_id in [u.strip() for u in match.group(1).split(",") if u.strip()]
+
+
 def search_stories(storage_root: Path, query_text: str, channel: str = "",
-                   since: str = "", until: str = "", limit: int = 20) -> list[StoryHit]:
-    """Search story titles and bodies. Highest-scoring first."""
+                   since: str = "", until: str = "", limit: int = 20,
+                   allowed_channel_ids: set[str] | None = None,
+                   user_id: str = "") -> list[StoryHit]:
+    """Search story titles and bodies. Highest-scoring first.
+
+    *allowed_channel_ids* and *user_id* scope the search the way the web feed
+    is scoped: subscribed channels only, and stories attributed to this user
+    or to nobody in particular.
+    """
     query = parse_query(query_text)
     if not query:
         return []
     channel_l = channel.lower().strip()
     hits: list[StoryHit] = []
 
-    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(storage_root):
+    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(
+            storage_root, allowed_channel_ids):
         if channel_l and channel_l not in channel_name.lower() \
                 and channel_l not in channel_dir.name.lower():
             continue
@@ -220,6 +255,8 @@ def search_stories(storage_root: Path, query_text: str, channel: str = "",
             except OSError:
                 continue
             if not _matches(query, text.lower()):
+                continue
+            if not story_is_visible(text, user_id):
                 continue
             lines = text.splitlines()
             title = lines[0].lstrip("# ").strip() if lines else story_file.stem
@@ -245,7 +282,9 @@ def search_stories(storage_root: Path, query_text: str, channel: str = "",
 
 def search_transcripts(storage_root: Path, query_text: str, channel: str = "",
                        since: str = "", until: str = "", limit: int = 20,
-                       context_lines: int = 2) -> list[TranscriptHit]:
+                       context_lines: int = 2,
+                       allowed_channel_ids: set[str] | None = None,
+                       ) -> list[TranscriptHit]:
     """Search raw transcripts and return the moments that matched.
 
     This reaches what the stories do not: Gemini only wrote up what some
@@ -259,7 +298,8 @@ def search_transcripts(storage_root: Path, query_text: str, channel: str = "",
     channel_l = channel.lower().strip()
     hits: list[TranscriptHit] = []
 
-    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(storage_root):
+    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(
+            storage_root, allowed_channel_ids):
         if channel_l and channel_l not in channel_name.lower() \
                 and channel_l not in channel_dir.name.lower():
             continue
@@ -320,9 +360,16 @@ def search_transcripts(storage_root: Path, query_text: str, channel: str = "",
     return hits[:limit]
 
 
-def get_story(storage_root: Path, video_id: str, start_seconds: int) -> dict | None:
-    """Return one story in full, located the same way the web /article route locates it."""
-    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(storage_root):
+def get_story(storage_root: Path, video_id: str, start_seconds: int,
+              allowed_channel_ids: set[str] | None = None,
+              user_id: str = "") -> dict | None:
+    """Return one story in full, located the same way the web /article route locates it.
+
+    Scoping is applied here too: a story id guessed or carried over from
+    another user's results must not fetch what a search would have hidden.
+    """
+    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(
+            storage_root, allowed_channel_ids):
         if str(meta.get("video_id", "")) != video_id:
             continue
         for story_file in sorted(meeting_dir.glob("[0-9]*.md")):
@@ -332,6 +379,8 @@ def get_story(storage_root: Path, video_id: str, start_seconds: int) -> dict | N
                 continue
             found = re.search(r"\*\*Segment Start:\*\*\s*(\d+)s", text)
             if (int(found.group(1)) if found else 0) != start_seconds:
+                continue
+            if not story_is_visible(text, user_id):
                 continue
             lines = text.splitlines()
             return {
@@ -346,10 +395,12 @@ def get_story(storage_root: Path, video_id: str, start_seconds: int) -> dict | N
     return None
 
 
-def list_channels(storage_root: Path) -> list[dict]:
+def list_channels(storage_root: Path,
+                  allowed_channel_ids: set[str] | None = None) -> list[dict]:
     """Summarise the archive: one row per channel, with counts and date range."""
     summary: dict[str, dict] = {}
-    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(storage_root):
+    for channel_dir, meeting_dir, meta, channel_name in iter_meetings(
+            storage_root, allowed_channel_ids):
         row = summary.setdefault(channel_dir.name, {
             "channel": channel_name, "slug": channel_dir.name,
             "meetings": 0, "stories": 0, "transcripts": 0,

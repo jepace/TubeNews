@@ -87,6 +87,59 @@
 
   <!-- ── Subscriptions ──────────────────────────────────────────── -->
   <section class="admin-section">
+  {% if is_own_profile %}
+  <section>
+    <h2>API keys (MCP)</h2>
+    <p class="muted">
+      Let an AI assistant search your archive &mdash; the stories in your feed,
+      and the full transcripts of meetings from the channels you subscribe to,
+      including things no story was ever written about.
+      A key sees exactly what you see, nothing more.
+    </p>
+    {% if api_keys %}
+      <table class="api-key-table">
+        <thead>
+          <tr><th>Label</th><th>Created</th><th>Last used</th><th>Calls</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for key in api_keys %}
+          <tr{% if key.revoked %} class="muted"{% endif %}>
+            <td>{{ key.label }}{% if key.revoked %} <em>(revoked)</em>{% endif %}</td>
+            <td>{{ key.created[:10] }}</td>
+            <td>{{ key.last_used[:16]|replace('T', ' ') if key.last_used else '\u2014' }}</td>
+            <td>{{ key.use_count or 0 }}</td>
+            <td>
+              {% if not key.revoked %}
+              <form method="post"
+                    action="{{ url_for('account_revoke_api_key', key_id=key.id) }}"
+                    class="inline-form"
+                    onsubmit="return confirm('Revoke this key? Anything using it stops working immediately.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn-danger-sm">Revoke</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No API keys yet.</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('account_create_api_key') }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="label" placeholder="What is this key for? e.g. Laptop"
+             maxlength="60" class="feed-url-input" style="max-width:20rem">
+      <button type="submit" class="btn-copy">Create key</button>
+    </form>
+    <p class="muted" style="margin-top:0.75rem">
+      The key is shown once, when you create it. Add it to your MCP client as a
+      bearer token for <code>{{ mcp_url }}</code>.
+    </p>
+  </section>
+  {% endif %}
+
     <h2>Channels{% if not is_own_profile %} & Subscriptions{% endif %}</h2>
     {% if channels %}
       <form method="post" action="{{ subscriptions_action }}">

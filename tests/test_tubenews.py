@@ -6249,7 +6249,14 @@ def test_sleeping_phase_is_never_warned_about(caplog, monkeypatch):
     with caplog.at_level(logging.INFO, logger="TubeNews"):
         caplog.clear()
         _threading.Thread(target=lambda: _heartbeat_thread(0.05), daemon=True).start()
-        time.sleep(0.2)
+        # Wait for the heartbeat rather than sleeping a fixed interval: on a
+        # loaded machine the thread may not be scheduled within one tick, and
+        # a fixed sleep then fails the run for a reason unrelated to the code.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if any("Daemon alive" in r.message for r in caplog.records):
+                break
+            time.sleep(0.02)
 
     assert not any("unusually long" in r.message for r in caplog.records)
     assert any("Daemon alive" in r.message for r in caplog.records)

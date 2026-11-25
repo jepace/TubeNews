@@ -234,13 +234,52 @@ writes stories matching some user's focus, so anything nobody subscribed to was
 read and discarded. `search_transcripts` is how you reach it, and
 `meeting_has_stories: false` marks a meeting the feed never covered.
 
+### Per-user API keys (`tubenews_apikeys.py`)
+
+Keys live as a list under `api_keys` in `state/users/<uuid>/user.json`.
+
+| Function | Purpose |
+|---|---|
+| `generate_key()` | `(key_id, plaintext, hash)`. Secret is `tnk_` + 32 random bytes; the prefix makes a leaked key recognisable. |
+| `add_key(user_data, label)` | Appends a record in place, returns `(record, plaintext)`, or `None` past `_MAX_KEYS_PER_USER` (10 active). |
+| `find_key(user_data, secret)` | Constant-time lookup over active keys; checks all of them even after a match, so timing reveals neither which matched nor how many exist. |
+| `revoke_key(user_data, key_id)` | Marks revoked and stamps `revoked_at`. Records are kept — they are the evidence of what a key was and when it last ran. |
+| `note_use(key)` | Bumps `use_count` and `last_used`; the caller persists. |
+
+Only the SHA-256 of the secret is stored and the plaintext is shown once. A
+single unsalted hash is correct for a 32-byte random secret: nothing to
+brute-force or pre-compute, and a slow KDF would be paid on every MCP
+request. Passwords stay on werkzeug's hasher.
+
+### MCP over HTTP (`web/mcp_api.py`, `POST /mcp`)
+
+JSON-RPC, bearer-authenticated, answering plain JSON (the spec allows a JSON
+response to a POST; streaming buys nothing for request/response search).
+Methods: `initialize`, `tools/list`, `tools/call`, `ping`, plus notifications
+(answered `202` with no body). Discovery needs no key; `tools/call` does.
+
+| Concern | How |
+|---|---|
+| Auth | `Authorization: Bearer tnk_…`; `_mcp_authenticate()` in `app.py` walks user records (no key index — a second source of truth to keep in step; the walk is bounded by account count and the limiter bounds its rate). |
+| Scoping | `allowed_channel_ids` = the user's `channels` keys; `user_id` applies `**Users:**` attribution. **`None` means the whole archive, an empty set means nothing** — do not conflate them, or a user with no subscriptions would see everything. |
+| `get_story` | Scoped too, so an id from elsewhere cannot fetch what search hid. |
+| Rate limits | 60/min and 2000/day keyed on a hash of the token (`rate_limit_key`), never the raw secret. |
+| Audit | Every call logs user, key id, tool and truncated args. |
+| CSRF | Exempt: a bearer API reads no cookie, so there is no ambient authority to borrow. |
+
+Tool names are validated **before** arguments; the other order made an
+unknown tool report "query is required".
+
+Routes: `/account/api-keys` (create), `/account/api-keys/<id>/revoke`,
+`/admin/users/<uid>/api-keys/<id>/revoke` (the lever for a misbehaving agent).
+
 ### MCP server (`mcp_server.py`)
 
 stdio MCP server (SDK v2 — `from mcp.server.mcpserver import MCPServer`; v1's
-`FastMCP` was renamed). Tools: `search_stories`, `search_transcripts`,
-`get_story`, `list_channels`. Read-only by construction: nothing writes, and no
-tool takes a user id or touches `state/`, so per-user attribution and read/star
-state are out of scope — it searches the archive as a whole.
+`FastMCP` was renamed). Same four tools, but **unscoped**: it searches the
+whole archive and takes no user id. That is only acceptable because it is
+reached over SSH, which already implies read access to `content/`. It is the
+admin path; users get keyed access through `POST /mcp` instead.
 
 It reads `content/` directly, so **it must run on the machine holding the
 archive**; the client reaches it over SSH. `base_url` is re-read per call so
