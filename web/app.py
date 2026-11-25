@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import pytz
 
@@ -57,6 +57,7 @@ from flask_login import (
     logout_user,
 )
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.datastructures import MultiDict
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -709,11 +710,10 @@ def relative_date(date_str: str | None) -> str:
         if date_obj == today:
             # Replace the date part with "Today" (preserves time if present)
             return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Today', date_str)
-        elif date_obj == today - timedelta(days=1):
+        if date_obj == today - timedelta(days=1):
             # Replace the date part with "Yesterday" (preserves time if present)
             return re.sub(r'\w+\s+\d+,\s+\d{4}', 'Yesterday', date_str)
-        else:
-            return date_str
+        return date_str
     except Exception as exc:
         logger.debug(f"Failed to format relative date {date_str}: {exc}")
         return date_str
@@ -936,7 +936,8 @@ def _save_user_info(user: User, form_data: dict, require_password: bool = False,
     return None
 
 
-def _save_user_subscriptions(user: User, form_data: dict, channels: list[dict]) -> None:
+def _save_user_subscriptions(user: User, form_data: MultiDict,
+                             channels: list[FeedConfig]) -> None:
     """Save user channel subscriptions and preferences."""
     selected = set(form_data.getlist("channel_ids"))
     valid_ids = {ch["channel_id"] for ch in channels}
@@ -1398,11 +1399,10 @@ def register():
                 if _send_verification_email(email, verification_token, base_url):
                     flash("Account created! Check your email to verify and activate your account.", "success")
                     return redirect(url_for("verify_email_pending"))
-                else:
-                    # Email send failed; delete the account
-                    shutil.rmtree(user_dir, ignore_errors=True)
-                    _index_remove(email)
-                    flash("Failed to send verification email. Please try again.", "error")
+                # Email send failed; delete the account
+                shutil.rmtree(user_dir, ignore_errors=True)
+                _index_remove(email)
+                flash("Failed to send verification email. Please try again.", "error")
 
     return render_template("register.html")
 
@@ -1504,9 +1504,8 @@ def resend_verification_email():
     if _send_verification_email(email, verification_token, base_url):
         flash("Verification email sent! Check your inbox.", "success")
         return redirect(url_for("verify_email_pending"))
-    else:
-        flash("Failed to send verification email. Please try again.", "error")
-        return redirect(url_for("verify_email_expired"))
+    flash("Failed to send verification email. Please try again.", "error")
+    return redirect(url_for("verify_email_expired"))
 
 
 @app.route("/feed/<token>.xml")
@@ -1557,7 +1556,7 @@ def serve_article(video_id: str, start_seconds: int):
         abort(404)
 
     # Find the story matching video_id and start_seconds
-    story = None
+    story: dict[str, Any] | None = None
     story_path = None
     channel_slug = None
     meeting_id = None
@@ -1576,7 +1575,10 @@ def serve_article(video_id: str, start_seconds: int):
                 for story_file in meeting_dir.glob("[0-9]*.md"):
                     s = parse_story_file(story_file)
                     if s.get("start_seconds") == start_seconds:
-                        story = s
+                        # A plain dict, not the ParsedStory itself: the
+                        # channel and comment fields below belong to serving,
+                        # not to what parse_story_file promises to return.
+                        story = dict(s)
                         story_path = story_file
                         channel_slug = channel_dir.name
                         meeting_id = meeting_dir.name
@@ -3202,7 +3204,8 @@ def admin_feed_toggle(channel_id: str):
         feed["disabled"] = False
         ok = _wsb_subscribe(channel_id, config)
         status = "enabled"
-        logger.info(f"Feed '{feed['channel_name']}' ({channel_id}) enabled; WebSub subscribe {'ok' if ok else 'failed'}")
+        logger.info(f"Feed '{feed['channel_name']}' ({channel_id}) enabled; "
+                    f"WebSub subscribe {'ok' if ok else 'failed'}")
     else:
         feed["disabled"] = True
         _wsb_unsubscribe(channel_id, config)

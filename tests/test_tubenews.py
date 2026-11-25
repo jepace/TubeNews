@@ -6350,7 +6350,6 @@ def test_supadata_client_injects_a_timeout():
 
         def request(self, method, url, **kwargs):
             seen.update(kwargs)
-            return None
 
     class _Client:
         session = _Session()
@@ -6377,7 +6376,6 @@ def test_supadata_client_respects_an_explicit_timeout():
 
         def request(self, method, url, **kwargs):
             seen.update(kwargs)
-            return None
 
     class _Client:
         session = _Session()

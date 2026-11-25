@@ -141,7 +141,7 @@ def test_transcript_hit_flags_a_meeting_with_no_stories(archive):
 
 
 def test_transcript_results_link_to_the_transcript_page(archive):
-    hit = [h for h in search_transcripts(archive, "sidewalk")][0]
+    hit = search_transcripts(archive, "sidewalk")[0]
     assert hit.as_dict("https://x.test")["transcript_url"] == (
         "https://x.test/transcript/city_of_brisbane/xyz789#t300")
 

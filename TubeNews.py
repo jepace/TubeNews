@@ -293,10 +293,13 @@ class VideoInfo(TypedDict):
 
 
 class FeedConfig(TypedDict):
-    """Per-channel configuration block from ``config.json``."""
+    """Per-channel configuration block from ``state/channels.json``."""
     channel_id: str
     channel_name: str
     focus: str
+    # Written by the admin toggle; absent on channels that were never
+    # disabled, which is why it is NotRequired rather than a plain bool.
+    disabled: NotRequired[bool]
 
 
 class _GeminiStoryBase(TypedDict, total=False):
@@ -1420,13 +1423,13 @@ def _supadata_budget_reserve() -> bool:
         day_count = _int("count") if data.get("date") == today else 0
         cycle_count = _int("cycle_count") if data.get("cycle_start") == cycle_start else 0
 
-        if monthly_limit > 0 and cycle_count >= monthly_limit:
+        if 0 < monthly_limit <= cycle_count:
             logger.error(
                 f"Supadata: Billing-cycle cap reached ({cycle_count}/{monthly_limit} since "
                 f"{cycle_start}) — no further transcript fetches until the plan resets"
             )
             return False
-        if daily_limit > 0 and day_count >= daily_limit:
+        if 0 < daily_limit <= day_count:
             logger.error(
                 f"Supadata: Daily cap reached ({day_count}/{daily_limit}) — "
                 f"deferring transcript fetches until tomorrow (UTC). "
@@ -4772,7 +4775,7 @@ def _reload_config_from_disk() -> dict:
     # NOTE: Reading _config_mtime without lock is safe (benign race); see docstring.
     try:
         current_mtime = config_file.stat().st_mtime
-        if current_mtime == _config_mtime and _config_mtime > 0:
+        if 0 < _config_mtime == current_mtime:
             # File unchanged — skip everything
             return _daemon_config
     except (FileNotFoundError, OSError):

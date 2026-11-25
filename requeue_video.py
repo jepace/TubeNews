@@ -31,10 +31,9 @@ def extract_video_id(url_or_id: str) -> str:
             if match:
                 return match.group(1)
         raise ValueError(f"Could not extract video ID from URL: {url_or_id}")
-    elif re.match(r'^[a-zA-Z0-9_-]{11}$', url_or_id):
+    if re.match(r'^[a-zA-Z0-9_-]{11}$', url_or_id):
         return url_or_id
-    else:
-        raise ValueError(f"Invalid video ID format: {url_or_id}")
+    raise ValueError(f"Invalid video ID format: {url_or_id}")
 
 
 def load_channels() -> list[dict]:
@@ -118,7 +117,7 @@ def add_to_queue(video_id: str, channel_id: str) -> None:
         tmp.replace(queue_path)
         print(f"✓ Added video {video_id} to processing queue")
         print(f"  Channel: {channel_id}")
-        print(f"  The processor will pick it up on the next cycle (~1 minute)")
+        print("  The processor will pick it up on the next cycle (~1 minute)")
     except Exception as e:
         print(f"✗ Failed to write queue: {e}")
         sys.exit(1)
