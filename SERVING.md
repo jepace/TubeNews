@@ -513,6 +513,31 @@ Abuse controls, which is the point of keys at all:
   what it had been doing.
 - Each account is capped at 10 active keys.
 
+### Admin keys: searching the entire archive
+
+If your account is in `admin_users`, the key form offers **"Search the
+entire archive, not just my subscriptions."** A key created that way reaches
+every channel and ignores per-user story attribution, so it sees the archive
+whole — useful for answering questions across channels you do not personally
+subscribe to.
+
+Three things make that safe to have around:
+
+- **Only an admin can create one.** The form field is refused rather than
+  trusted, so a hand-crafted POST from a normal account gets an ordinary key.
+- **It is re-checked on every request.** Admin status comes from
+  `admin_users` in the config, which you can change. If an account is
+  removed from that list, its archive-wide key immediately drops to that
+  account's own subscriptions and logs a warning. The grant on the key is
+  never trusted on its own.
+- **It is visible.** The account page and the admin users page both mark
+  such keys, and every call logs `scope=all`, so wide-reaching use stands
+  out in the log: `grep 'scope=all' /var/log/tubenews/web.log`.
+
+Keep a narrow key for day-to-day use and a wide one only for when you need
+it; they are separate keys, so revoking the wide one leaves the other
+working.
+
 ### For you: stdio over SSH
 
 

@@ -25,6 +25,14 @@ from datetime import datetime, timezone
 # Visible prefix so a leaked key is recognisable in a log or a paste, and so
 # a client sending something else can be told what is wrong.
 KEY_PREFIX = "tnk_"
+
+# What a key may reach. A key records the scope it was granted, but an
+# archive-wide one is only honoured while its owner is *still* an admin —
+# see the enforcement in web/app.py. Storing the grant without re-checking
+# would leave a demoted admin holding the whole archive.
+SCOPE_SUBSCRIBED = "subscribed"   # only the owner's subscribed channels
+SCOPE_ALL = "all"                 # the entire archive; admins only
+_SCOPES = (SCOPE_SUBSCRIBED, SCOPE_ALL)
 _KEY_BYTES = 32
 _MAX_KEYS_PER_USER = 10
 _MAX_LABEL = 60
@@ -60,8 +68,22 @@ def active_keys(user_data: dict) -> list[dict]:
     return [k for k in list_keys(user_data) if not k.get("revoked")]
 
 
-def add_key(user_data: dict, label: str) -> tuple[dict, str] | None:
+def key_scope(record: dict) -> str:
+    """The scope recorded on *record*, defaulting to the narrow one.
+
+    Anything unrecognised reads as ``SCOPE_SUBSCRIBED``: a key whose scope
+    cannot be understood must not be treated as the privileged kind.
+    """
+    scope = str(record.get("scope", SCOPE_SUBSCRIBED))
+    return scope if scope in _SCOPES else SCOPE_SUBSCRIBED
+
+
+def add_key(user_data: dict, label: str,
+            scope: str = SCOPE_SUBSCRIBED) -> tuple[dict, str] | None:
     """Create a key on *user_data* in place. Returns ``(record, secret)``.
+
+    *scope* is recorded, not authorised — the caller decides whether this
+    user may be granted ``SCOPE_ALL``, and the request path re-checks it.
 
     Returns ``None`` when the user already holds ``_MAX_KEYS_PER_USER``
     active keys — an unbounded list is both a UI problem and a quiet way for
@@ -74,6 +96,7 @@ def add_key(user_data: dict, label: str) -> tuple[dict, str] | None:
         "id": key_id,
         "label": (label or "").strip()[:_MAX_LABEL] or "API key",
         "hash": hashed,
+        "scope": scope if scope in _SCOPES else SCOPE_SUBSCRIBED,
         "created": _now(),
         "last_used": "",
         "use_count": 0,

@@ -135,7 +135,8 @@ def mcp(tmp_path, monkeypatch):
         return rpc("tools/call", {"name": name, "arguments": arguments})
 
     return {"rpc": rpc, "call": call, "secret": secret, "record": record,
-            "user_id": user_id, "client": client, "content": content}
+            "user_id": user_id, "client": client, "content": content,
+            "tmp_path": tmp_path, "monkeypatch": monkeypatch}
 
 
 def _structured(response):
@@ -192,7 +193,7 @@ def test_get_story_cannot_reach_an_unsubscribed_channel(mcp):
     """
     payload = _structured(mcp["call"]("get_story", video_id="zzz999", start_seconds=10))
     assert "error" in payload
-    assert "subscribes" in payload["error"]
+    assert "reach" in payload["error"]
 
 
 def test_a_user_with_no_subscriptions_sees_nothing(mcp):
@@ -209,6 +210,117 @@ def test_story_attribution_is_respected(mcp):
     story = mcp["content"] / "county_of_monterey" / "abc123" / "01.md"
     story.write_text(story.read_text() + "\n**Users:** someone-else\n")
     assert _structured(mcp["call"]("search_stories", query="housing element"))["count"] == 0
+
+
+# -- admin keys reach the whole archive --
+
+def _make_admin(mcp, email="j@example.com"):
+    """Put *email* in admin_users, which is where admin status comes from.
+
+    ``User.is_admin`` reads ``CONFIG_FILE`` straight off disk rather than
+    going through ``_load_config``, so the file is what has to be patched.
+    """
+    config = mcp["tmp_path"] / "config.json"
+    config.write_text(json.dumps({"admin_users": [email]}))
+    mcp["monkeypatch"].setattr(webapp, "CONFIG_FILE", config)
+
+
+def test_an_admin_key_with_scope_all_searches_the_whole_archive(mcp):
+    """The point of an admin key: see channels the account never subscribed to."""
+    _make_admin(mcp)
+    user = webapp._find_user_by_id(mcp["user_id"])
+    _, secret = apikeys.add_key(user._data, "admin key", apikeys.SCOPE_ALL)
+    user._save()
+
+    response = mcp["rpc"]("tools/call",
+                          {"name": "list_channels", "arguments": {}}, token=secret)
+    channels = sorted(c["channel"] for c in _structured(response)["channels"])
+    assert channels == ["county of monterey", "secret city"]
+
+
+def test_an_admin_key_ignores_story_attribution(mcp):
+    """A story written for another user is still visible to an archive-wide key.
+
+    Attribution exists to keep one subscriber's feed free of another's
+    stories; applying it to an admin key would hide most of the archive from
+    the one key meant to see all of it.
+    """
+    _make_admin(mcp)
+    story = mcp["content"] / "county_of_monterey" / "abc123" / "01.md"
+    story.write_text(story.read_text() + "\n**Users:** someone-else\n")
+    user = webapp._find_user_by_id(mcp["user_id"])
+    _, secret = apikeys.add_key(user._data, "admin key", apikeys.SCOPE_ALL)
+    user._save()
+
+    response = mcp["rpc"]("tools/call",
+                          {"name": "search_stories",
+                           "arguments": {"query": "housing element"}}, token=secret)
+    assert _structured(response)["count"] >= 1
+
+
+def test_a_non_admin_cannot_create_an_archive_wide_key(mcp):
+    """The form field is refused rather than trusted, so a crafted POST fails."""
+    client = mcp["client"]
+    with client.session_transaction() as session:
+        session["_user_id"] = mcp["user_id"]
+        session["_fresh"] = True
+    webapp.app.config["WTF_CSRF_ENABLED"] = False
+    try:
+        client.post("/account/api-keys",
+                    data={"label": "sneaky", "scope": apikeys.SCOPE_ALL})
+    finally:
+        webapp.app.config["WTF_CSRF_ENABLED"] = True
+    keys = apikeys.list_keys(webapp._find_user_by_id(mcp["user_id"])._data)
+    sneaky = [k for k in keys if k["label"] == "sneaky"]
+    assert sneaky, "the key should still be created, just not privileged"
+    assert apikeys.key_scope(sneaky[0]) == apikeys.SCOPE_SUBSCRIBED
+
+
+def test_an_archive_wide_key_narrows_when_its_owner_stops_being_an_admin(mcp):
+    """Admin status is config, and config changes.
+
+    A key that kept its reach after its owner left admin_users would be a
+    standing way back into the whole archive. It drops to the owner's own
+    channels instead of failing, so their tooling keeps working.
+    """
+    user = webapp._find_user_by_id(mcp["user_id"])
+    _, secret = apikeys.add_key(user._data, "was admin", apikeys.SCOPE_ALL)
+    user._save()
+    # No admin_users entry, so the account is not an admin now.
+    response = mcp["rpc"]("tools/call",
+                          {"name": "list_channels", "arguments": {}}, token=secret)
+    channels = [c["channel"] for c in _structured(response)["channels"]]
+    assert channels == ["county of monterey"]
+
+
+def test_an_unknown_scope_is_treated_as_the_narrow_one(mcp):
+    """A scope that cannot be understood must not be the privileged kind."""
+    _make_admin(mcp)
+    user = webapp._find_user_by_id(mcp["user_id"])
+    record, secret = apikeys.add_key(user._data, "odd")
+    record["scope"] = "superuser"
+    user._save()
+    response = mcp["rpc"]("tools/call",
+                          {"name": "list_channels", "arguments": {}}, token=secret)
+    assert [c["channel"] for c in _structured(response)["channels"]] == [
+        "county of monterey"]
+
+
+def test_admin_can_revoke_another_users_key(mcp):
+    """The lever for shutting down a misbehaving agent."""
+    _make_admin(mcp)
+    user = webapp._find_user_by_id(mcp["user_id"])
+    client = mcp["client"]
+    with client.session_transaction() as session:
+        session["_user_id"] = mcp["user_id"]
+        session["_fresh"] = True
+    webapp.app.config["WTF_CSRF_ENABLED"] = False
+    try:
+        client.post(f"/admin/users/{mcp['user_id']}/api-keys/"
+                    f"{mcp['record']['id']}/revoke")
+    finally:
+        webapp.app.config["WTF_CSRF_ENABLED"] = True
+    assert mcp["call"]("list_channels").status_code == 401
 
 
 def test_using_a_key_records_it_for_attribution(mcp):

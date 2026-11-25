@@ -241,7 +241,8 @@ Keys live as a list under `api_keys` in `state/users/<uuid>/user.json`.
 | Function | Purpose |
 |---|---|
 | `generate_key()` | `(key_id, plaintext, hash)`. Secret is `tnk_` + 32 random bytes; the prefix makes a leaked key recognisable. |
-| `add_key(user_data, label)` | Appends a record in place, returns `(record, plaintext)`, or `None` past `_MAX_KEYS_PER_USER` (10 active). |
+| `add_key(user_data, label, scope=SCOPE_SUBSCRIBED)` | Appends a record in place, returns `(record, plaintext)`, or `None` past `_MAX_KEYS_PER_USER` (10 active). Records the scope; does **not** authorise it. |
+| `key_scope(record)` | `SCOPE_SUBSCRIBED` or `SCOPE_ALL`; anything unrecognised or missing reads as the narrow one. |
 | `find_key(user_data, secret)` | Constant-time lookup over active keys; checks all of them even after a match, so timing reveals neither which matched nor how many exist. |
 | `revoke_key(user_data, key_id)` | Marks revoked and stamps `revoked_at`. Records are kept — they are the evidence of what a key was and when it last ran. |
 | `note_use(key)` | Bumps `use_count` and `last_used`; the caller persists. |
@@ -262,6 +263,7 @@ Methods: `initialize`, `tools/list`, `tools/call`, `ping`, plus notifications
 |---|---|
 | Auth | `Authorization: Bearer tnk_…`; `_mcp_authenticate()` in `app.py` walks user records (no key index — a second source of truth to keep in step; the walk is bounded by account count and the limiter bounds its rate). |
 | Scoping | `allowed_channel_ids` = the user's `channels` keys; `user_id` applies `**Users:**` attribution. **`None` means the whole archive, an empty set means nothing** — do not conflate them, or a user with no subscriptions would see everything. |
+| Admin scope | A `SCOPE_ALL` key passes `allowed_channel_ids=None` and `user_id=""`, so it reaches every channel and ignores attribution. `_mcp_authenticate` returns `archive_wide` only when the key carries that scope **and** `user.is_admin` is true at that moment (`is_admin` reads `CONFIG_FILE` live). A demoted admin's key narrows to their subscriptions with a WARNING rather than failing. |
 | `get_story` | Scoped too, so an id from elsewhere cannot fetch what search hid. |
 | Rate limits | 60/min and 2000/day keyed on a hash of the token (`rate_limit_key`), never the raw secret. |
 | Audit | Every call logs user, key id, tool and truncated args. |

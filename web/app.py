@@ -67,6 +67,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
+import tubenews_apikeys as apikeys  # noqa: E402
 from TubeNews import (  # noqa: E402
     STORAGE_ROOT,
     STATE_ROOT,
@@ -1938,6 +1939,7 @@ def account():
         rotate_token_action=url_for("account_rotate_token"),
         delete_action=url_for("account_delete"),
         api_keys=apikeys.list_keys(current_user._data),
+        api_key_scope_all=apikeys.SCOPE_ALL,
         mcp_url=(_base_url() or "") + "/mcp",
     )
 
@@ -2006,13 +2008,20 @@ def account_create_api_key():
     again. That is the point: a store able to redisplay a key is one that
     hands over every key at once if it is ever read.
     """
-    created = apikeys.add_key(current_user._data, request.form.get("label", ""))
+    # The wide scope is admin-only at creation, and re-checked on every
+    # request, so neither a crafted form post nor a later demotion grants it.
+    scope = (apikeys.SCOPE_ALL
+             if request.form.get("scope") == apikeys.SCOPE_ALL and current_user.is_admin
+             else apikeys.SCOPE_SUBSCRIBED)
+    created = apikeys.add_key(current_user._data, request.form.get("label", ""), scope)
     if created is None:
         flash(f"You already have {apikeys._MAX_KEYS_PER_USER} active keys — "
               "revoke one before creating another.", "error")
         return redirect(url_for("account"))
     record, secret = created
     current_user._save()
+    logger.info("API key %s created for %s (scope=%s)",
+                record["id"], current_user.email, apikeys.key_scope(record))
     flash(f"New API key \u201c{record['label']}\u201d: {secret} — copy it now, "
           "it will not be shown again.", "success")
     return redirect(url_for("account"))
@@ -2528,7 +2537,9 @@ def post_vote(channel_slug: str, meeting_id: str, basename: str, direction: str)
 def admin_users():
     channels = _load_channels()
     channel_names = {ch["channel_id"]: ch["channel_name"] for ch in channels}
-    return render_template("admin_users.html", users=_all_users(), channel_names=channel_names)
+    return render_template("admin_users.html", users=_all_users(),
+                           channel_names=channel_names,
+                           active_api_keys=apikeys.active_keys)
 
 
 @app.route("/admin/user/<uid>")
@@ -3250,7 +3261,6 @@ def api_lobotomy_push():
 # MCP endpoint (per-user API keys)
 # ---------------------------------------------------------------------------
 
-import tubenews_apikeys as apikeys  # noqa: E402
 from web.mcp_api import (  # noqa: E402
     handle_rpc as _mcp_handle_rpc,
     mcp_bp as _mcp_bp,
@@ -3260,13 +3270,21 @@ from web.mcp_api import (  # noqa: E402
 app.register_blueprint(_mcp_bp)
 
 
-def _mcp_authenticate() -> tuple[dict, str, dict] | None:
-    """Resolve the bearer key to ``(user_data, user_id, key_record)``.
+def _mcp_authenticate() -> tuple[dict, str, dict, bool] | None:
+    """Resolve the bearer key to ``(user_data, user_id, key_record, archive_wide)``.
 
     Walks the user records rather than keeping a key index. An index would
     be a second source of truth to keep in step with user.json, and the
     rate limiter already bounds how often this runs; the walk is bounded by
     the number of accounts, which is small. Revisit if either stops holding.
+
+    ``archive_wide`` is true only when the key was granted ``SCOPE_ALL``
+    **and** its owner is an admin *right now*. The grant on the key is not
+    enough: ``admin_users`` lives in config and can change, and a key that
+    kept its reach after its owner was removed from that list would be a
+    standing way back into the whole archive. Dropping to the narrow scope
+    rather than refusing the call keeps a demoted admin's tooling working on
+    their own channels, and the narrowing is logged.
     """
     from web.mcp_api import bearer_token
     token = bearer_token()
@@ -3282,7 +3300,14 @@ def _mcp_authenticate() -> tuple[dict, str, dict] | None:
         except Exception as exc:  # last_used is bookkeeping, never block on it
             logger.warning("MCP: could not record key use for %s: %s",
                            user.get_id(), exc)
-        return user._data, user.get_id(), record
+        wants_all = apikeys.key_scope(record) == apikeys.SCOPE_ALL
+        is_admin = bool(user.is_admin)
+        if wants_all and not is_admin:
+            logger.warning(
+                "MCP: key %s for %s carries archive-wide scope but the account "
+                "is no longer an admin - restricting to its subscriptions",
+                record.get("id", "?"), user.email)
+        return user._data, user.get_id(), record, (wants_all and is_admin)
     return None
 
 

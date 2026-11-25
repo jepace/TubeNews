@@ -1318,3 +1318,4 @@ main:has(.feed-layout) {
 .api-key-table th { text-align: left; font-weight: 600; padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); }
 .api-key-table td { padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .api-key-table tr.muted td { opacity: 0.55; }
+.admin-key-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.85rem; }

@@ -24,6 +24,7 @@
         <th>Email</th>
         <th>Subscriptions</th>
         <th>Status</th>
+        <th>API keys</th>
         <th>Created</th>
         <th>Last seen</th>
         <th></th>
@@ -62,6 +63,28 @@
             <span class="pill pill-admin">Admin</span>
           {% else %}
             <span class="pill pill-active">Active</span>
+          {% endif %}
+        </td>
+        <td>
+          {% set keys = active_api_keys(u._data) %}
+          {% if keys %}
+            {% for key in keys %}
+            <div class="admin-key-row">
+              <span title="created {{ key.created[:10] }}, {{ key.use_count or 0 }} calls">
+                {{ key.label }}{% if key.scope == 'all' %}
+                  <span class="pill pill-admin">all</span>{% endif %}
+              </span>
+              <form method="post"
+                    action="{{ url_for('admin_revoke_api_key', user_id=u.get_id(), key_id=key.id) }}"
+                    class="inline-form"
+                    onsubmit="return confirm('Revoke this key for {{ u.email }}? Anything using it stops working immediately.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn-danger-sm">Revoke</button>
+              </form>
+            </div>
+            {% endfor %}
+          {% else %}
+            <span class="muted">none</span>
           {% endif %}
         </td>
         <td class="muted">

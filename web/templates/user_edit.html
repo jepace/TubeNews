@@ -99,12 +99,19 @@
     {% if api_keys %}
       <table class="api-key-table">
         <thead>
-          <tr><th>Label</th><th>Created</th><th>Last used</th><th>Calls</th><th></th></tr>
+          <tr><th>Label</th><th>Reach</th><th>Created</th><th>Last used</th><th>Calls</th><th></th></tr>
         </thead>
         <tbody>
         {% for key in api_keys %}
           <tr{% if key.revoked %} class="muted"{% endif %}>
             <td>{{ key.label }}{% if key.revoked %} <em>(revoked)</em>{% endif %}</td>
+            <td>
+              {%- if key.scope == api_key_scope_all -%}
+                <strong>Entire archive</strong>
+              {%- else -%}
+                Your channels
+              {%- endif -%}
+            </td>
             <td>{{ key.created[:10] }}</td>
             <td>{{ key.last_used[:16]|replace('T', ' ') if key.last_used else '\u2014' }}</td>
             <td>{{ key.use_count or 0 }}</td>
@@ -131,6 +138,14 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="text" name="label" placeholder="What is this key for? e.g. Laptop"
              maxlength="60" class="feed-url-input" style="max-width:20rem">
+      {% if current_user.is_admin %}
+      <label style="display:block;margin:0.5rem 0">
+        <input type="checkbox" name="scope" value="{{ api_key_scope_all }}">
+        Search the entire archive, not just my subscriptions
+        <span class="muted">(admin only &mdash; this key can read every
+        channel and every user's stories)</span>
+      </label>
+      {% endif %}
       <button type="submit" class="btn-copy">Create key</button>
     </form>
     <p class="muted" style="margin-top:0.75rem">

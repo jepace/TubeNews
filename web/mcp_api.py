@@ -175,7 +175,8 @@ def _clamp_limit(raw: Any) -> int:
         return 20
 
 
-def run_tool(name: str, args: dict, *, storage_root, allowed_channel_ids: set[str],
+def run_tool(name: str, args: dict, *, storage_root,
+             allowed_channel_ids: set[str] | None,
              user_id: str, base_url: str) -> dict:
     """Dispatch one tool call. Scoping is applied here, not by the caller."""
     # Check the name before anything else. Validating arguments first made an
@@ -202,7 +203,7 @@ def run_tool(name: str, args: dict, *, storage_root, allowed_channel_ids: set[st
                            allowed_channel_ids=allowed_channel_ids,
                            user_id=user_id)
         if story is None:
-            return {"error": "No such story in the channels this account subscribes to."}
+            return {"error": "No such story, or it is outside this key's reach."}
         return story
 
     query = str(args.get("query", "")).strip()
@@ -266,22 +267,29 @@ def handle_rpc(message: dict, *, authenticate: Callable[[], tuple | None],
         if identity is None:
             return _error(req_id, _INVALID_REQUEST,
                           "Invalid or revoked API key", http_status=401)
-        user_data, user_id, key_record = identity
+        user_data, user_id, key_record, archive_wide = identity
         params = message.get("params") or {}
         name = str(params.get("name") or "")
         args = params.get("arguments") or {}
         if not isinstance(args, dict):
             return _error(req_id, _INVALID_PARAMS, "arguments must be an object")
 
-        allowed = set(user_data.get("channels", {}).keys())
+        # An archive-wide key searches everything, so it passes no channel
+        # filter and no user id — attribution would otherwise hide stories
+        # written for other people, which is the opposite of what an admin
+        # key is for. None means the whole archive; an empty set means
+        # nothing, so the two must not be confused here.
+        allowed = None if archive_wide else set(user_data.get("channels", {}).keys())
         logger.info(
-            "MCP: user=%s key=%s tool=%s args=%s",
-            user_id, key_record.get("id", "?"), name,
+            "MCP: user=%s key=%s scope=%s tool=%s args=%s",
+            user_id, key_record.get("id", "?"),
+            "all" if archive_wide else "subscribed", name,
             json.dumps(args, ensure_ascii=False)[:200],
         )
         try:
             payload = run_tool(name, args, storage_root=storage_root,
-                               allowed_channel_ids=allowed, user_id=user_id,
+                               allowed_channel_ids=allowed,
+                               user_id="" if archive_wide else user_id,
                                base_url=base_url)
         except KeyError:
             return _error(req_id, _METHOD_NOT_FOUND, f"Unknown tool: {name}")
